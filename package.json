@@ -20,7 +20,7 @@
     "steam-session": "^1.9.4",
     "steam-user": "^5.3.0"
   },
-  "license": "GPL-3.0-only",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/MacroCN/we-mpkg.git"

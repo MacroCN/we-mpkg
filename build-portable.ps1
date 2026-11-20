@@ -1,4 +1,4 @@
-﻿# 打绿色版（免安装、自带 Node 运行时）
+# 打绿色版（免安装、自带 Node 运行时）
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\build-portable.ps1
 #   powershell ... -File .\build-portable.ps1 -Version 1.1.0
@@ -36,6 +36,7 @@ Copy-Tree (Join-Path $root 'public') (Join-Path $dst 'public')
 Copy-Tree (Join-Path $root 'node_modules') (Join-Path $dst 'node_modules') @('.cache') @('*.md', '*.map', '*.ts', '*.txt')
 Copy-Item (Join-Path $root 'package.json') $dst
 if (Test-Path (Join-Path $root 'README.md')) { Copy-Item (Join-Path $root 'README.md') (Join-Path $dst 'README.md') }
+if (Test-Path (Join-Path $root 'LICENSE')) { Copy-Item (Join-Path $root 'LICENSE') (Join-Path $dst 'LICENSE') }
 if (Test-Path (Join-Path $root 'tools\test-resume.js')) {
   New-Item -ItemType Directory -Path (Join-Path $dst 'tools') -Force | Out-Null
   foreach ($t in @('test-resume.js', 'zipalign16.js', 'align16k.js')) {
@@ -51,6 +52,13 @@ Write-Host "==> 内置 Node 运行时: $NodeExe"
 if (-not (Test-Path $NodeExe)) { throw "找不到 Node：$NodeExe（用 -NodeExe 指定）" }
 New-Item -ItemType Directory -Path (Join-Path $dst 'nodejs') -Force | Out-Null
 Copy-Item $NodeExe (Join-Path $dst 'nodejs\node.exe')
+# Node.js 运行时为 MIT 许可，分发时必须随附其许可声明（含内置的 OpenSSL/ICU/V8 等）
+$nodeLicense = Join-Path (Split-Path -Parent $NodeExe) 'LICENSE'
+if (Test-Path $nodeLicense) {
+  Copy-Item $nodeLicense (Join-Path $dst 'nodejs\LICENSE')
+} else {
+  Write-Host '⚠ 未找到 Node 的 LICENSE，请手工补 nodejs\LICENSE'
+}
 
 # 文本文件统一编码：bat 用 CRLF 无 BOM，说明文件用 UTF-8 BOM（记事本才不乱码）
 Get-ChildItem $dst -Filter *.bat -File | ForEach-Object {
