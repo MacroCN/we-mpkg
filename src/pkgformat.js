@@ -1,3 +1,9 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 MacroCN
+ * 容器读写实现参考 nxdyy/pkg2mpkg（MIT），版权归原作者；
+ * 见 THIRD-PARTY-NOTICES.md 与 licenses/pkg2mpkg-MIT.txt。
+ */
 'use strict';
 /**
  * Wallpaper Engine 容器格式（.pkg / .mpkg）编解码。

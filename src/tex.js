@@ -1,3 +1,9 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 MacroCN
+ * 纹理容器解析与物化规格对齐 ReZe20/repkg-Re（MIT）的 MobileTextureMaterializer.cs，版权归原作者；
+ * 见 THIRD-PARTY-NOTICES.md 与 licenses/repkg-Re-MIT.txt。
+ */
 'use strict';
 /**
  * Wallpaper Engine 纹理容器（.tex）的读取 / 分类 / 物化。

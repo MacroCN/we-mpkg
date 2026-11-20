@@ -1,3 +1,9 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 MacroCN
+ * 本文件的规则集移植自 ReZe20/repkg-Re（MIT）的 ShaderCompatPatcher.cs，版权归原作者；
+ * 见 THIRD-PARTY-NOTICES.md 与 licenses/repkg-Re-MIT.txt。
+ */
 'use strict';
 /**
  * 桌面 GLSL → 移动端 GLSL ES 的兼容改写：把落在 float 上下文里的整数字面量补成 ".0"。

@@ -37,6 +37,8 @@ Copy-Tree (Join-Path $root 'node_modules') (Join-Path $dst 'node_modules') @('.c
 Copy-Item (Join-Path $root 'package.json') $dst
 if (Test-Path (Join-Path $root 'README.md')) { Copy-Item (Join-Path $root 'README.md') (Join-Path $dst 'README.md') }
 if (Test-Path (Join-Path $root 'LICENSE')) { Copy-Item (Join-Path $root 'LICENSE') (Join-Path $dst 'LICENSE') }
+if (Test-Path (Join-Path $root 'THIRD-PARTY-NOTICES.md')) { Copy-Item (Join-Path $root 'THIRD-PARTY-NOTICES.md') (Join-Path $dst 'THIRD-PARTY-NOTICES.md') }
+if (Test-Path (Join-Path $root 'licenses')) { Copy-Tree (Join-Path $root 'licenses') (Join-Path $dst 'licenses') }
 if (Test-Path (Join-Path $root 'tools\test-resume.js')) {
   New-Item -ItemType Directory -Path (Join-Path $dst 'tools') -Force | Out-Null
   foreach ($t in @('test-resume.js', 'zipalign16.js', 'align16k.js')) {
