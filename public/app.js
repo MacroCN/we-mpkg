@@ -146,8 +146,9 @@ const state = {
   days: 7,                // 热门趋势的时间窗（天）
   search: '',
   sort: 'trend',
-  tags: new Set(),          // Steam 标签原始名（英文）
-  single: {},               // 单选组的当前值 {groupName: tagName}
+  // 官方筛选语义：组内「或」、组间「与」、空组不过滤。
+  // 所以选中态必须按分组保存，不能再把所有标签塞进同一个集合。
+  sel: {},                  // { 组名: Set<标签英文名> }
   filterGroups: [],
   openGroups: null,        // Set：记得每组展开状态，重渲染不丢
   filtersOpen: true,       // 手机默认收起筛选区，先把列表露出来
@@ -192,6 +193,29 @@ async function api(path, opts) {
 }
 
 // ---------------- 筛选区 ----------------
+// 官方语义：同一分组内多选 = 或；不同分组之间 = 与；某组一个不选 = 该组不过滤。
+// 选中态按分组存（state.sel），提交给后端时序列化成 [{name, tags}]。
+
+function groupSet(name) {
+  if (!state.sel[name]) state.sel[name] = new Set();
+  return state.sel[name];
+}
+
+function selectedCount() {
+  let n = 0;
+  for (const k of Object.keys(state.sel)) n += state.sel[k].size;
+  return n;
+}
+
+function selectedGroups() {
+  const out = [];
+  for (const k of Object.keys(state.sel)) {
+    const tags = Array.from(state.sel[k]);
+    if (tags.length) out.push({ name: k, tags });
+  }
+  return out;
+}
+
 function renderFilters() {
   const box = $('filterGroups');
   if (!state.openGroups) {
@@ -201,6 +225,7 @@ function renderFilters() {
   box.innerHTML = '';
   for (const g of state.filterGroups) {
     const isSingle = g.element === 'select';
+    const set = groupSet(g.name);
     const el = document.createElement('div');
     el.className = 'fgroup' + (state.openGroups.has(g.name) ? ' open' : '');
 
@@ -208,8 +233,8 @@ function renderFilters() {
     head.className = 'fgroup-head';
     // 筛选一律用 Steam 的原始英文名：翻译过的标签名拿去请求会筛不到东西
     const label = g.name;
-    const cur = isSingle ? state.single[g.name] : null;
-    head.innerHTML = `<span>${esc(label)}${cur ? `<span class="cnt">${esc(cur)}</span>` : ''}</span><span class="caret">›</span>`;
+    const cnt = set.size;
+    head.innerHTML = `<span>${esc(label)}${cnt ? `<span class="cnt">${esc(Array.from(set).join(' / '))}</span>` : ''}</span><span class="caret">›</span>`;
     head.onclick = () => {
       if (state.openGroups.has(g.name)) state.openGroups.delete(g.name);
       else state.openGroups.add(g.name);
@@ -220,24 +245,17 @@ function renderFilters() {
     body.className = 'fgroup-body';
     for (const t of g.tags) {
       const chip = document.createElement('span');
-      const on = isSingle ? state.single[g.name] === t.name : state.tags.has(t.name);
-      chip.className = 'chip' + (on ? ' on' : '');
+      chip.className = 'chip' + (set.has(t.name) ? ' on' : '');
       chip.textContent = t.name;
       chip.onclick = () => {
-        if (isSingle) {
-          // 单选组：再点一次取消
-          if (state.single[g.name] === t.name) {
-            delete state.single[g.name];
-            state.tags.delete(t.name);
-          } else {
-            if (state.single[g.name]) state.tags.delete(state.single[g.name]);
-            state.single[g.name] = t.name;
-            state.tags.add(t.name);
-          }
-        } else if (state.tags.has(t.name)) {
-          state.tags.delete(t.name);
+        if (set.has(t.name)) {
+          set.delete(t.name);
+        } else if (isSingle) {
+          // 单选组：组内互斥
+          set.clear();
+          set.add(t.name);
         } else {
-          state.tags.add(t.name);
+          set.add(t.name);
         }
         renderFilters();
         state.page = 1;
@@ -255,7 +273,7 @@ function renderFilters() {
 }
 
 function updateFilterSummary() {
-  const n = state.tags.size;
+  const n = selectedCount();
   $('filterSummary').textContent = n ? `${tr('filters')} (${n})` : tr('filters');
 }
 
@@ -322,8 +340,10 @@ async function load() {
       pages: state.pages,
       sort: state.sort,
       search: state.search,
-      tags: Array.from(state.tags).join(','),
     });
+    // 分组后的筛选条件：组内「或」、组间「与」由后端按组合展开
+    const groups = selectedGroups();
+    if (groups.length) params.set('groups', JSON.stringify(groups));
     // 时间窗只对「热门趋势」有意义
     if (state.sort === 'trend' && state.days) params.set('days', state.days);
     const data = await api('/api/browse?' + params.toString());
@@ -696,8 +716,7 @@ function wire() {
     applyFiltersOpen();
   };
   $('clearFilters').onclick = () => {
-    state.tags.clear();
-    state.single = {};
+    state.sel = {};
     renderFilters();
     state.page = 1;
     load();

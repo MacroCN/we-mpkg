@@ -41,6 +41,48 @@ function isRemovedTag(name) {
   return REMOVED_TAGS.has(String(name || '').trim().toLowerCase());
 }
 
+/**
+ * 官方筛选语义（对齐 Wallpaper Engine 客户端）：
+ *   • 同一分组内勾选多个 → 逻辑或（命中任意一个即可）
+ *   • 不同分组之间       → 逻辑与（必须同时满足）
+ *   • 某分组一个都不勾   → 该分组不过滤
+ * Steam 的 requiredtags[] 本身只支持「与」，所以组内多选必须拆成多个
+ * 「每组合一个标签」的请求，再对结果取并集，才是官方的行为。
+ *
+ * 返回 { combos: [[tag...], ...], truncated }
+ *   truncated=true 表示组合数超过 MAX_TAG_COMBOS，已退化为「每组取第一个标签」。
+ */
+function normalizeTagGroups(groups) {
+  return (Array.isArray(groups) ? groups : [])
+    .map((g) => ({
+      name: String((g && g.name) || '').trim(),
+      tags: Array.from(new Set((Array.isArray(g && g.tags) ? g.tags : []).map((t) => String(t).trim())))
+        .filter((t) => t && !isRemovedTag(t)),
+    }))
+    .filter((g) => g.name && g.tags.length);
+}
+
+function expandTagGroups(groups) {
+  const norm = normalizeTagGroups(groups);
+  if (!norm.length) return { combos: [[]], truncated: false };
+
+  let combos = [[]];
+  for (const g of norm) {
+    const next = [];
+    for (const base of combos) for (const t of g.tags) next.push(base.concat([t]));
+    if (next.length > MAX_TAG_COMBOS) {
+      // 组合爆炸：退化成「每组取第一个」——语义从并集收紧成交集，需要提示用户
+      return { combos: norm.map((x) => [x.tags[0]]), truncated: true };
+    }
+    combos = next;
+  }
+  return { combos, truncated: false };
+}
+
+
+/** 组内「或」展开后允许的组合数上限（每个组合要发一次请求）：超过就退化 */
+const MAX_TAG_COMBOS = 8;
+
 /** 单次连续翻页的上限（页），防止误传参数把社区站刷爆 */
 const MAX_DEEP_PAGES = 8;
 
@@ -453,16 +495,8 @@ async function browseApi(opts) {
   };
 }
 
-/** 统一入口
- *  opts: { search, sort, tags, page, perPage, pages, days }
- *  pages = 一次连续抓多少页（合并去重后返回），用于对齐客户端「一直往下滚」的效果
- */
-async function browse(opts = {}) {
-  const merged = Object.assign({ search: '', sort: 'trend', tags: [], page: 1, perPage: 30, pages: 1, days: 0 }, opts);
-  merged.tags = (merged.tags || []).filter((t) => t && !isRemovedTag(t));
-  // anon:true 只用于对比「匿名 vs 账号」抓到的数量差，正常浏览不要传
-  if (!merged.anon) await ensureWebLogin(merged.onLog);
-  const scope = merged.anon || !net.hasLoginCookie() ? 'anon' : 'account';
+/** 单个组合的实际抓取（含 API 模式与回退），不含筛选语义 */
+async function browseOne(merged) {
   let out;
   if (config.API_KEY) {
     try {
@@ -475,8 +509,77 @@ async function browse(opts = {}) {
   } else {
     out = await browseHtml(merged);
   }
-  out.scope = scope; // 让前端明确显示这次抓到的是「账号范围」还是「匿名范围」
   return out;
+}
+
+/** 统一入口
+ *  opts: { search, sort, tags, groups, page, perPage, pages, days }
+ *  tags   = 旧参数，等价于「所有标签同属一个分组」（全 AND，保留兼容）
+ *  groups = [{ name, tags: [] }]，按官方语义解释：组内「或」、组间「与」、空组不过滤
+ *  pages  = 一次连续抓多少页（合并去重后返回），用于对齐客户端「一直往下滚」的效果
+ */
+async function browse(opts = {}) {
+  const merged = Object.assign({ search: '', sort: 'trend', tags: [], groups: null, page: 1, perPage: 30, pages: 1, days: 0 }, opts);
+  merged.tags = (merged.tags || []).filter((t) => t && !isRemovedTag(t));
+  // anon:true 只用于对比「匿名 vs 账号」抓到的数量差，正常浏览不要传
+  if (!merged.anon) await ensureWebLogin(merged.onLog);
+  const scope = merged.anon || !net.hasLoginCookie() ? 'anon' : 'account';
+
+  const { combos, truncated } = expandTagGroups(merged.groups);
+  const notes = [];
+  if (truncated) notes.push(`同组勾选过多（超过 ${MAX_TAG_COMBOS} 种组合），已改为每组只取第一个标签`);
+
+  if (combos.length === 1) {
+    // 只有一个组合：就是纯交集，走原来的整段连续翻页
+    const tags = merged.groups ? combos[0] : merged.tags;
+    const out = await browseOne(Object.assign({}, merged, { tags }));
+    out.scope = scope; // 让前端明确显示这次抓到的是「账号范围」还是「匿名范围」
+    if (notes.length) out.warning = [out.warning, notes.join('；')].filter(Boolean).join(' · ');
+    return out;
+  }
+
+  // 组内多选 → 每个组合单独请求一次，再对结果取并集（官方的「组内或」）
+  const seen = new Set();
+  const items = [];
+  let total = 0;
+  let backend = '';
+  let warning = '';
+  let pageStart = merged.page;
+  let pageEnd = merged.page;
+  if ((parseInt(merged.pages, 10) || 1) > 1) {
+    notes.push('多选组合模式下每次只抓 1 页（每个组合各一页）');
+  }
+  for (const combo of combos) {
+    let once;
+    try {
+      once = await browseOne(Object.assign({}, merged, { tags: combo, pages: 1 }));
+    } catch (e) {
+      warning = warning || `组合 ${combo.join(' / ')} 抓取失败（${e.message}）`;
+      continue;
+    }
+    if (once.backend) backend = once.backend;
+    if (once.total) total = Math.max(total, once.total); // 并集后的真实总值拿不到，用最大组合估
+    if (once.warning && !warning) warning = once.warning;
+    if (once.pageStart) pageStart = Math.min(pageStart, once.pageStart);
+    if (once.pageEnd) pageEnd = Math.max(pageEnd, once.pageEnd);
+    for (const it of once.items || []) {
+      if (!it || !it.id || seen.has(it.id)) continue;
+      seen.add(it.id);
+      items.push(it);
+    }
+  }
+  return {
+    items,
+    total,
+    backend: backend || 'html-ssr',
+    pageStart,
+    pageEnd,
+    pagesFetched: 1,
+    scope,
+    unionCombos: combos.length,
+    warning: [`已按官方「组内或 / 组间与」合并 ${combos.length} 个筛选组合`, ...notes, warning]
+      .filter(Boolean).join(' · '),
+  };
 }
 
 /**
@@ -536,6 +639,9 @@ module.exports = {
   POPULAR_TAGS,
   SORT_MAP,
   MAX_DEEP_PAGES,
+  MAX_TAG_COMBOS,
+  expandTagGroups,
+  normalizeTagGroups,
   REMOVED_TAGS,
   isRemovedTag,
   ensureWebLogin,

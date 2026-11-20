@@ -382,11 +382,21 @@ const server = http.createServer(async (req, res) => {
     }
     if (pn === '/api/browse') {
       const tags = (u.searchParams.get('tags') || '').split(',').map((s) => s.trim()).filter(Boolean);
+      // groups：[{ name, tags }]，官方语义的载体（组内或 / 组间与 / 空组不过滤）
+      let groups = null;
+      const rawGroups = u.searchParams.get('groups');
+      if (rawGroups) {
+        try {
+          const parsed = JSON.parse(rawGroups);
+          if (Array.isArray(parsed)) groups = parsed;
+        } catch { groups = null; }
+      }
       try {
         const out = await workshop.browse({
           search: u.searchParams.get('search') || '',
           sort: u.searchParams.get('sort') || 'trend',
           tags,
+          groups,
           page: parseInt(u.searchParams.get('page') || '1', 10),
           perPage: Math.min(100, parseInt(u.searchParams.get('perPage') || '24', 10)),
           // pages：一次连续抓多少页（网页模式一页 30 条，客户端是无限滚动，服务端替它把后面的页抓回来）

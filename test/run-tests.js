@@ -275,9 +275,48 @@ test('缓存状态与账号一致性', () => {
   }
 });
 
+// ---- 官方筛选语义：组内「或」、组间「与」、空组不过滤 ----
+test('筛选分组：空组 = 不过滤', () => {
+  const r = workshop.expandTagGroups([]);
+  assert.deepStrictEqual(r.combos, [[]]);
+  assert.strictEqual(r.truncated, false);
+});
+
+test('筛选分组：组内多选展开成「或」', () => {
+  const r = workshop.expandTagGroups([{ name: 'Genre', tags: ['Anime', 'Fantasy'] }]);
+  assert.strictEqual(r.combos.length, 2);
+  assert.deepStrictEqual(r.combos, [['Anime'], ['Fantasy']]);
+});
+
+test('筛选分组：组间是「与」（笛卡尔积）', () => {
+  const r = workshop.expandTagGroups([
+    { name: 'Genre', tags: ['Anime', 'Fantasy'] },
+    { name: 'Type', tags: ['Video', 'Scene'] },
+  ]);
+  assert.strictEqual(r.combos.length, 4);
+  assert.deepStrictEqual(r.combos, [
+    ['Anime', 'Video'], ['Anime', 'Scene'], ['Fantasy', 'Video'], ['Fantasy', 'Scene'],
+  ]);
+});
+
+test('筛选分组：去重 / 去空格 / 剔除已下线标签', () => {
+  const r = workshop.expandTagGroups([{ name: 'Genre', tags: ['Anime', 'Anime', ' Fantasy '] }]);
+  assert.deepStrictEqual(r.combos.map((c) => c[0]), ['Anime', 'Fantasy']);
+  const r2 = workshop.expandTagGroups([{ name: 'Type', tags: ['Application', 'Video'] }]);
+  assert.deepStrictEqual(r2.combos, [['Video']]);
+});
+
+test('筛选分组：组合过多退化为每组取第一个并标记 truncated', () => {
+  const r = workshop.expandTagGroups([
+    { name: 'A', tags: ['1', '2', '3'] },
+    { name: 'B', tags: ['4', '5', '6'] },
+  ]);
+  assert.strictEqual(r.truncated, true);
+  assert.deepStrictEqual(r.combos, [['1'], ['4']]);
+});
+
 (async () => {
-  await testAsync('整条流水线：工坊目录 -> mpkg（async）', async () => {
-    const itemDir = makeItemDir();
+  await testAsync('整条流水线：工坊目录 -> mpkg（async）', async () => {    const itemDir = makeItemDir();
     const outDir = tmp('out2');
     const res = await packer.packFromItemDir(itemDir, { id: '999', title: 'Async', outDir, onLog: () => {} });
     assert.ok(fs.existsSync(res.outFile));

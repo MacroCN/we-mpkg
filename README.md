@@ -14,7 +14,7 @@
 
 | 模块 | 说明 |
 |---|---|
-| 创意工坊检索 | 浏览 / 搜索 / 标签筛选（Type、Age Rating、Genre、Resolution、Category、Asset Type…）；一次连续取 1/3/5 页，热门支持 7/30/90/365 天时间窗 |
+| 创意工坊检索 | 浏览 / 搜索 / 标签筛选（Type、Age Rating、Genre、Resolution、Category、Asset Type…），筛选语义与官方客户端一致：**同一组内多选为「或」，不同组之间为「与」，某组不选即该组不过滤**；一次连续取 1/3/5 页，热门支持 7/30/90/365 天时间窗 |
 | 内容范围 | 有 Steam 登录凭据时自动带上账号登录态，抓到的条目范围与桌面客户端一致（含成人分级内容）；未登录则退回匿名范围，界面会标注 |
 | 下载 | 两种引擎：`steamjs`（纯 JS，默认，全平台含安卓）、`steamcmd`（Windows 可选用）；支持分块级断点续传、坏 CDN 节点自动剔除 |
 | 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理物化为 RGBA8、着色器 GLSL ES 兼容改写、`project.json`/`preview.gif` 补齐 |
@@ -88,6 +88,9 @@ node bin\wempkg.js serve --port 3090
 ```
 run.bat serve                    启动网页界面（默认 3090）
 run.bat browse --search 夜城      搜索创意工坊
+run.bat browse --group "Genre:Anime,Fantasy" --group "Type:Video"
+                                 按官方语义筛选：同组内「或」，组间「与」
+run.bat browse --tag Scene,Video  多个标签同时命中（强制「与」）
 run.bat info <id>                查看条目详情
 run.bat get <id>                 下载 + 打包成 .mpkg（一步到位）
 run.bat fetch <id>               只下载原始文件
@@ -124,6 +127,7 @@ run.bat steamjs login|status|logout|token|webcookie
 3. **`application` 类型壁纸不可用**：依赖桌面运行时，无法在手机端还原。
 4. **`scene` 纹理适配只覆盖常见 DXT 格式**；个别自定义着色器可能仍需手工调整。
 5. **单机扫码登录有边界**：手机打不开自己的屏幕来扫码，只有一部手机时请用账号密码 + Steam App 推送确认。
+6. **筛选是「组内或」的多次请求合并**：Steam 的 `requiredtags[]` 只支持「与」，所以同组多选会拆成多个组合分别请求再取并集——组合超过 8 个时退化为每组只取第一个标签，结果会是交集；这种模式下每次只取 1 页。
 
 ---
 

@@ -4,7 +4,9 @@
  * we-mpkg 命令行
  *
  *   node bin/wempkg.js serve  [--port 3090]                 打开网页浏览界面
- *   node bin/wempkg.js browse [--search xx] [--sort trend] [--tag Scene,Video] [--page 1]
+ *   node bin/wempkg.js browse [--search xx] [--sort trend] [--tag Scene,Video] [--group "Genre:Anime,Fantasy"] [--page 1]
+ *     --tag   多个标签之间是「与」（强制同时命中）
+ *     --group 同一组内是「或」，不同组之间是「与」，与官方客户端一致；可重复
  *   node bin/wempkg.js info   <id>                          查看条目详情
  *   node bin/wempkg.js get    <id> [--title 名称] [--ref 参考.mpkg]   下载并打包成 mpkg
  *   node bin/wempkg.js fetch  <id>                          只下载（保留原始文件）
@@ -20,13 +22,18 @@ const packer = require('../src/pack');
 
 function parseArgs(argv) {
   const args = { _: [] };
+  const put = (key, value) => {
+    if (args[key] === undefined) args[key] = value;
+    else if (Array.isArray(args[key])) args[key].push(value);
+    else args[key] = [args[key], value];
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const key = a.slice(2);
       const next = argv[i + 1];
-      if (next === undefined || next.startsWith('--')) args[key] = true;
-      else { args[key] = next; i++; }
+      if (next === undefined || next.startsWith('--')) put(key, true);
+      else { put(key, next); i++; }
     } else {
       args._.push(a);
     }
@@ -64,10 +71,23 @@ function entitlementHint(reason) {
 
 async function cmdBrowse(args) {
   const tags = String(args.tag || '').split(',').map((s) => s.trim()).filter(Boolean);
+  // --group "Genre:Anime,Fantasy" 可重复；同一组内是「或」，不同组之间是「与」（官方语义）
+  const rawGroups = args.group === undefined ? [] : (Array.isArray(args.group) ? args.group : [args.group]);
+  const groups = rawGroups
+    .map((g) => {
+      const s = String(g);
+      const idx = s.indexOf(':');
+      if (idx < 0) return null;
+      const name = s.slice(0, idx).trim();
+      const list = s.slice(idx + 1).split(',').map((x) => x.trim()).filter(Boolean);
+      return name && list.length ? { name, tags: list } : null;
+    })
+    .filter(Boolean);
   const res = await workshop.browse({
     search: args.search || '',
     sort: args.sort || 'trend',
     tags,
+    groups: groups.length ? groups : null,
     page: parseInt(args.page || '1', 10),
     perPage: parseInt(args.perPage || '20', 10),
     days: parseInt(args.days || '0', 10),
