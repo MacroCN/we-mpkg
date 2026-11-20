@@ -1,0 +1,554 @@
+'use strict';
+/**
+ * 创意工坊检索：
+ *  1) HTML 抓取 steamcommunity.com/workshop/browse/ —— 无需 API key（默认）
+ *  2) IPublishedFileService/QueryFiles —— 需要 STEAM_API_KEY，api.steampowered.com 走通时更稳
+ *  3) ISteamRemoteStorage/GetPublishedFileDetails —— 无需 key，批量拿元数据
+ */
+const net = require('./net');
+const { config } = require('./config');
+
+const APP_ID = config.APP_ID;
+
+/** 排序别名 -> steamcommunity browsesort */
+const SORT_MAP = {
+  trend: 'trend',
+  recent: 'mostrecent',
+  updated: 'lastupdated',
+  top: 'totaluniquesubscribers',
+};
+
+/** QueryFiles 的 query_type（经验值，官方文档未完整列出枚举） */
+const QUERY_TYPE_MAP = { trend: 3, recent: 1, updated: 1, top: 0 };
+
+/** Wallpaper Engine 创意工坊常见标签（界面筛选用）
+ *  注意：`Application`（应用）类型官方已于 2025 年取消，列表里不再出现，
+ *  旧缓存/旧页面若还带这个标签，getFilters() 会把它剔掉。
+ */
+const POPULAR_TAGS = [
+  'Video', 'Scene', 'Web',
+  'Abstract', 'Anime', 'Cartoon', 'CGI', 'Cyberpunk', 'Fantasy', 'Game', 'Girls', 'Guys',
+  'Landscape', 'Medieval', 'Meme', 'Music', 'Nature', 'Pixel', 'Relaxing', 'Retro', 'Sci-Fi',
+  'Sports', 'Technology', 'Television', 'Vehicle', 'Unspecified',
+  '4K', '1080p', '720p', 'Ultrawide Resolution',
+  'Audio Responsive', 'Adult',
+];
+
+/** 官方已下线的类型标签：出现即剔除（大小写不敏感） */
+const REMOVED_TAGS = new Set(['application', '应用']);
+
+function isRemovedTag(name) {
+  return REMOVED_TAGS.has(String(name || '').trim().toLowerCase());
+}
+
+/** 单次连续翻页的上限（页），防止误传参数把社区站刷爆 */
+const MAX_DEEP_PAGES = 8;
+
+function cleanText(v) {
+  return String(v || '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
+
+function parseTotal(html) {
+  const m1 = html.match(/Showing\s+[\d,]+-[\d,]+\s+of\s+([\d,]+)/i);
+  if (m1) return parseInt(m1[1].replace(/,/g, ''), 10);
+  const m2 = html.match(/共\s*([\d,]+)\s*(?:项|条|个)/);
+  if (m2) return parseInt(m2[1].replace(/,/g, ''), 10);
+  const m3 = html.match(/workshopBrowsePagingInfo[^>]*>([\s\S]{0,200}?)<\/div>/i);
+  if (m3) {
+    const n = m3[1].match(/([\d,]+)\s*(entries|项|条)/i);
+    if (n) return parseInt(n[1].replace(/,/g, ''), 10);
+  }
+  return 0;
+}
+
+/** 递归下钻：在任意嵌套结构/JSON 字符串里找到 results 数组 */
+function deepFindResults(node, depth = 0) {
+  if (depth > 10 || node === null || node === undefined) return null;
+  if (typeof node === 'string') {
+    const t = node.trim();
+    if (t.length > 2 && (t[0] === '{' || t[0] === '[')) {
+      try {
+        return deepFindResults(JSON.parse(t), depth + 1);
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+  if (Array.isArray(node)) {
+    if (node.length && node[0] && typeof node[0] === 'object' && node[0].publishedfileid) {
+      return { results: node, total: 0 };
+    }
+    for (const v of node) {
+      const r = deepFindResults(v, depth + 1);
+      if (r) return r;
+    }
+    return null;
+  }
+  if (typeof node === 'object') {
+    if (Array.isArray(node.results) && node.results.length && node.results[0] && node.results[0].publishedfileid) {
+      return { results: node.results, total: parseInt(node.total_count, 10) || 0 };
+    }
+    for (const v of Object.values(node)) {
+      const r = deepFindResults(v, depth + 1);
+      if (r) return r;
+    }
+  }
+  return null;
+}
+
+/**
+ * 新版创意工坊页面把 SSR 状态放在
+ * <script type="application/json" id="valve-ssr-data">，里面 loaderData 是嵌套 JSON 字符串，
+ * 最深处才有 results 数组（publishedfileid / title / preview_url / tags / file_size）。
+ */
+function parseSsrResults(html) {
+  const blocks = [];
+  const preferred = html.match(/<script[^>]*id="valve-ssr-data"[^>]*>([\s\S]*?)<\/script>/i);
+  if (preferred) blocks.push(preferred[1]);
+  for (const m of html.matchAll(/<script[^>]*type="application\/json"[^>]*>([\s\S]*?)<\/script>/gi)) {
+    if (!blocks.includes(m[1])) blocks.push(m[1]);
+  }
+  for (const raw of blocks) {
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    const found = deepFindResults(parsed);
+    if (found && found.results.length) return found;
+  }
+  return null;
+}
+
+/** 把内嵌结果的字段归一化 */
+function normalizeSsrItem(d) {
+  const tags = (d.tags || []).map((t) => (typeof t === 'string' ? t : (t.display_name || t.tag))).filter(Boolean);
+  return {
+    id: String(d.publishedfileid),
+    title: d.title || `壁纸 ${d.publishedfileid}`,
+    preview: d.preview_url || '',
+    author: '',
+    creator: d.creator || '',
+    description: d.short_description || '',
+    subscriptions: d.subscriptions || d.lifetime_subscriptions || 0,
+    favorited: d.favorited || d.lifetime_favorited || 0,
+    views: d.views || 0,
+    fileSize: parseInt(d.file_size, 10) || 0,
+    timeUpdated: d.time_updated || 0,
+    timeCreated: d.time_created || 0,
+    tags,
+    appId: d.consumer_appid || APP_ID,
+  };
+}
+
+/** 从 browse 页面 HTML 里提取条目卡片（新结构优先，旧结构兜底） */
+function parseBrowseHtml(html) {
+  const ssr = parseSsrResults(html);
+  if (ssr) {
+    return { items: ssr.results.map(normalizeSsrItem), total: ssr.total, legacy: false };
+  }
+  const items = [];
+  const seen = new Set();
+  const re = /data-publishedfileid="(\d+)"/g;
+  const marks = [];
+  let m;
+  while ((m = re.exec(html))) {
+    if (seen.has(m[1])) continue;
+    seen.add(m[1]);
+    marks.push({ id: m[1], index: m.index });
+  }
+  for (let i = 0; i < marks.length; i++) {
+    const cur = marks[i];
+    const end = i + 1 < marks.length ? marks[i + 1].index : Math.min(html.length, cur.index + 3400);
+    // 条目内容一定在 data-publishedfileid 之后，避免把上一条的标题读进来
+    const block = html.slice(cur.index, Math.max(end, cur.index + 400));
+    const title = block.match(/class="workshopItemTitle[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+    const img = block.match(/class="workshopItemPreviewImage[^"]*"[^>]*src="([^"]+)"/i)
+      || block.match(/src="(https:\/\/images\.steamusercontent\.com[^"]+)"/i)
+      || block.match(/src="([^"]+\.(?:jpg|png|gif|jpeg))"/i);
+    const author = block.match(/class="workshopItemAuthorName[^"]*"[\s\S]{0,1000}?<a[^>]*>([\s\S]*?)<\/a>/i);
+    items.push({
+      id: cur.id,
+      title: title ? cleanText(title[1]) : '',
+      preview: img ? cleanText(img[1]) : '',
+      author: author ? cleanText(author[1]) : '',
+    });
+  }
+  return { items, total: parseTotal(html), legacy: true };
+}
+
+/** 批量取详情（无需 API key） */
+async function getFileDetails(ids) {
+  const uniq = Array.from(new Set((ids || []).map((v) => String(v).trim()).filter(Boolean)));
+  if (!uniq.length) return [];
+  const parts = [`itemcount=${uniq.length}`];
+  uniq.forEach((id, i) => parts.push(`publishedfileids[${i}]=${id}`));
+  const text = await net.postForm(
+    'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
+    parts,
+    { timeout: 15000, retries: 0 }
+  );
+  const data = JSON.parse(text);
+  const list = (data && data.response && data.response.publishedfiledetails) || [];
+  return list.filter((d) => d && d.result === 1);
+}
+
+function normalizeDetail(d, hint = {}) {
+  return {
+    id: String(d.publishedfileid || hint.id || ''),
+    title: d.title || hint.title || `壁纸 ${d.publishedfileid}`,
+    preview: d.preview_url || hint.preview || '',
+    author: hint.author || '',
+    creator: d.creator || '',
+    description: d.short_description || '',
+    subscriptions: d.lifetime_subscriptions || d.subscriptions || 0,
+    favorited: d.lifetime_favorited || d.favorited || 0,
+    views: d.views || 0,
+    fileSize: d.file_size || 0,
+    timeUpdated: d.time_updated || 0,
+    timeCreated: d.time_created || 0,
+    tags: (d.tags || []).map((t) => (typeof t === 'string' ? t : t.tag)).filter(Boolean),
+    appId: d.consumer_appid || d.appid || APP_ID,
+  };
+}
+
+/** 单条详情（含社区页面上的描述/作者） */
+async function getItemDetail(id) {
+  await ensureWebLogin();
+  let base = null;
+  try {
+    const list = await getFileDetails([id]);
+    base = list[0] || null;
+  } catch { /* ignore */ }
+
+  let html = '';
+  try {
+    html = await net.getText(`https://steamcommunity.com/sharedfiles/filedetails/?id=${id}`, {
+      timeout: 12000,
+      retries: 0,
+      headers: { Cookie: net.steamCookie(), 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' },
+    });
+  } catch { /* 国内网络常失败，忽略 */ }
+
+  const fromHtml = {};
+  if (html) {
+    const t = html.match(/<div class="workshopItemTitle">([^<]+)<\/div>/);
+    if (t) fromHtml.title = cleanText(t[1]);
+    const img = html.match(/id="previewImageMain"[^>]+src="([^"]+)"/) || html.match(/id="previewImage"[^>]+src="([^"]+)"/);
+    if (img) fromHtml.preview = img[1];
+    const desc = html.match(/id="highlightContent"[^>]*>([\s\S]*?)<\/div>/) || html.match(/class="workshopItemDescription[^"]*"[^>]*>([\s\S]*?)<\/div>/);
+    if (desc) fromHtml.description = cleanText(desc[1]);
+    const author = html.match(/class="friendBlockContent"[^>]*>\s*([\s\S]*?)<br/i) || html.match(/class="workshopItemAuthorName[^"]*"[\s\S]{0,600}?<a[^>]*>([\s\S]*?)<\/a>/i);
+    if (author) fromHtml.author = cleanText(author[1]);
+    const tags = [];
+    for (const [, tag] of html.matchAll(/class="[^"]*workshopTagFilterItem[^"]*"[^>]*>\s*([^<]+)\s*<\/a>/g)) {
+      const v = cleanText(tag);
+      if (v && !tags.includes(v)) tags.push(v);
+    }
+    fromHtml.tags = tags;
+  }
+
+  const merged = normalizeDetail(
+    Object.assign({ publishedfileid: id }, base || {}),
+    { id, title: fromHtml.title, preview: fromHtml.preview }
+  );
+  if (fromHtml.description) merged.description = fromHtml.description;
+  if (fromHtml.author) merged.author = fromHtml.author;
+  if (fromHtml.tags && fromHtml.tags.length) merged.tags = fromHtml.tags;
+  return merged;
+}
+
+function buildBrowseUrl({ search = '', sort = 'trend', tags = [], page = 1, perPage = 30, days = 0 }) {
+  const browsesort = SORT_MAP[sort] || 'trend';
+  const qs = [
+    `appid=${APP_ID}`,
+    `browsesort=${browsesort}`,
+    'section=readytouseitems',
+    `actualsort=${browsesort}`,
+    `p=${page}`,
+    `numperpage=${perPage}`,
+  ];
+  if (search) qs.push(`searchtext=${encodeURIComponent(search)}`);
+  // trend 的 days 是「最近 N 天」，客户端默认覆盖全部时间，网页默认只有最近一周
+  if (days && browsesort === 'trend') qs.push(`days=${days}`);
+  const tagList = (Array.isArray(tags) ? tags : [tags]).filter((t) => t && !isRemovedTag(t));
+  // 标签过多时 Steam 常返回空结果，超过 8 个就放弃过滤
+  if (tagList.length && tagList.length <= 8) {
+    for (const t of tagList) qs.push(`requiredtags%5B%5D=${encodeURIComponent(t)}`);
+  }
+  return `https://steamcommunity.com/workshop/browse/?${qs.join('&')}`;
+}
+
+/** 确保爬到的是「登录态」的内容范围（有凭据时自动启用；失败就继续匿名） */
+let loginChecked = false;
+let loginBusyCheck = null;
+/** 由 server 注入：下载任务进行中就别再建第二条 CM 连接去换 cookie */
+function setLoginBusyCheck(fn) {
+  loginBusyCheck = typeof fn === 'function' ? fn : null;
+}
+async function ensureWebLogin(onLog) {
+  if (loginChecked) return;
+  try {
+    const webcookie = require('./webcookie');
+    const busy = loginBusyCheck ? !!loginBusyCheck() : false;
+    const c = await webcookie.getLoginCookie({ onLog, allowFetch: !busy });
+    if (c && c.cookie) {
+      net.setLoginCookie(c.cookie);
+      loginChecked = true;
+    }
+  } catch { /* 保持匿名态 */ }
+}
+
+/** 换账号 / 重新登录后重新取一次登录态 */
+function resetWebLogin() {
+  loginChecked = false;
+  net.setLoginCookie('');
+}
+async function browseHtmlOnce(opts) {
+  const url = buildBrowseUrl(opts);
+  const html = await net.getText(url, {
+    timeout: 20000,
+    retries: 0,
+    headers: {
+      Cookie: net.steamCookie({ anon: !!opts.anon }),
+      'Accept-Language': opts.lang === 'en' ? 'en-US,en;q=0.9' : 'zh-CN,zh;q=0.9,en;q=0.8',
+    },
+  });
+  const parsed = parseBrowseHtml(html);
+  const hints = parsed.items;
+  if (!hints.length) {
+    return { items: [], total: 0, backend: 'html', url, warning: '页面未解析到任何条目（可能被网络/风控拦截，或没有匹配结果）' };
+  }
+  // 新版页面内嵌结果已包含标题/预览/标签/体积，无需再调详情接口
+  if (!parsed.legacy) {
+    // Steam 现在固定一页返回 30 条，这里按请求的 perPage 截断，保证翻页逻辑正确
+    const items = hints.slice(0, opts.perPage || 30);
+    return { items, total: parsed.total || hints.length, backend: 'html-ssr', url };
+  }
+  let details = [];
+  try {
+    details = await getFileDetails(hints.map((h) => h.id));
+  } catch { /* 详情接口失败时退回卡片信息 */ }
+  const map = new Map(details.map((d) => [String(d.publishedfileid), d]));
+  const items = hints.map((h) => normalizeDetail(Object.assign({ publishedfileid: h.id }, map.get(h.id) || {}), h));
+  return { items, total: parsed.total || items.length, backend: 'html', url };
+}
+
+/**
+ * HTML 抓取模式（连续多页）
+ * 社区页面一页固定 30 条、没有「无限滚动」，客户端却能一直滚到底，
+ * 所以这里按 pages 连续翻页并合并去重（单次上限 MAX_DEEP_PAGES 页）。
+ */
+async function browseHtml(opts) {
+  const pages = Math.max(1, Math.min(MAX_DEEP_PAGES, parseInt(opts.pages, 10) || 1));
+  const firstPage = Math.max(1, parseInt(opts.page, 10) || 1);
+  const perPage = opts.perPage || 30;
+  if (pages === 1) return browseHtmlOnce({ ...opts, page: firstPage, perPage });
+
+  const seen = new Set();
+  const items = [];
+  let total = 0;
+  let backend = 'html-ssr';
+  let warning = '';
+  let fetched = 0;
+  for (let i = 0; i < pages; i++) {
+    const p = firstPage + i;
+    let once;
+    try {
+      once = await browseHtmlOnce({ ...opts, page: p, perPage: perPage * pages });
+    } catch (e) {
+      warning = warning || `第 ${p} 页抓取失败（${e.message}）`;
+      break;
+    }
+    if (once.backend) backend = once.backend;
+    if (once.total) total = Math.max(total, once.total);
+    if (once.warning && !warning) warning = once.warning;
+    fetched++;
+    for (const it of once.items) {
+      if (!it || !it.id || seen.has(it.id)) continue;
+      seen.add(it.id);
+      items.push(it);
+    }
+    if (once.items.length < 30) break; // 已经到最后一页
+    if (i < pages - 1) await new Promise((r) => setTimeout(r, 600)); // 别把社区站请求打太急
+  }
+  return {
+    items: items.slice(0, perPage * pages),
+    total: total || items.length,
+    backend,
+    url: buildBrowseUrl({ ...opts, page: firstPage }),
+    warning,
+    pagesFetched: fetched,
+    pageStart: firstPage,
+    pageEnd: firstPage + fetched - 1,
+  };
+}
+
+/** QueryFiles 模式（需要 key） */
+async function browseApi(opts) {
+  const { search = '', sort = 'trend', tags = [], page = 1, perPage = 30, days = 0 } = opts;
+  // Steam 的 numperpage 上限是 100，网页模式只有 30
+  const numperpage = Math.max(1, Math.min(100, parseInt(perPage, 10) || 30));
+  const pages = Math.max(1, Math.min(MAX_DEEP_PAGES, parseInt(opts.pages, 10) || 1));
+  const startPage = Math.max(1, parseInt(page, 10) || 1);
+  const tagList = (Array.isArray(tags) ? tags : [tags]).filter((t) => t && !isRemovedTag(t));
+
+  const items = [];
+  const seen = new Set();
+  let total = 0;
+  for (let i = 0; i < pages; i++) {
+    const fields = [`key=${encodeURIComponent(config.API_KEY)}`, `appid=${APP_ID}`,
+      `query_type=${QUERY_TYPE_MAP[sort] || 3}`, `page=${startPage + i}`, `numperpage=${numperpage}`,
+      'return_metadata=1', 'return_short_description=1'];
+    if (search) fields.push(`search_text=${encodeURIComponent(search)}`);
+    if (days) fields.push(`days=${days}`);
+    for (const t of tagList) fields.push(`requiredtags[]=${encodeURIComponent(t)}`);
+
+    const text = await net.postForm('https://api.steampowered.com/IPublishedFileService/QueryFiles/v1/', fields, { timeout: 25000, retries: 0 });
+    const data = JSON.parse(text);
+    const resp = (data && data.response) || {};
+    if (resp.total) total = Math.max(total, resp.total);
+    for (const d of resp.publishedfiledetails || []) {
+      const id = String(d.publishedfileid);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      items.push({
+        id,
+        title: d.title || `壁纸 ${id}`,
+        preview: d.preview_url || '',
+        author: '',
+        creator: d.creator || '',
+        description: d.short_description || '',
+        subscriptions: d.lifetime_subscriptions || d.subscriptions || 0,
+        favorited: d.lifetime_favorited || d.favorited || 0,
+        views: d.views || 0,
+        fileSize: d.file_size || 0,
+        timeUpdated: d.time_updated || 0,
+        timeCreated: d.time_created || 0,
+        tags: (d.tags || []).map((t) => t.tag).filter((t) => t && !isRemovedTag(t)),
+        appId: d.consumer_appid || APP_ID,
+      });
+    }
+    if ((resp.publishedfiledetails || []).length < numperpage) break;
+  }
+  return {
+    items,
+    total: total || items.length,
+    backend: 'api',
+    pagesFetched: pages,
+    pageStart: startPage,
+    pageEnd: startPage + pages - 1,
+  };
+}
+
+/** 统一入口
+ *  opts: { search, sort, tags, page, perPage, pages, days }
+ *  pages = 一次连续抓多少页（合并去重后返回），用于对齐客户端「一直往下滚」的效果
+ */
+async function browse(opts = {}) {
+  const merged = Object.assign({ search: '', sort: 'trend', tags: [], page: 1, perPage: 30, pages: 1, days: 0 }, opts);
+  merged.tags = (merged.tags || []).filter((t) => t && !isRemovedTag(t));
+  // anon:true 只用于对比「匿名 vs 账号」抓到的数量差，正常浏览不要传
+  if (!merged.anon) await ensureWebLogin(merged.onLog);
+  const scope = merged.anon || !net.hasLoginCookie() ? 'anon' : 'account';
+  let out;
+  if (config.API_KEY) {
+    try {
+      out = await browseApi(merged);
+    } catch (e) {
+      const fallback = await browseHtml(merged).catch((e2) => { throw e2; });
+      fallback.warning = `QueryFiles 失败（${e.message}），已回退到 HTML 抓取`;
+      out = fallback;
+    }
+  } else {
+    out = await browseHtml(merged);
+  }
+  out.scope = scope; // 让前端明确显示这次抓到的是「账号范围」还是「匿名范围」
+  return out;
+}
+
+/**
+ * 从创意工坊页面 SSR 状态里读出官方筛选分组（Type / Age Rating / Genre / Resolution …）。
+ * Steam 只在页面状态里给这套定义，没有独立接口，所以解析后缓存。
+ */
+let filtersCache = { at: 0, data: null };
+const FILTERS_TTL = 30 * 60 * 1000;
+
+async function getFilters({ force = false } = {}) {
+  if (!force && filtersCache.data && Date.now() - filtersCache.at < FILTERS_TTL) return filtersCache.data;
+  await ensureWebLogin(undefined);
+  // 必须按英文取：中文页面的标签名不是规范的 tag 名，拿去 requiredtags[] 会筛不出结果
+  const cookie = net.steamCookie().replace(/Steam_Language=[^;]*/, 'Steam_Language=english');
+  const html = await net.getText(
+    `https://steamcommunity.com/app/${APP_ID}/workshop/?l=english`,
+    { timeout: 25000, retries: 1, headers: { Cookie: cookie, 'Accept-Language': 'en-US,en;q=0.9' } },
+  );
+  const groups = extractFilterGroups(html);
+  if (!groups) throw new Error('创意工坊页面结构变化，未能解析出筛选分组');
+  filtersCache = { at: Date.now(), data: groups };
+  return groups;
+}
+
+function extractFilterGroups(html) {
+  const m = html.match(/<script[^>]*id="valve-ssr-data"[^>]*>([\s\S]*?)<\/script>/i);
+  if (!m) return null;
+  let data;
+  try { data = JSON.parse(m[1]); } catch { return null; }
+
+  // queryData 本身是 JSON 字符串，第 8 个 query 是「可立即使用的物品」这一页
+  let qd = data.renderContext && data.renderContext.queryData;
+  if (typeof qd === 'string') { try { qd = JSON.parse(qd); } catch { return null; } }
+  const queries = (qd && qd.queries) || [];
+  for (const q of queries) {
+    const d = q.state && q.state.data;
+    if (d && Array.isArray(d.readytouse_tags) && d.readytouse_tags.length) {
+      return d.readytouse_tags
+        .filter((g) => g && g.name && Array.isArray(g.tags) && g.tags.length)
+        .map((g) => ({
+          name: g.name,
+          element: g.htmlelement === 'checkbox' ? 'checkbox' : 'select',
+          // 官方已取消「应用」类型：即使旧页面/缓存里还带着也剔掉
+          tags: g.tags
+            .filter((t) => t && t.name && !isRemovedTag(t.name))
+            .map((t) => ({ name: t.name, id: String(t.id || '') })),
+        }))
+        .filter((g) => g.tags.length);
+    }
+  }
+  return null;
+}
+
+
+module.exports = {
+  APP_ID,
+  POPULAR_TAGS,
+  SORT_MAP,
+  MAX_DEEP_PAGES,
+  REMOVED_TAGS,
+  isRemovedTag,
+  ensureWebLogin,
+  setLoginBusyCheck,
+  resetWebLogin,
+  browse,
+  browseHtml,
+  browseApi,
+  getFilters,
+  getItemDetail,
+  getFileDetails,
+  parseBrowseHtml,
+  buildBrowseUrl,
+  extractFilterGroups,
+  cleanText,
+};

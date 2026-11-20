@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="#0F1A24">
+
+    <LinearLayout
+        android:id="@+id/setupPanel"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="we-mpkg"
+            android:textColor="#F0F4F8"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:text="浏览创意工坊、下载并打包 mpkg。本地模式需先导入登录凭据；也可连电脑用远程模式。"
+            android:textColor="#8FA3B8"
+            android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnLocal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="本地模式（手机上打包）" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="电脑端地址（远程模式，含下载）"
+            android:textColor="#8FA3B8"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/editRemote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="192.168.1.10:3090"
+            android:inputType="textUri"
+            android:textColor="#F0F4F8"
+            android:textColorHint="#4A637A" />
+
+        <Button
+            android:id="@+id/btnRemote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="连接电脑" />
+
+        <Button
+            android:id="@+id/btnStorage"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="授予文件访问权限（自定义下载目录）" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:text="登录凭据（在电脑上执行 run.bat steamjs token 得到）"
+            android:textColor="#8FA3B8"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/editToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="粘贴 Base64 凭据"
+            android:inputType="textMultiLine"
+            android:maxLines="3"
+            android:textColor="#F0F4F8"
+            android:textColorHint="#4A637A" />
+
+        <Button
+            android:id="@+id/btnToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="导入凭据" />
+
+        <Button
+            android:id="@+id/btnExit"
+            style="?android:attr/borderlessButtonStyle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="退出应用（同时关闭后台服务）"
+            android:textColor="#8FA3B8" />
+
+        <TextView
+            android:id="@+id/txtStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text=""
+            android:textColor="#9FE8C0"
+            android:textSize="12sp" />
+    </LinearLayout>
+
+    <WebView
+        android:id="@+id/web"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:visibility="gone" />
+</LinearLayout>

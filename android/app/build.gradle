@@ -1,0 +1,47 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.wempkg.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.wempkg.app"
+        minSdk 24
+        targetSdk 34
+        versionCode 5
+        versionName "1.3.1"
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // .so 以未压缩方式存入 APK，并按 16 KB 对齐（见 build-apk.ps1 里的 zipalign -P 16）
+    packaging {
+        jniLibs {
+            useLegacyPackaging = false
+        }
+        resources {
+            excludes += ['META-INF/*.kotlin_module']
+        }
+    }
+
+    // assets 里的 .gz 会被 aapt 过滤掉，nodejs-project 里要保持原样
+    androidResources {
+        noCompress += ['gz', 'mpkg', 'pkg']
+    }
+}
+

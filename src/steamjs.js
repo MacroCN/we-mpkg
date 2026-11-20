@@ -1,0 +1,436 @@
+'use strict';
+
+/**
+ * 纯 JS 的 Steam 下载层：不依赖 SteamCMD，任何能跑 Node 的平台都能用（Windows / Linux / Android）。
+ *
+ * 流程（全部基于官方 Steam 客户端协议，无 x86 依赖）：
+ *   1) steam-session 二维码登录 → refresh token（存 .cache/steam-token.json）
+ *   2) steam-user 用 refresh token 连 Steam
+ *   3) IPublishedFileService 拿条目详情 → hcontent_file 即内容 manifest id
+ *   4) getManifest 取 depot manifest → downloadFile 逐文件下载（内部按 chunk 拉取 + AES 解密 + sha1 校验）
+ *
+ * 前置条件：账号必须拥有 Wallpaper Engine（431960），否则 getDepotDecryptionKey 会被 Steam 拒绝。
+ */
+
+const fs = require('fs');
+const path = require('path');
+const { config, ensureDirs } = require('./config');
+
+const APP_ID = 431960;
+const DEPOT_ID = 431960;
+const TOKEN_FILE = path.join(config.CACHE_DIR, 'steam-token.json');
+
+function readToken() {
+  try {
+    const j = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
+    return j && j.refreshToken ? j : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveToken(data) {
+  ensureDirs();
+  const prev = readToken() || {};
+  // Steam 有些登录流程不回报账号名，别把已有的名字丢掉（否则界面会显示"未登录"）
+  const merged = Object.assign({}, data);
+  if (!merged.accountName && prev.accountName) merged.accountName = prev.accountName;
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(Object.assign({ savedAt: new Date().toISOString() }, merged), null, 2));
+  try { fs.chmodSync(TOKEN_FILE, 0o600); } catch { /* Windows 上忽略 */ }
+}
+
+function clearToken() {
+  try { fs.unlinkSync(TOKEN_FILE); } catch { /* ignore */ }
+}
+
+/** 代理选项：Node 不读系统代理，必须显式传 */
+function proxyOptions() {
+  return config.PROXY ? { httpProxy: config.PROXY } : {};
+}
+
+/** 把回调风格方法包成 Promise */
+function invoke(obj, method, ...args) {
+  return new Promise((resolve, reject) => {
+    obj[method](...args, (err, ...res) => {
+      if (err) return reject(err);
+      return resolve(res.length <= 1 ? res[0] : res);
+    });
+  });
+}
+
+function once(emitter, event, { timeoutMs = 30000, label = event } = {}) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} 超时（${timeoutMs} ms）`)), timeoutMs);
+    emitter.once(event, (...a) => { clearTimeout(timer); resolve(a); });
+    emitter.once('error', (err) => { clearTimeout(timer); reject(err); });
+  });
+}
+
+/** 在终端渲染二维码 */
+function printQr(url) {
+  console.log('\n用手机 Steam App 扫码登录（Steam App → 右下「Steam 令牌」→「扫一扫」）：\n');
+  try {
+    const qr = require('qrcode-terminal');
+    qr.generate(url, { small: true }, (s) => console.log(s));
+  } catch {
+    console.log('（未安装 qrcode-terminal，直接复制下面的地址也可）');
+  }
+  console.log(`\n二维码内容: ${url}\n`);
+}
+
+/**
+ * 创建扫码登录会话（不等待）。返回 { session, url }。
+ * 手机端用它把 url 交给 Steam App 打开确认，就能在本机完成登录。
+ */
+async function createQrSession() {
+  const { LoginSession, EAuthTokenPlatformType } = require('steam-session');
+  const session = new LoginSession(EAuthTokenPlatformType.SteamClient, proxyOptions());
+  const started = await session.startWithQR();
+  if (!started || !started.qrChallengeUrl) throw new Error('Steam 没有返回二维码地址');
+  return { session, url: started.qrChallengeUrl };
+}
+
+/** 等待会话被确认，成功后保存凭据 */
+async function awaitQrSession(session, { timeoutMs = 180000 } = {}) {
+  await once(session, 'authenticated', { timeoutMs, label: '扫码登录' });
+  const refreshToken = session.refreshToken;
+  if (!refreshToken) throw new Error('认证通过但没有拿到 refresh token，请重试');
+  const accountName = session.accountName || null;
+  saveToken({ refreshToken, accountName });
+  return { refreshToken, accountName };
+}
+
+/**
+ * 账号密码登录（网页/手机端用）。返回 { session, codeType, needsCode }，
+ * 调用方按需 submitSteamGuardCode，然后 await once(session,'authenticated')。
+ * 有 Steam App 的账号会收到「确认登录」推送，直接在手机上点确认即可。
+ */
+async function createPasswordSession({ user, pass } = {}) {
+  if (!user || !pass) throw new Error('需要账号与密码');
+  const { LoginSession, EAuthTokenPlatformType } = require('steam-session');
+  const session = new LoginSession(EAuthTokenPlatformType.SteamClient, proxyOptions());
+  let deviceConfirm = false;
+  session.on('deviceConfirmation', () => { deviceConfirm = true; });
+  await session.startWithCredentials({ accountName: user, password: pass });
+  const codeType = session.steamGuardCodeType || null;
+  return { session, codeType, deviceConfirm, needsCode: !!codeType };
+}
+
+/** 登录成功后的收尾：校验 token 并落盘 */
+function finishSession(session, fallbackName) {
+  const refreshToken = session.refreshToken;
+  if (!refreshToken) throw new Error('认证通过但没有拿到 refresh token');
+  const accountName = session.accountName || fallbackName || null;
+  saveToken({ refreshToken, accountName });
+  return { refreshToken, accountName };
+}
+
+/**
+ * 二维码登录，成功后把 refresh token 落盘。
+ */
+async function qrLogin({ onLog = () => {}, onQr = printQr, timeoutMs = 180000 } = {}) {
+  const { session, url } = await createQrSession();
+  onQr(url);
+  onLog('等待手机确认…');
+  const res = await awaitQrSession(session, { timeoutMs });
+  onLog(`✔ 已登录: ${res.accountName || '（未知账号）'}`);
+  return res;
+}
+
+/**
+ * 账号密码登录（可选路径）。getCode() 在需要 Steam Guard 验证码时被调用。
+ */
+async function passwordLogin({ user, pass, getCode, onLog = () => {}, onPrompt = () => {} } = {}) {
+  if (!user || !pass) throw new Error('需要账号与密码');
+  const { LoginSession, EAuthTokenPlatformType } = require('steam-session');
+  const session = new LoginSession(EAuthTokenPlatformType.SteamClient, proxyOptions());
+
+  session.on('steamGuard', () => { onPrompt('需要 Steam Guard 验证码'); });
+  session.on('deviceConfirmation', () => { onPrompt('请在手机 Steam App 上点“确认登录”'); });
+
+  await session.startWithCredentials({ accountName: user, password: pass });
+
+  // 需要验证码时，startWithCredentials 已完成但 authenticated 还没触发
+  if (session.steamGuardCodeType) {
+    const code = await getCode(session.steamGuardCodeType);
+    await session.submitSteamGuardCode(code);
+  }
+
+  await once(session, 'authenticated', { timeoutMs: 180000, label: '密码登录' });
+  const refreshToken = session.refreshToken;
+  if (!refreshToken) throw new Error('认证通过但没有拿到 refresh token');
+  saveToken({ refreshToken, accountName: session.accountName || user });
+  onLog(`✔ 已登录: ${session.accountName || user}`);
+  return { refreshToken, accountName: session.accountName || user };
+}
+
+/** 用 refresh token 连上 Steam */
+async function connect(refreshToken, { onLog = () => {} } = {}) {
+  if (!refreshToken) throw new Error('还没有登录凭据，先执行: run.bat steamjs login');
+  const SteamUser = require('steam-user');
+  const client = new SteamUser(Object.assign({ autoRelogin: false, renewRefreshTokens: true }, proxyOptions()));
+  const loggedOn = once(client, 'loggedOn', { timeoutMs: 30000, label: '连接 Steam' });
+  client.logOn({ refreshToken });
+  await loggedOn;
+  try {
+    if (typeof client.setPersona === 'function') client.setPersona(1); // 1 = EPersonaState.Online
+  } catch { /* 无所谓 */ }
+  onLog(`已连接: ${client.steamID ? client.steamID.getSteam3RenderedID() : 'unknown'}`);
+  return client;
+}
+
+/** 拉取创意工坊条目详情（steam-user 返回的是按 id 索引的对象，不是数组） */
+async function getPublishedFileDetails(client, ids) {
+  const raw = await invoke(client, 'getPublishedFileDetails', ids.map(String));
+  const bag = (raw && raw.files) || raw || {};
+  const arr = Array.isArray(bag) ? bag : Object.keys(bag).map((k) => bag[k]);
+  return arr.filter((d) => {
+    if (!d || !d.publishedfileid) return false;
+    // 有 result 字段时必须为 1（OK）
+    if (d.result !== undefined && String(d.result) !== '1') return false;
+    return true;
+  });
+}
+
+/**
+ * 断点续传：按 chunk 自己下载单个文件。
+ *
+ * steam-user 自带的 downloadFile 用 'w' 打开文件（会截断）且每次都把所有 chunk 重下一遍，
+ * 意外退出后只能从头再来。这里改成：
+ *   - 文件按 r+ 打开、ftruncate 到完整大小，chunk 按自己的 offset 直接写进去；
+ *   - 每下完一个 chunk 把它的 sha 记到 <文件>.part.json，下次启动只补缺的 chunk；
+ *   - 全部下完后按 manifest 的 sha1 校验整个文件，再删掉 .part.json。
+ */
+async function downloadFileResumable(client, fileManifest, target, opts = {}) {
+  const onLog = opts.onLog || (() => {});
+  const onProgress = opts.onProgress || (() => {});
+  const size = parseInt(fileManifest.size, 10) || 0;
+  const chunks = fileManifest.chunks || [];
+  const partFile = target + '.part.json';
+
+  let have = -1;
+  try { have = fs.statSync(target).size; } catch { /* 没有 */ }
+  const partExists = fs.existsSync(partFile);
+
+  // 没有断点记录但大小已经对：可能是上一次完整下完的，也可能是老版本中断留下的
+  // 「整份长度但内容是空洞」的文件 —— 用 sha1 确认一遍，确认过才跳过。
+  if (have === size && !partExists) {
+    if (!fileManifest.sha) return { resumed: false, skipped: true, bytes: 0 };
+    const okHash = (await sha1File(target)) === String(fileManifest.sha).toLowerCase();
+    if (okHash) {
+      onLog(`跳过（已下载完成 ${have} B）`);
+      return { resumed: false, skipped: true, bytes: 0 };
+    }
+    onLog('已有文件校验不通过，重新下载');
+  }
+
+  let doneShas = new Set();
+  if (have > 0) {
+    try {
+      const st = JSON.parse(fs.readFileSync(partFile, 'utf8'));
+      if (Number(st.size) === size && Array.isArray(st.done)) doneShas = new Set(st.done);
+    } catch { /* 没有断点记录：旧数据不可信，重下 */ }
+  }
+
+  const fd = fs.openSync(target, have > 0 ? 'r+' : 'w+');
+  fs.ftruncateSync(fd, size);
+  // 没有可信断点记录就把已有内容当无效（避免把半截乱序数据当成已下载）
+  if (have > 0 && doneShas.size === 0) {
+    fs.ftruncateSync(fd, 0);
+    fs.ftruncateSync(fd, size);
+  }
+  // 先落一个断点标记：以后就算进程被杀，也能看出「这个文件是下到一半的」
+  try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
+
+  const pending = chunks.filter((c) => !doneShas.has(String(c.sha).toLowerCase()));
+  const totalDone = chunks
+    .filter((c) => doneShas.has(String(c.sha).toLowerCase()))
+    .reduce((s, c) => s + (parseInt(c.size, 10) || 0), 0);
+  let bytesDone = totalDone;
+  if (totalDone > 0) onLog(`断点续传: 已有 ${(totalDone / 1048576).toFixed(1)} MB，还需 ${pending.length} 个分块`);
+  onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
+
+  if (!pending.length) {
+    fs.closeSync(fd);
+    try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
+    return { resumed: totalDone > 0, bytes: totalDone };
+  }
+
+  const allServers = ((await client.getContentServers(APP_ID)).servers || []);
+  if (!allServers.length) { fs.closeSync(fd); throw new Error('拿不到 Steam 内容服务器列表'); }
+  // 某台 CDN 节点解析不了（getaddrinfo ENOTFOUND 之类）就从候选里剔除，
+  // 免得 4 个 worker 一直随机撞到那台死节点把整份文件拖失败。
+  let servers = allServers.slice();
+  const dropServer = (s) => {
+    if (servers.length <= 1) return;
+    servers = servers.filter((x) => x !== s);
+    onLog(`节点 ${s.Host || '?'} 不可用，已剔除（剩 ${servers.length} 个）`);
+  };
+
+  let saveTimer = null;
+  let savePending = false;
+  const saveState = () => {
+    if (savePending) return;
+    savePending = true;
+    saveTimer = setTimeout(() => {
+      savePending = false;
+      try {
+        fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) }));
+      } catch { /* ignore */ }
+    }, 400);
+  };
+
+  let next = 0;
+  let failure = null;
+
+  const writeChunk = (c, data) => new Promise((resolve, reject) => {
+    fs.write(fd, data, 0, data.length, parseInt(c.offset, 10), (err) => (err ? reject(err) : resolve()));
+  });
+
+  const oneChunk = async (c) => {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const server = servers[Math.floor(Math.random() * servers.length)];
+      const res = await new Promise((resolve) => {
+        client.downloadChunk(APP_ID, DEPOT_ID, c.sha, server, (err, data) => resolve({ err, data }));
+      });
+      if (!res.err && res.data) {
+        await writeChunk(c, res.data);
+        doneShas.add(String(c.sha).toLowerCase());
+        bytesDone += res.data.length;
+        onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
+        saveState();
+        return;
+      }
+      lastErr = res.err;
+      // 这台节点连不上（DNS/超时）→ 换一台，并把它从候选里剔掉
+      if (res.err && /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH/i.test(res.err.message || '')) {
+        dropServer(server);
+      }
+    }
+    throw new Error(`分块 ${c.sha} 下载失败: ${lastErr ? lastErr.message : '未知错误'}`);
+  };
+
+  const worker = async () => {
+    while (!failure) {
+      const idx = next++;
+      if (idx >= pending.length) return;
+      try {
+        await oneChunk(pending[idx]);
+      } catch (e) {
+        failure = e;
+        return;
+      }
+    }
+  };
+
+  const workers = [];
+  const parallel = Math.min(4, pending.length);
+  for (let i = 0; i < parallel; i++) workers.push(worker());
+  await Promise.all(workers);
+
+  if (saveTimer) clearTimeout(saveTimer);
+  try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
+
+  if (failure) {
+    try { fs.closeSync(fd); } catch { /* ignore */ }
+    throw failure;
+  }
+
+  fs.closeSync(fd);
+
+  // 整体校验（steam-user 也这么做，能发现截断/错位）
+  if (fileManifest.sha) {
+    const actual = await sha1File(target);
+    if (actual !== String(fileManifest.sha).toLowerCase()) {
+      try { fs.rmSync(target, { force: true }); } catch { /* ignore */ }
+      try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
+      throw new Error('下载校验失败（文件 hash 不匹配），已删除重下');
+    }
+  }
+  try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
+  return { resumed: totalDone > 0, bytes: bytesDone };
+}
+
+function sha1File(file) {
+  return new Promise((resolve, reject) => {
+    const h = require('crypto').createHash('sha1');
+    const rs = fs.createReadStream(file);
+    rs.on('data', (d) => h.update(d));
+    rs.on('error', reject);
+    rs.on('end', () => resolve(h.digest('hex')));
+  });
+}
+
+/**
+ * 下载一个创意工坊条目到目录。
+ */
+async function downloadItem({ id, outDir, refreshToken, onLog = () => {}, onProgress = () => {} }) {
+  ensureDirs();
+  const client = await connect(refreshToken, { onLog });
+  try {
+    const details = await getPublishedFileDetails(client, [id]);
+    if (!details.length) throw new Error(`条目 ${id} 不存在、不可见，或详情接口返回异常`);
+    const d = details[0];
+    onLog(`条目: ${d.title} | 体积 ${d.file_size} B`);
+
+    const manifestId = d.hcontent_file;
+    if (!manifestId) throw new Error('条目没有内容 manifest（可能不是标准工坊物品）');
+    onLog(`内容 manifest: ${manifestId}`);
+
+    let manifest;
+    try {
+      // invoke() 已把单返回值拆出来，这里直接就是 manifest 对象
+      manifest = await invoke(client, 'getManifest', APP_ID, DEPOT_ID, String(manifestId), 'public');
+    } catch (err) {
+      throw new Error(`取内容 manifest 失败（账号是否拥有 Wallpaper Engine 431960？）: ${err.message}`);
+    }
+    if (!manifest || !manifest.files) throw new Error('manifest 结构异常（没有 files 字段）');
+
+    const files = (manifest.files || []).filter((f) => !(parseInt(f.flags, 10) & 64)); // 64 = Directory
+    onLog(`manifest 内文件数: ${files.length}`);
+
+    const root = path.resolve(outDir);
+    fs.mkdirSync(root, { recursive: true });
+    const written = [];
+    const skipped = [];
+    for (const f of files) {
+      const rel = String(f.filename || '').replace(/\\/g, '/');
+      if (!rel) continue;
+      const target = path.resolve(root, rel);
+      if (target !== root && !target.startsWith(root + path.sep)) throw new Error(`manifest 含非法路径: ${rel}`);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+
+      // 断点续传判断一律交给 downloadFileResumable：
+      // 只看文件大小是不够的（预分配会把文件撑到完整长度，内容其实是空洞），
+      // 它会在没有断点记录时用 sha1 校验，有断点记录时按 chunk 补齐。
+      onLog(`下载 ${rel} (${f.size} B)…`);
+      let r;
+      try {
+        r = await downloadFileResumable(client, f, target, { onLog, onProgress });
+      } catch (e) {
+        throw new Error(`下载 ${rel} 失败: ${e.message}`);
+      }
+      if (r && r.skipped) skipped.push({ rel, size: Number(f.size) || 0 });
+      else written.push(rel);
+    }
+
+    if (skipped.length) {
+      onLog(`✔ 断点续传：跳过 ${skipped.length} 个已完成文件（${(skipped.reduce((s, x) => s + x.size, 0) / 1048576).toFixed(1)} MB）`);
+    }
+    onLog(`下载完成: ${written.length} 个文件（跳过 ${skipped.length} 个） → ${root}`);
+    return { dir: root, files: written, skipped, title: d.title, fileSize: Number(d.file_size) || 0 };
+  } finally {
+    try { client.logOff(); } catch { /* ignore */ }
+  }
+}
+
+module.exports = {
+  APP_ID, DEPOT_ID, TOKEN_FILE,
+  readToken, saveToken, clearToken,
+  qrLogin, passwordLogin, connect,
+  createQrSession, awaitQrSession,
+  createPasswordSession, finishSession,
+  getPublishedFileDetails, downloadItem, downloadFileResumable,
+  printQr,
+};

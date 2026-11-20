@@ -1,0 +1,47 @@
+# ---- 凭据与本地状态（绝对不要提交）----
+.cache/
+*.token
+steam-token*.json
+webcookies.json
+
+# ---- 依赖与构建产物 ----
+node_modules/
+dist/
+output/
+downloads/
+logs/
+packaging/
+android/app/build/
+android/.gradle/
+android/app/src/main/jniLibs/
+android/backup/
+android/app/assets/nodejs-project/
+
+# ---- 第三方二进制（Valve 的 SteamCMD，版权归 Valve，别进仓库）----
+steamcmd/
+*.dll
+*.so
+*.so.bak
+*.apk
+*.zip
+*.exe
+
+# ---- 系统与编辑器 ----
+.DS_Store
+Thumbs.db
+desktop.ini
+*.log
+*.tmp
+.vscode/
+.idea/
+
+# ---- 例外：文档/脚本里用到的图片与示例保留 ----
+!assets/**
+
+# 本机构建路径（每台机器不同）
+local.properties
+
+
+# 测试脚本生成的样例图（含第三方壁纸素材，不入库）
+tools/_sample.png
+

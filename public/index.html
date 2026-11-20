@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#0f1720" />
+<title>WE 创意工坊 → MPKG</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">WE</span>
+    <div class="brand-text">
+      <h1 data-i18n="title">创意工坊 → MPKG</h1>
+      <p class="sub" data-i18n="subtitle">浏览 Wallpaper Engine 创意工坊，下载并导出手机版容器</p>
+    </div>
+  </div>
+  <div class="top-actions">
+    <button id="langBtn" class="ghost" title="Language">EN</button>
+    <button id="settingsBtn" class="ghost" title="Settings">⚙</button>
+  </div>
+</header>
+
+<section class="searchbar">
+  <input id="search" type="search" data-i18n-ph="searchPh" placeholder="搜索壁纸名称、作者、关键词…" autocomplete="off" enterkeyhint="search" />
+  <select id="sort">
+    <option value="trend" data-i18n="sortTrend">热门趋势</option>
+    <option value="recent" data-i18n="sortRecent">最新发布</option>
+    <option value="updated" data-i18n="sortUpdated">最近更新</option>
+    <option value="top" data-i18n="sortTop">订阅最多</option>
+  </select>
+  <button id="go" class="primary" data-i18n="searchBtn">搜索</button>
+</section>
+
+<section class="opts">
+  <label class="opt">
+    <span data-i18n="depthLabel">每次加载</span>
+    <select id="depth">
+      <option value="1" data-i18n="depth1">1 页（30 条）</option>
+      <option value="3" data-i18n="depth3">3 页（90 条）</option>
+      <option value="5" data-i18n="depth5">5 页（150 条）</option>
+    </select>
+  </label>
+  <label class="opt" id="daysWrap">
+    <span data-i18n="daysLabel">热门时间窗</span>
+    <select id="days">
+      <option value="7" data-i18n="days7">最近 7 天</option>
+      <option value="30" data-i18n="days30">最近 30 天</option>
+      <option value="90" data-i18n="days90">最近 3 个月</option>
+      <option value="365" data-i18n="days365">最近 1 年</option>
+    </select>
+  </label>
+</section>
+
+<section class="filters" id="filters">
+  <div class="filters-head">
+    <span id="filterToggle" class="filter-toggle">
+      <span id="filterSummary" data-i18n="filters">筛选</span>
+      <span id="filterCaret" class="caret">▾</span>
+    </span>
+    <button id="clearFilters" class="linkbtn" data-i18n="clearFilters">清空</button>
+  </div>
+  <div id="filterGroups" class="filter-groups"></div>
+</section>
+
+<main>
+  <div id="status" class="status"></div>
+  <div id="grid" class="grid"></div>
+  <div class="pager">
+    <button id="prev" class="ghost" data-i18n="prev">上一页</button>
+    <span id="pageinfo">1</span>
+    <button id="next" class="ghost" data-i18n="next">下一页</button>
+  </div>
+</main>
+
+<footer class="foot">
+  <span>AppID 431960 · PKGM0020</span>
+  <span id="cfg">…</span>
+</footer>
+
+<!-- 详情：桌面是右侧面板，手机是底部抽屉 -->
+<aside id="drawer" class="drawer hidden">
+  <div class="drawer-grab"></div>
+  <div class="drawer-head">
+    <h2 id="d-title">—</h2>
+    <button id="close" class="icon" aria-label="close">✕</button>
+  </div>
+  <div class="drawer-body">
+    <img id="d-preview" class="d-preview" alt="" />
+    <div id="d-meta" class="meta"></div>
+    <div id="d-tags" class="chips small"></div>
+    <p id="d-desc" class="desc"></p>
+    <div class="actions">
+      <button id="d-download" class="primary big" data-i18n="downloadPack">下载并打包为 MPKG</button>
+      <a id="d-open" class="link" target="_blank" rel="noreferrer" data-i18n="steamPage">Steam 页面</a>
+    </div>
+    <div id="d-progress" class="progress hidden">
+      <div class="progress-head"><span id="p-state">…</span><span id="p-note"></span></div>
+      <pre id="p-log" class="log"></pre>
+      <a id="p-file" class="download hidden" data-i18n="saveMpkg">保存 .mpkg</a>
+    </div>
+  </div>
+</aside>
+
+<!-- 设置 / 登录 -->
+<div id="modal" class="modal hidden">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h2 data-i18n="settingsTitle">设置</h2>
+      <button id="modalClose" class="icon">✕</button>
+    </div>
+    <div class="modal-body">
+      <label class="field">
+        <span data-i18n="outputDir">下载目录（mpkg 保存位置）</span>
+        <input id="outputDir" type="text" spellcheck="false" />
+      </label>
+      <div class="row">
+        <button id="saveDir" class="primary" data-i18n="save">保存</button>
+        <button id="pickDir" class="ghost" data-i18n="pickFolder">选择文件夹…</button>
+        <button id="resetDir" class="ghost" data-i18n="resetDefault">恢复默认</button>
+      </div>
+      <p id="dirHint" class="hint"></p>
+
+      <label class="check">
+        <input id="rawOnly" type="checkbox" />
+        <span data-i18n="rawOnly">只下载原始文件（不打包 mpkg）</span>
+      </label>
+      <p class="hint" data-i18n="rawTip">勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。</p>
+
+      <hr />
+
+      <label class="field">
+        <span data-i18n="accountField">Steam 账号</span>
+        <input id="loginAccount" type="text" autocomplete="username" spellcheck="false" />
+      </label>
+      <label class="field">
+        <span data-i18n="passField">密码（仅本次登录用，不保存）</span>
+        <input id="loginPass" type="password" autocomplete="off" />
+      </label>
+      <div class="row">
+        <button id="loginBtn" class="primary" data-i18n="login">登录</button>
+        <button id="logoutBtn" class="ghost" data-i18n="logout">退出登录</button>
+      </div>
+      <div id="codeRow" class="row hidden">
+        <input id="guardCode" type="text" inputmode="numeric" data-i18n-ph="codePh" placeholder="Steam Guard 验证码" />
+        <button id="codeBtn" class="primary" data-i18n="submitCode">提交</button>
+      </div>
+      <p id="loginHint" class="hint"></p>
+      <p class="hint" data-i18n="loginTip">有 Steam App 的账号会收到「确认登录」推送，直接在手机上点确认即可；也可以关掉本页，在电脑上运行 get-token.bat 取凭据再导入。</p>
+
+      <hr />
+
+      <div class="row">
+        <button id="exitApp" class="ghost" data-i18n="exitApp">退出程序（关闭后台服务）</button>
+      </div>
+      <p id="exitHint" class="hint"></p>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
