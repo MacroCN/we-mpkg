@@ -224,7 +224,8 @@ function renderFilters() {
   }
   box.innerHTML = '';
   for (const g of state.filterGroups) {
-    const isSingle = g.element === 'select';
+    // 官方客户端里每个分组都允许多选（组内「或」）；Steam 页面上的 htmlelement
+    // 是 select 还是 checkbox 只影响它的网页渲染，不代表筛选语义是单选。
     const set = groupSet(g.name);
     const el = document.createElement('div');
     el.className = 'fgroup' + (state.openGroups.has(g.name) ? ' open' : '');
@@ -248,15 +249,8 @@ function renderFilters() {
       chip.className = 'chip' + (set.has(t.name) ? ' on' : '');
       chip.textContent = t.name;
       chip.onclick = () => {
-        if (set.has(t.name)) {
-          set.delete(t.name);
-        } else if (isSingle) {
-          // 单选组：组内互斥
-          set.clear();
-          set.add(t.name);
-        } else {
-          set.add(t.name);
-        }
+        if (set.has(t.name)) set.delete(t.name);
+        else set.add(t.name);
         renderFilters();
         state.page = 1;
         load();

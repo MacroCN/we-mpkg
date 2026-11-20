@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**1.3.1**
+- 当前版本：**1.3.2**
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -27,9 +27,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-1.3.1.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 37 MB） |
-| `we-mpkg-android-1.3.1.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
-| `we-mpkg-src-1.3.1.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-1.3.2.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 37 MB） |
+| `we-mpkg-android-1.3.2.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
+| `we-mpkg-src-1.3.2.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -40,7 +40,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-1.3.1.zip
+解压 we-mpkg-portable-1.3.2.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
