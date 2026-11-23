@@ -14,6 +14,7 @@ const assert = require('assert');
 const pkgformat = require('../src/pkgformat');
 const packer = require('../src/pack');
 const workshop = require('../src/workshop');
+const { redactProxy } = require('../src/server');
 
 let passed = 0;
 let failed = 0;
@@ -62,6 +63,12 @@ function makeItemDir() {
 }
 
 console.log('\n[1] 容器读写');
+
+test('公开代理地址时移除用户名和密码', () => {
+  const display = redactProxy('http://user:secret@127.0.0.1:8080;https=user2:secret2@proxy.example:8443');
+  assert.strictEqual(display, '127.0.0.1:8080;https=proxy.example:8443');
+  assert.ok(!display.includes('secret'));
+});
 
 test('build -> parse 往返一致（含中文路径）', () => {
   const entries = [

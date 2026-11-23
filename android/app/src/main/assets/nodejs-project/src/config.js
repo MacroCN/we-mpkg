@@ -94,6 +94,8 @@ const config = {
   /** 下载超时（毫秒） */
   STEAMCMD_TIMEOUT_MS: parseInt(env('WE_MPKG_TIMEOUT_MS') || '900000', 10),
   PORT: parseInt(env('PORT') || '3090', 10),
+  /** 网页服务默认只允许本机访问；需要局域网访问时可显式设置 WE_MPKG_HOST */
+  LISTEN_HOST: env('WE_MPKG_HOST') || '127.0.0.1',
   /** 国内网络下有时原生 TLS 会握手失败，自动改用 curl.exe 兜底 */
   USE_CURL_FALLBACK: env('WE_MPKG_NO_CURL') !== '1' && process.platform === 'win32' && !!findCurl(),
   /** curl 可执行文件绝对路径（PATH 不可靠时也能用） */

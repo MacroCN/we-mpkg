@@ -14,6 +14,23 @@ const packjob = require('./packjob');
 const dlhub = require('./dlhub');
 const cdn = require('./cdn');
 
+function redactProxy(raw) {
+  if (!raw) return '';
+  return String(raw).split(';').map((entry) => {
+    const eq = entry.indexOf('=');
+    const prefix = eq > 0 && /^[a-z][a-z0-9+.-]*=$/i.test(entry.slice(0, eq + 1))
+      ? entry.slice(0, eq + 1)
+      : '';
+    const endpoint = entry.slice(prefix.length).trim();
+    try {
+      const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(endpoint) ? endpoint : `http://${endpoint}`);
+      return `${prefix}${url.host || '已配置'}`;
+    } catch {
+      return prefix ? `${prefix}已配置` : '已配置';
+    }
+  }).join(';');
+}
+
 /** CDN 测速状态（页面轮询用） */
 let cdnTestState = { state: 'idle', startedAt: 0, finishedAt: 0, error: null, progress: null };
 
@@ -290,7 +307,7 @@ const server = http.createServer(async (req, res) => {
         downloadDir: config.DOWNLOAD_DIR,
         hasApiKey: !!config.API_KEY,
         hasAccount: !!(config.ACCOUNT_USER && config.ACCOUNT_PASS),
-        proxy: config.PROXY || '',
+        proxy: redactProxy(config.PROXY),
         platform: `${process.platform}/${process.arch}`,
         engine: engine || 'none',
         loggedIn: hasToken,
@@ -554,8 +571,12 @@ function start(port = config.PORT) {
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    server.listen(port, '0.0.0.0', () => {
+    const host = config.LISTEN_HOST;
+    server.listen(port, host, () => {
       console.log(`\n  we-mpkg 已启动: http://localhost:${port}`);
+      if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
+        console.log(`  网络监听地址: ${host}（未启用身份验证，请勿暴露到不可信网络）`);
+      }
       console.log(`  输出目录: ${config.OUTPUT_DIR}`);
       if (!config.PROXY) console.log('  （可用 WE_MPKG_PROXY / HTTPS_PROXY 指定代理）\n');
       resolve(server);
@@ -563,7 +584,7 @@ function start(port = config.PORT) {
   });
 }
 
-module.exports = { start, server };
+module.exports = { start, server, redactProxy };
 
 if (require.main === module) {
   start().catch((e) => { console.error('启动失败:', e.message); process.exit(1); });

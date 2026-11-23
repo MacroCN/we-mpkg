@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.0.3**（着色器编译级修复，见 [2.0.3 改进](#203-改进)）
+- 当前版本：**2.0.5**（安全加固：默认只监听本机、代理凭据不再外泄，见 [2.0.5 改进](#205-改进)）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.4.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
-| `we-mpkg-android-2.0.4.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
-| `we-mpkg-src-2.0.4.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.0.5.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
+| `we-mpkg-android-2.0.5.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
+| `we-mpkg-src-2.0.5.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.0.3.zip
+解压 we-mpkg-portable-2.0.5.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -81,6 +81,19 @@ node bin\wempkg.js serve --port 3090
 | `scene` | 可用（DXT/直通图解码成 RGBA8 并按 LZ4 压缩、着色器做移动端改写） |
 | `web` | 可用（渲染成视频封装，含音频轨与音频响应频谱） |
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
+
+---
+
+## 2.0.5 改进（安全加固）
+
+| # | 改动 | 说明 |
+|---|---|---|
+| 1 | **网页服务默认只监听本机** | 之前固定 `0.0.0.0`，同网段任何人都能打开界面并调用接口（接口本身没有身份验证）。现在默认 `127.0.0.1`；确实需要局域网访问时显式设 `WE_MPKG_HOST=0.0.0.0`，启动日志会提示「未启用身份验证，请勿暴露到不可信网络」 |
+| 2 | **代理地址脱敏** | 之前 `/api/config` 会把 `WE_MPKG_PROXY` 原样返回，若代理带账号密码（`http://user:pass@host:port`）会直接暴露在页面接口里。现在只返回主机与端口（`http://host:port`），`user:pass@`、`https=` 前缀后的凭据都不再出现 |
+| 3 | **下载文件句柄不再泄漏** | `downloadFileResumable` 原来在「拿不到节点列表 / 分块失败 / 校验不通过」等异常路径上会漏关文件句柄；现在统一在 `finally` 里关闭，只在成功路径做完整性校验与断点记录清理 |
+| 4 | **测试覆盖** | 单测加到 71 条（新增代理脱敏断言）；`tools/test-resume.js` 新增「CDN 发现失败时文件句柄必须已关闭」的用例 |
+
+验证：`node test/run-tests.js` 71 通过 / 0 失败；`node tools/test-resume.js` 全部通过；实际启动后监听地址为 `127.0.0.1`，`/api/config` 返回的 `proxy` 只保留「主机:端口」，账号密码已剥离。
 
 ---
 
@@ -243,6 +256,7 @@ run.bat steamjs login|status|logout|token|webcookie
 | `STEAM_API_KEY` | 走 `IPublishedFileService/QueryFiles`（每页 100 条，上限更高） | 空 |
 | `STEAM_USERNAME` / `STEAM_PASSWORD` | SteamCMD 引擎的账号 | 空 |
 | `PORT` | 网页端口 | `3090` |
+| `WE_MPKG_HOST` | 网页服务监听地址；设为 `0.0.0.0` 可允许局域网访问（API 无身份验证，请勿暴露到不可信网络） | `127.0.0.1`（仅本机） |
 | `STEAM_LANG` / `STEAM_COUNTRY` | 社区页语言 / 地区 | `schinese` / 空 |
 
 ---

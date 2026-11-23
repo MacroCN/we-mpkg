@@ -234,123 +234,121 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
   }
 
   const fd = fs.openSync(target, have > 0 ? 'r+' : 'w+');
-  fs.ftruncateSync(fd, size);
-  // 没有可信断点记录就把已有内容当无效（避免把半截乱序数据当成已下载）
-  if (have > 0 && doneShas.size === 0) {
-    fs.ftruncateSync(fd, 0);
+  try {
     fs.ftruncateSync(fd, size);
-  }
-  // 先落一个断点标记：以后就算进程被杀，也能看出「这个文件是下到一半的」
-  try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
-
-  const pending = chunks.filter((c) => !doneShas.has(String(c.sha).toLowerCase()));
-  const totalDone = chunks
-    .filter((c) => doneShas.has(String(c.sha).toLowerCase()))
-    .reduce((s, c) => s + (parseInt(c.size, 10) || 0), 0);
-  let bytesDone = totalDone;
-  if (totalDone > 0) onLog(`断点续传: 已有 ${(totalDone / 1048576).toFixed(1)} MB，还需 ${pending.length} 个分块`);
-  onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
-
-  if (!pending.length) {
-    fs.closeSync(fd);
-    try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
-    return { resumed: totalDone > 0, bytes: totalDone };
-  }
-
-  // 按测速排序拿节点（开机那次测速的结果 + 运行时失败降级都在 src/cdn.js 里）
-  const allServers = opts.servers && opts.servers.length
-    ? opts.servers
-    : await cdn.getOrderedServers(client, { onLog });
-  if (!allServers.length) { fs.closeSync(fd); throw new Error('拿不到 Steam 内容服务器列表'); }
-  const picker = new cdn.ServerPicker(allServers);
-  // 上一轮遗留的 keep-alive 连接可能已经被对端静默丢弃，先清掉，免得首个请求撞死
-  cdn.releaseIdleSockets();
-
-  let saveTimer = null;
-  let savePending = false;
-  const saveState = () => {
-    if (savePending) return;
-    savePending = true;
-    saveTimer = setTimeout(() => {
-      savePending = false;
-      try {
-        fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) }));
-      } catch { /* ignore */ }
-    }, 400);
-  };
-
-  let next = 0;
-  let failure = null;
-
-  const writeChunk = (c, data) => new Promise((resolve, reject) => {
-    fs.write(fd, data, 0, data.length, parseInt(c.offset, 10), (err) => (err ? reject(err) : resolve()));
-  });
-
-  const oneChunk = async (c) => {
-    let lastErr = null;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const server = picker.next();
-      if (!server) break;
-      const res = await new Promise((resolve) => {
-        client.downloadChunk(APP_ID, DEPOT_ID, c.sha, server, (err, data) => resolve({ err, data }));
-      });
-      if (!res.err && res.data) {
-        await writeChunk(c, res.data);
-        doneShas.add(String(c.sha).toLowerCase());
-        bytesDone += res.data.length;
-        onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
-        saveState();
-        return;
-      }
-      lastErr = res.err;
-      // 任何失败（含 Request timed out）都算这台节点这一轮不行：换排序里的下一台，
-      // 而不是对着同一个节点重试到整份文件失败。
-      onLog(`分块重试：${server.Host || '?'} 失败（${(res.err && res.err.message) || '无数据'}），换下一台节点`);
-      picker.fail(server);
-      if (!picker.alive().length) await new Promise((r) => setTimeout(r, 300));
+    // 没有可信断点记录就把已有内容当无效（避免把半截乱序数据当成已下载）
+    if (have > 0 && doneShas.size === 0) {
+      fs.ftruncateSync(fd, 0);
+      fs.ftruncateSync(fd, size);
     }
-    throw new Error(`分块 ${c.sha} 下载失败: ${lastErr ? lastErr.message : '未知错误'}`);
-  };
-
-  const worker = async () => {
-    while (!failure) {
-      const idx = next++;
-      if (idx >= pending.length) return;
-      try {
-        await oneChunk(pending[idx]);
-      } catch (e) {
-        failure = e;
-        return;
-      }
-    }
-  };
-
-  const workers = [];
-  const parallel = Math.min(4, pending.length);
-  for (let i = 0; i < parallel; i++) workers.push(worker());
-  await Promise.all(workers);
-
-  if (saveTimer) clearTimeout(saveTimer);
-  try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
-
-  if (failure) {
-    try { fs.closeSync(fd); } catch { /* ignore */ }
-    throw failure;
-  }
-
-  fs.closeSync(fd);
-
-  // 整体校验（steam-user 也这么做，能发现截断/错位）
-  if (fileManifest.sha) {
-    const actual = await sha1File(target);
-    if (actual !== String(fileManifest.sha).toLowerCase()) {
-      try { fs.rmSync(target, { force: true }); } catch { /* ignore */ }
+    // 先落一个断点标记：以后就算进程被杀，也能看出「这个文件是下到一半的」
+    try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
+  
+    const pending = chunks.filter((c) => !doneShas.has(String(c.sha).toLowerCase()));
+    const totalDone = chunks
+      .filter((c) => doneShas.has(String(c.sha).toLowerCase()))
+      .reduce((s, c) => s + (parseInt(c.size, 10) || 0), 0);
+    let bytesDone = totalDone;
+    if (totalDone > 0) onLog(`断点续传: 已有 ${(totalDone / 1048576).toFixed(1)} MB，还需 ${pending.length} 个分块`);
+    onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
+  
+    if (!pending.length) {
       try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
-      throw new Error('下载校验失败（文件 hash 不匹配），已删除重下');
+      return { resumed: totalDone > 0, bytes: totalDone };
     }
+  
+    // 按测速排序拿节点（开机那次测速的结果 + 运行时失败降级都在 src/cdn.js 里）
+    const allServers = opts.servers && opts.servers.length
+      ? opts.servers
+      : await cdn.getOrderedServers(client, { onLog });
+    if (!allServers.length) throw new Error('拿不到 Steam 内容服务器列表');
+    const picker = new cdn.ServerPicker(allServers);
+    // 上一轮遗留的 keep-alive 连接可能已经被对端静默丢弃，先清掉，免得首个请求撞死
+    cdn.releaseIdleSockets();
+  
+    let saveTimer = null;
+    let savePending = false;
+    const saveState = () => {
+      if (savePending) return;
+      savePending = true;
+      saveTimer = setTimeout(() => {
+        savePending = false;
+        try {
+          fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) }));
+        } catch { /* ignore */ }
+      }, 400);
+    };
+  
+    let next = 0;
+    let failure = null;
+  
+    const writeChunk = (c, data) => new Promise((resolve, reject) => {
+      fs.write(fd, data, 0, data.length, parseInt(c.offset, 10), (err) => (err ? reject(err) : resolve()));
+    });
+  
+    const oneChunk = async (c) => {
+      let lastErr = null;
+      for (let attempt = 0; attempt < 8; attempt++) {
+        const server = picker.next();
+        if (!server) break;
+        const res = await new Promise((resolve) => {
+          client.downloadChunk(APP_ID, DEPOT_ID, c.sha, server, (err, data) => resolve({ err, data }));
+        });
+        if (!res.err && res.data) {
+          await writeChunk(c, res.data);
+          doneShas.add(String(c.sha).toLowerCase());
+          bytesDone += res.data.length;
+          onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
+          saveState();
+          return;
+        }
+        lastErr = res.err;
+        // 任何失败（含 Request timed out）都算这台节点这一轮不行：换排序里的下一台，
+        // 而不是对着同一个节点重试到整份文件失败。
+        onLog(`分块重试：${server.Host || '?'} 失败（${(res.err && res.err.message) || '无数据'}），换下一台节点`);
+        picker.fail(server);
+        if (!picker.alive().length) await new Promise((r) => setTimeout(r, 300));
+      }
+      throw new Error(`分块 ${c.sha} 下载失败: ${lastErr ? lastErr.message : '未知错误'}`);
+    };
+  
+    const worker = async () => {
+      while (!failure) {
+        const idx = next++;
+        if (idx >= pending.length) return;
+        try {
+          await oneChunk(pending[idx]);
+        } catch (e) {
+          failure = e;
+          return;
+        }
+      }
+    };
+  
+    const workers = [];
+    const parallel = Math.min(4, pending.length);
+    for (let i = 0; i < parallel; i++) workers.push(worker());
+    await Promise.all(workers);
+  
+    if (saveTimer) clearTimeout(saveTimer);
+    try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
+  
+    if (failure) throw failure;
+  
+    // 整体校验（steam-user 也这么做，能发现截断/错位）
+    if (fileManifest.sha) {
+      const actual = await sha1File(target);
+      if (actual !== String(fileManifest.sha).toLowerCase()) {
+        try { fs.rmSync(target, { force: true }); } catch { /* ignore */ }
+        try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
+        throw new Error('下载校验失败（文件 hash 不匹配），已删除重下');
+      }
+    }
+    try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
+    return { resumed: totalDone > 0, bytes: bytesDone };
+  } finally {
+    fs.closeSync(fd);
   }
-  try { fs.rmSync(partFile, { force: true }); } catch { /* ignore */ }
-  return { resumed: totalDone > 0, bytes: bytesDone };
 }
 
 function sha1File(file) {

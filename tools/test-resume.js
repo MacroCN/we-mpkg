@@ -10,6 +10,7 @@ const path = require('path');
 const crypto = require('crypto');
 const os = require('os');
 const { downloadFileResumable } = require('../src/steamjs');
+const cdn = require('../src/cdn');
 
 const CHUNK = 1024 * 16;
 const CHUNKS = 6;
@@ -70,6 +71,36 @@ function makeClient(limit) {
     console.log('✔ 文件内容与原始数据完全一致，大小', got.length);
     if (fs.existsSync(target + '.part.json')) throw new Error('.part.json 没清理');
     console.log('✔ 断点记录已清理');
+
+    // CDN 发现失败发生在文件打开之后，文件描述符仍必须关闭。
+    const failedTarget = path.join(dir, 'discovery-failure.pkg');
+    const originalOpenSync = fs.openSync;
+    const originalCloseSync = fs.closeSync;
+    const originalGetOrderedServers = cdn.getOrderedServers;
+    let openedFd = null;
+    let closedFd = false;
+    fs.openSync = function () {
+      const fd = originalOpenSync.apply(this, arguments);
+      if (arguments[0] === failedTarget) openedFd = fd;
+      return fd;
+    };
+    fs.closeSync = function (fd) {
+      if (fd === openedFd) closedFd = true;
+      return originalCloseSync.call(this, fd);
+    };
+    cdn.getOrderedServers = async () => { throw new Error('discovery failed'); };
+    try {
+      await downloadFileResumable(makeClient(0), manifest, failedTarget);
+      throw new Error('CDN discovery failure should reject');
+    } catch (e) {
+      if (!/discovery failed/.test(e.message)) throw e;
+    } finally {
+      fs.openSync = originalOpenSync;
+      fs.closeSync = originalCloseSync;
+      cdn.getOrderedServers = originalGetOrderedServers;
+    }
+    if (openedFd === null || !closedFd) throw new Error('CDN discovery failure leaked the file descriptor');
+    console.log('✔ CDN 发现失败时下载文件句柄已关闭');
   } finally {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { }
   }
