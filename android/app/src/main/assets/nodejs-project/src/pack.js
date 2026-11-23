@@ -5,16 +5,18 @@
  * 步骤：
  *   1. 读 project.json 判断壁纸类型（video / scene / web / application / preset）
  *   2. scene 类：把 scene.pkg 解包成散装资源（手机版不读嵌套 pkg）
- *   3. scene 类：把"直通编码图"纹理（TEXB0004 + PNG/JPEG blob）物化成移动端要的
- *      RGBA8，并对 .frag/.vert 做 GLSL→GLSL ES 兼容改写（详见 src/tex.js、src/shadercompat.js）
- *   4. 可选：如额外提供同一壁纸的手机版 mpkg（--reference），用其中的 .tex/.frag/.vert 覆盖
- *   5. 以 PKGM0020 重新封装
+ *   3. 音频剥离（默认）→ 生成转换计划 + 断点
+ *   4. 纹理按路由转换（DXT/直通图/原始像素 → RGBA8 + LZ4，超预算保留原文件），
+ *      .frag/.vert 做 GLSL→GLSL ES 兼容改写（详见 src/tex.js、src/shadercompat.js）
+ *   5. 可选：如额外提供同一壁纸的手机版 mpkg（--reference），用其中的 .tex/.frag/.vert 覆盖
+ *   6. 以 PKGM0020（视频类可选 PKGM0014）重新封装
  */
 const fs = require('fs');
 const path = require('path');
 const pkgformat = require('./pkgformat');
 const tex = require('./tex');
 const shadercompat = require('./shadercompat');
+const convertplan = require('./convertplan');
 const { config, ensureDirs, tempDir } = require('./config');
 
 const VIDEO_EXT = new Set(['.mp4', '.webm', '.avi', '.wmv', '.mkv', '.mov', '.m4v']);
@@ -122,41 +124,50 @@ function copyLooseFiles(srcDir, dstDir, skipNames = new Set()) {
 }
 
 /**
- * 用参考 mpkg 替换手机端专用资源
+ * 用参考 mpkg 覆盖手机端专用资源。
+ *
+ * 2.0 起改用流式读取（openPkg）：参考包可能有一两个 GB，整包读进内存
+ * 在安卓上会直接把进程拖死。这里只按条目读需要的那几段。
+ *
  * @returns {{stats:{tex:number,frag:number,meta:number}, warnings:string[]}}
  */
 function applyReference(projectDir, referencePath, onLog = () => {}) {
-  const ref = pkgformat.parsePkg(referencePath);
+  const ref = pkgformat.openPkg(referencePath);
   const stats = { tex: 0, frag: 0, meta: 0 };
   const warnings = [];
-  if (!/^PKGM/.test(ref.magic)) {
-    warnings.push(`参考文件的 magic 是 ${ref.magic}，不是手机版 MPKG，替换结果可能不符预期`);
-  }
-  for (const entry of ref.entries) {
-    const rel = pkgformat.normalizeEntryPath(entry.path);
-    const dest = path.join(projectDir, rel);
-    const ext = path.extname(rel).toLowerCase();
-    const exists = fs.existsSync(dest);
-    if (!exists && (rel === 'project.json' || rel === 'preview.gif')) {
-      fs.mkdirSync(path.dirname(dest), { recursive: true });
-      fs.writeFileSync(dest, entry.data);
-      stats.meta++;
-      onLog(`  [补入] ${rel}（来自参考 mpkg）`);
-      continue;
+  try {
+    if (!/^PKGM/.test(ref.magic)) {
+      warnings.push(`参考文件的 magic 是 ${ref.magic}，不是手机版 MPKG，替换结果可能不符预期`);
     }
-    if (!exists) continue;
-    if (REFERENCE_OVERRIDE_EXT.has(ext)) {
-      const curSize = fs.statSync(dest).size;
-      if (curSize !== entry.length) {
-        fs.writeFileSync(dest, entry.data);
-        if (ext === '.tex') stats.tex++;
-        else stats.frag++;
-        onLog(`  [替换] ${rel} (${curSize} -> ${entry.length} 字节)`);
+    for (let i = 0; i < ref.entries.length; i++) {
+      const entry = ref.entries[i];
+      const rel = pkgformat.normalizeEntryPath(entry.path);
+      const dest = path.join(projectDir, rel);
+      const ext = path.extname(rel).toLowerCase();
+      const exists = fs.existsSync(dest);
+      if (!exists && (rel === 'project.json' || rel === 'preview.gif')) {
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, ref.readEntry(i));
+        stats.meta++;
+        onLog(`  [补入] ${rel}（来自参考 mpkg）`);
+        continue;
+      }
+      if (!exists) continue;
+      if (REFERENCE_OVERRIDE_EXT.has(ext)) {
+        const curSize = fs.statSync(dest).size;
+        if (curSize !== entry.length) {
+          fs.writeFileSync(dest, ref.readEntry(i));
+          if (ext === '.tex') stats.tex++;
+          else stats.frag++;
+          onLog(`  [替换] ${rel} (${curSize} -> ${entry.length} 字节)`);
+        }
       }
     }
+  } finally {
+    ref.close();
   }
   if (!stats.tex && !stats.frag) {
-    warnings.push('参考 mpkg 没有替换到任何纹理/着色器：若壁纸是 scene 类型，手机端可能显示异常（DXT 纹理移动 GPU 不支持）');
+    warnings.push('参考 mpkg 没有替换到任何纹理/着色器（用了参考包说明原纹理本来就不适合手机，建议检查这份参考包是否对应该壁纸）');
   }
   return { stats, warnings };
 }
@@ -180,18 +191,65 @@ function validateProject(projectDir, project, type) {
 }
 
 /**
- * 手机端适配：纹理物化 + 着色器兼容改写
- * @returns {{warnings:string[], tex:object, shader:object}}
+ * 手机端适配：纹理转换 + 着色器兼容改写
+ * @param {{onLog?:Function, preset?:object|string, maxRgbaBytes?:number, checkpoint?:object}} opts
+ * @returns {{warnings:string[], tex:object, shader:object, outcomes:Array}}
  */
-function adaptForMobile(projectDir, onLog = () => {}) {
+function adaptForMobile(projectDir, opts = {}) {
+  const onLog = opts.onLog || (() => {});
   const warnings = [];
-  const texRes = tex.convertTexDir(projectDir, { onLog });
+  const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
+  onLog(`  画质档位: ${preset.label}（reduction=${preset.reduction}, maxDimension=${preset.maxDimension || '不限'}）`);
+
+  const texRes = tex.convertTexDir(projectDir, {
+    onLog,
+    preset,
+    maxRgbaBytes: opts.maxRgbaBytes,
+    checkpoint: opts.checkpoint,
+  });
   warnings.push(...texRes.warnings);
-  const shaderStats = shadercompat.patchDir(projectDir, { onLog });
+
+  const shaderStats = shadercompat.patchDir(projectDir, { onLog, checkpoint: opts.checkpoint });
   if (shaderStats.rewritten) {
-    onLog(`  着色器兼容改写: ${shaderStats.rewritten} 个文件 / ${shaderStats.literals} 处`);
+    onLog(`  着色器兼容改写: ${shaderStats.rewritten} 个文件 / ${shaderStats.literals} 处补 .0 / ${shaderStats.structural} 处结构性修正`);
   }
-  return { warnings, tex: texRes.stats, shader: shaderStats };
+  if (shaderStats.failed) warnings.push(`${shaderStats.failed} 个着色器改写失败，已保留原文件`);
+  return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes };
+}
+
+/** 音频文件扩展名（可与 .tex/.frag/.vert 之外的所有资源共存） */
+const AUDIO_EXT = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.opus']);
+
+/**
+ * 剥离壁纸自带的音频文件（默认开启，`preserveAudio` 关掉）。
+ *
+ * 移动端 Wallpaper Engine 播放音频只有两种来源：视频自带音轨，或者场景里的
+ * 音频响应。老壁纸附带的整段 BGM 只会白占体积，官方导出手机版同样不带这些文件。
+ * 只删音频目录下的音频文件，不碰其它资源。
+ *
+ * @returns {{removed:number, bytes:number, files:string[]}}
+ */
+function stripAudio(projectDir, opts = {}) {
+  const onLog = opts.onLog || (() => {});
+  const result = { removed: 0, bytes: 0, files: [] };
+  if (opts.preserveAudio) return result;
+  const walk = (d) => {
+    for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+      const abs = path.join(d, ent.name);
+      if (ent.isDirectory()) { walk(abs); continue; }
+      if (!AUDIO_EXT.has(path.extname(ent.name).toLowerCase())) continue;
+      const size = fs.statSync(abs).size;
+      fs.rmSync(abs, { force: true });
+      result.removed++;
+      result.bytes += size;
+      result.files.push(path.relative(projectDir, abs).split(path.sep).join('/'));
+    }
+  };
+  walk(projectDir);
+  if (result.removed) {
+    onLog(`  音频剥离: ${result.removed} 个文件 / ${(result.bytes / 1048576).toFixed(2)} MB`);
+  }
+  return result;
 }
 
 /**
@@ -243,15 +301,21 @@ async function adaptWebToVideo(projectDir, opts = {}, onLog = () => {}) {
 /**
  * 完整流程：创意工坊条目目录 -> mpkg
  * @param {string} itemDir
- * @param {{title?:string,id?:string,outDir?:string,reference?:string,onLog?:Function,keepWorkDir?:boolean,webSeconds?:number,webFps?:number,webWidth?:number,webHeight?:number}} opts
+ * @param {{title?:string, id?:string, outDir?:string, reference?:string, onLog?:Function,
+ *          keepWorkDir?:boolean, resume?:boolean, preset?:string|object, preserveAudio?:boolean,
+ *          videoMagic?:string, maxRgbaBytes?:number,
+ *          webSeconds?:number, webFps?:number, webWidth?:number, webHeight?:number}} opts
  */
 async function packFromItemDir(itemDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const id = String(opts.id || path.basename(itemDir));
   const title = opts.title || `wallpaper_${id}`;
+  const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
 
   onLog(`\n=== 打包 ${title} (${id}) ===`);
-  const prepared = prepareProjectDir(itemDir, { onLog });
+  // 续转需要一个稳定的工作目录：临时目录一删，断点就没了
+  const workDir = opts.workDir || (opts.resume ? stableWorkDir(id) : tempDir('pack'));
+  const prepared = prepareProjectDir(itemDir, { workDir, onLog });
   for (const w of prepared.warnings) onLog(`  ⚠ ${w}`);
   onLog(`壁纸类型: ${prepared.type}`);
 
@@ -272,9 +336,34 @@ async function packFromItemDir(itemDir, opts = {}) {
     warnings.push(...web.warnings);
   }
 
+  // 音频：默认剥离（官方导出手机版也不带），--keep-audio 可保留
+  const audio = stripAudio(mobileDir, { preserveAudio: opts.preserveAudio, onLog });
+
+  // 转换计划 + 断点：先把清单写下来，中断后再跑能接上
+  const planFile = path.join(prepared.workDir, 'convert-plan.json');
+  const checkpointFile = path.join(prepared.workDir, 'convert-checkpoint.json');
+  const plan = convertplan.buildPlan({
+    dir: mobileDir,
+    preset,
+    preserveAudio: !!opts.preserveAudio,
+    maxFileBytes: opts.maxFileBytes,
+  });
+  convertplan.writePlan(planFile, plan);
+  const checkpoint = new convertplan.Checkpoint(checkpointFile);
+  checkpoint.bind(`${preset.id}|v2|audio=${opts.preserveAudio ? 1 : 0}`);
+  if (checkpoint.loadedFromDisk && checkpoint.resolvedCount) {
+    onLog(`  发现上次的转换断点：已有 ${checkpoint.resolvedCount} 个资源完成，继续转换`);
+  }
+
   onLog('纹理/着色器适配（手机端）...');
-  const adapted = adaptForMobile(mobileDir, onLog);
+  const adapted = adaptForMobile(mobileDir, {
+    onLog,
+    preset,
+    maxRgbaBytes: opts.maxRgbaBytes,
+    checkpoint,
+  });
   warnings.push(...adapted.warnings);
+  if (!checkpoint.flush()) warnings.push('转换断点写入失败，本次结果不能续转（不影响打包）');
 
   if (opts.reference) {
     onLog(`应用参考 mpkg: ${path.basename(opts.reference)}`);
@@ -284,10 +373,12 @@ async function packFromItemDir(itemDir, opts = {}) {
 
   const outDir = opts.outDir || config.OUTPUT_DIR;
   const outFile = path.join(outDir, `${safeFileName(title)}_${id}.mpkg`);
-  const built = writeMpkg(mobileDir, outFile, { magic: pkgformat.MAGIC_MOBILE });
-  onLog(`✔ 输出: ${outFile} (${(built.size / 1024 / 1024).toFixed(2)} MB, ${built.entries.length} 个文件)`);
+  const magic = pickMagic(prepared.type, opts.videoMagic);
+  const built = writeMpkg(mobileDir, outFile, { magic });
+  onLog(`✔ 输出: ${outFile} (${(built.size / 1024 / 1024).toFixed(2)} MB, ${built.entries.length} 个文件, ${magic})`);
 
-  if (!opts.keepWorkDir && prepared.workDir) {
+  const keepWorkDir = !!(opts.keepWorkDir || opts.resume);
+  if (!keepWorkDir && prepared.workDir) {
     try { fs.rmSync(prepared.workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
   return {
@@ -295,12 +386,42 @@ async function packFromItemDir(itemDir, opts = {}) {
     size: built.size,
     entryCount: built.entries.length,
     type: prepared.type,
+    magic,
+    preset: { id: preset.id, label: preset.label, reduction: preset.reduction, maxDimension: preset.maxDimension },
     warnings,
     entries: built.entries,
     tex: adapted.tex,
     shader: adapted.shader,
+    audio,
     web: webInfo,
+    plan: summarizePlan(plan),
+    planFile: keepWorkDir ? planFile : null,
+    checkpointFile: keepWorkDir ? checkpointFile : null,
+    workDir: keepWorkDir ? prepared.workDir : null,
+    outcomes: adapted.outcomes,
   };
+}
+
+/** 续转用的稳定工作目录（按条目 id 区分，失败后可原地重跑） */
+function stableWorkDir(id) {
+  const dir = path.join(config.CACHE_DIR, 'pack-plan', safeFileName(id));
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+/** 计划文件的精简摘要（不把整份资源清单塞进任务结果） */
+function summarizePlan(plan) {
+  if (!plan) return null;
+  return {
+    version: plan.version, policy: plan.policy, preset: plan.preset,
+    resourceCount: plan.resourceCount, totalBytes: plan.totalBytes,
+  };
+}
+
+/** 按壁纸类型选容器魔数：视频类允许单独指定（PKGM0014 / PKGM0020） */
+function pickMagic(type, videoMagic) {
+  if (type === 'video' && String(videoMagic || '').toLowerCase() === '0014') return pkgformat.MAGIC_MOBILE_VIDEO;
+  return pkgformat.MAGIC_MOBILE;
 }
 
 /**
@@ -332,9 +453,20 @@ async function packFromPath(inputPath, opts = {}) {
   const res = pkgformat.extractPkg(inputPath, projectDir);
   onLog(`解包 ${path.basename(inputPath)}: ${res.files.length} 个文件 (${res.magic})`);
   const warnings = [];
+  const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
+  const audio = stripAudio(projectDir, { preserveAudio: opts.preserveAudio, onLog });
+  const planFile = path.join(workDir, 'convert-plan.json');
+  const checkpointFile = path.join(workDir, 'convert-checkpoint.json');
+  const plan = convertplan.buildPlan({
+    dir: projectDir, preset, preserveAudio: !!opts.preserveAudio, maxFileBytes: opts.maxFileBytes,
+  });
+  convertplan.writePlan(planFile, plan);
+  const checkpoint = new convertplan.Checkpoint(checkpointFile);
+  checkpoint.bind(`${preset.id}|v2|audio=${opts.preserveAudio ? 1 : 0}`);
   onLog('纹理/着色器适配（手机端）...');
-  const adapted = adaptForMobile(projectDir, onLog);
+  const adapted = adaptForMobile(projectDir, { onLog, preset, maxRgbaBytes: opts.maxRgbaBytes, checkpoint });
   warnings.push(...adapted.warnings);
+  checkpoint.flush();
   if (opts.reference) {
     const r = applyReference(projectDir, opts.reference, onLog);
     warnings.push(...r.warnings);
@@ -344,13 +476,23 @@ async function packFromPath(inputPath, opts = {}) {
   const outFile = path.join(outDir, `${safeFileName(title)}.mpkg`);
   const built = writeMpkg(projectDir, outFile, { magic: pkgformat.MAGIC_MOBILE });
   onLog(`✔ 输出: ${outFile} (${(built.size / 1024 / 1024).toFixed(2)} MB, ${built.entries.length} 个文件)`);
-  if (!opts.keepWorkDir) {
+  const keepWorkDir = !!opts.keepWorkDir;
+  if (!keepWorkDir) {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
-  return { outFile, size: built.size, entryCount: built.entries.length, type: 'pkg', warnings, entries: built.entries };
+  return {
+    outFile, size: built.size, entryCount: built.entries.length, type: 'pkg',
+    warnings, entries: built.entries, audio,
+    preset: { id: preset.id, label: preset.label, reduction: preset.reduction, maxDimension: preset.maxDimension },
+    tex: adapted.tex, shader: adapted.shader, outcomes: adapted.outcomes,
+    plan: summarizePlan(plan),
+    planFile: keepWorkDir ? planFile : null,
+    checkpointFile: keepWorkDir ? checkpointFile : null,
+    workDir: keepWorkDir ? workDir : null,
+  };
 }
 
-/** 分析目录或容器，供 CLI/界面展示 */
+/** 分析目录或容器，供 CLI/界面展示（容器用流式读取，不整包进内存） */
 function analyze(inputPath) {
   const out = { input: inputPath };
   if (fs.statSync(inputPath).isDirectory()) {
@@ -363,16 +505,26 @@ function analyze(inputPath) {
     out.type = detectType(inputPath, out.project);
     return out;
   }
-  const pkg = pkgformat.parsePkg(inputPath);
-  out.kind = 'container';
-  out.magic = pkg.magic;
-  out.entryCount = pkg.entryCount;
-  out.files = pkg.entries.map((e) => ({ path: e.path, size: e.length }));
-  const pj = pkg.entries.find((e) => pkgformat.normalizeEntryPath(e.path) === 'project.json');
-  if (pj) {
-    try { out.project = JSON.parse(pj.data.toString('utf8').replace(/^\uFEFF/, '')); } catch { /* ignore */ }
+  const pkg = pkgformat.openPkg(inputPath);
+  try {
+    out.kind = 'container';
+    out.magic = pkg.magic;
+    out.entryCount = pkg.entryCount;
+    out.files = pkg.entries.map((e) => ({ path: e.path, size: e.length }));
+    const idx = pkg.entries.findIndex((e) => pkgformat.normalizeEntryPath(e.path) === 'project.json');
+    if (idx >= 0) {
+      try {
+        out.project = JSON.parse(pkg.readEntry(idx).toString('utf8').replace(/^\uFEFF/, ''));
+      } catch { /* ignore */ }
+    }
+  } finally {
+    pkg.close();
   }
   return out;
 }
 
-module.exports = { packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg, detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo };
+module.exports = {
+  packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
+  detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
+  stripAudio, pickMagic, stableWorkDir,
+};

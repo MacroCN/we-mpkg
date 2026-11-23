@@ -360,3 +360,24 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
   .modal { align-items: center; }
   .modal-card { border-radius: 18px; }
 }
+
+/* 详情抽屉里的打包选项（2.0：画质档位 + 音频开关） */
+.packopts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  margin: 8px 0 12px;
+  font-size: 13px;
+  color: var(--dim);
+}
+.packopts label { display: flex; align-items: center; gap: 6px; }
+.packopts select {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+  cursor: pointer;
+}

@@ -92,6 +92,20 @@
     <div id="d-meta" class="meta"></div>
     <div id="d-tags" class="chips small"></div>
     <p id="d-desc" class="desc"></p>
+    <div class="packopts">
+      <label>
+        <span data-i18n="quality">画质</span>
+        <select id="d-quality">
+          <option value="high" data-i18n="qHigh">高画质（原尺寸）</option>
+          <option value="balanced" data-i18n="qBalanced">均衡（1/2 尺寸）</option>
+          <option value="smooth" data-i18n="qSmooth">流畅（1/4 尺寸）</option>
+        </select>
+      </label>
+      <label class="check">
+        <input id="d-audio" type="checkbox" />
+        <span data-i18n="keepAudio">保留壁纸自带音频</span>
+      </label>
+    </div>
     <div class="actions">
       <button id="d-download" class="primary big" data-i18n="downloadPack">下载并打包为 MPKG</button>
       <a id="d-open" class="link" target="_blank" rel="noreferrer" data-i18n="steamPage">Steam 页面</a>

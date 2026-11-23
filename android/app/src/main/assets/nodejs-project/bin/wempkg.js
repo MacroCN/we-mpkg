@@ -159,28 +159,47 @@ async function cmdGet(args) {
     id,
     title: args.title || detail.title || `wallpaper_${id}`,
     reference: ref,
+    ...packOptions(args),
     ...webOptions(args),
     onLog: (l) => console.log(`[pack] ${l}`),
   });
   steamcmd.cleanupRoot(dl.root);
   console.log(`\n✔ 完成: ${out.outFile}`);
-  for (const w of out.warnings) console.log(`  ⚠ ${w}`);
+  printSummary(out);
 }
 
 async function cmdPack(args) {
   const input = args._[0];
-  if (!input) throw new Error('用法: pack <目录|.pkg|.mpkg> [--title 名称] [--out x.mpkg] [--ref ref.mpkg]');
+  if (!input) throw new Error('用法: pack <目录|.pkg|.mpkg> [--title 名称] [--out x.mpkg] [--ref ref.mpkg] [--quality high|balanced|smooth|original] [--keep-audio] [--resume]');
   if (!fs.existsSync(input)) throw new Error(`路径不存在: ${input}`);
   const out = await packer.packFromPath(input, {
     title: args.title,
     reference: args.ref,
     outDir: args.out ? path.dirname(path.resolve(args.out)) : config.OUTPUT_DIR,
+    ...packOptions(args),
     ...webOptions(args),
     onLog: (l) => console.log(`[pack] ${l}`),
   });
   if (args.out) fs.renameSync(out.outFile, path.resolve(args.out));
   console.log(`\n✔ 完成: ${args.out ? path.resolve(args.out) : out.outFile}`);
-  for (const w of out.warnings) console.log(`  ⚠ ${w}`);
+  printSummary(out);
+}
+
+/** 打包结果摘要：体积变化、纹理转换、着色器改写、音频、告警 */
+function printSummary(out) {
+  if (!out) return;
+  if (out.preset) console.log(`  画质档位: ${out.preset.label}（reduction=${out.preset.reduction}）  容器: ${out.magic || 'PKGM0020'}`);
+  const t = out.tex;
+  if (t) {
+    console.log(`  纹理: 共 ${t.total}，转换 ${t.converted}（降采样 ${t.downsampled}），保留 ${t.kept}，视频 ${t.video}，超预算 ${t.budget}，失败 ${t.failed}${t.resumed ? `，续转跳过 ${t.resumed}` : ''}`);
+  }
+  if (out.shader && out.shader.rewritten) {
+    console.log(`  着色器: ${out.shader.rewritten} 个文件（${out.shader.literals} 处补 .0，${out.shader.structural} 处结构性修正）`);
+  }
+  if (out.audio && out.audio.removed) {
+    console.log(`  音频: 剥离 ${out.audio.removed} 个文件 / ${(out.audio.bytes / 1048576).toFixed(2)} MB`);
+  }
+  for (const w of out.warnings || []) console.log(`  ⚠ ${w}`);
 }
 
 async function cmdInspect(args) {
@@ -312,11 +331,12 @@ async function cmdSteamjs(args) {
       id,
       title: args.title || res.title || `wallpaper_${id}`,
       reference: ref,
+      ...packOptions(args),
       ...webOptions(args),
       onLog: (l) => console.log(`[pack] ${l}`),
     });
     console.log(`\n✔ 完成: ${out.outFile}`);
-    for (const w of out.warnings) console.log(`  ⚠ ${w}`);
+    printSummary(out);
     return;
   }
 
@@ -335,6 +355,25 @@ function webOptions(args) {
   };
   for (const k of ['webSeconds', 'webFps', 'webWidth', 'webHeight']) if (!Number.isFinite(o[k]) || o[k] <= 0) delete o[k];
   if (typeof o.webLayout !== 'string') delete o.webLayout;
+  return o;
+}
+
+/**
+ * 打包相关参数
+ *   --quality high|balanced|smooth|original  画质档位（默认 high）
+ *   --keep-audio                             保留壁纸自带音频（默认剥离）
+ *   --resume                                 沿用上次的工作目录与断点，中断后接着转
+ *   --video-magic 0014|0020                  视频类 mpkg 的容器魔数（默认 0020）
+ *   --max-texture-mb N                       单张纹理解码内存预算（默认 96）
+ */
+function packOptions(args) {
+  const o = {};
+  if (typeof args.quality === 'string') o.preset = args.quality;
+  if (args['keep-audio']) o.preserveAudio = true;
+  if (args.resume) o.resume = true;
+  if (typeof args['video-magic'] === 'string') o.videoMagic = args['video-magic'];
+  const mb = Number(args['max-texture-mb']);
+  if (Number.isFinite(mb) && mb > 0) o.maxRgbaBytes = Math.round(mb * 1048576);
   return o;
 }
 
@@ -359,6 +398,10 @@ async function main() {
   get      下载并打包成 .mpkg（一步到位）
   fetch    只下载原始文件
   pack     把本地目录 / .pkg 打成 .mpkg
+            --quality high|balanced|smooth|original  画质档位（默认 high）
+            --keep-audio   保留壁纸自带音频（默认剥离）
+            --resume       沿用上次工作目录与断点，中断后接着转
+            --max-texture-mb N  单张纹理解码内存预算（默认 96）
   inspect  查看目录或容器的内部结构
   steamjs  纯 JS 下载引擎（不依赖 SteamCMD，安卓可用）
            steamjs login            扫码登录，凭据存 .cache/steam-token.json

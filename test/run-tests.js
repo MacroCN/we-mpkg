@@ -315,14 +315,363 @@ test('筛选分组：组合过多退化为每组取第一个并标记 truncated'
   assert.deepStrictEqual(r.combos, [['1'], ['4']]);
 });
 
+console.log('\n[9] LZ4 块编解码');
+
+test('LZ4 往返：随机数据 + 可压缩数据 + 空串', () => {
+  const lz4 = require('../src/lz4');
+  const random = Buffer.alloc(4096);
+  for (let i = 0; i < random.length; i++) random[i] = (i * 7919 + (i >> 3)) & 0xff;
+  const plain = Buffer.alloc(8192, 0x20); // 大片重复，保证能压
+  for (const src of [Buffer.alloc(0), Buffer.from('a'), plain, random]) {
+    const c = lz4.compress(src);
+    if (src.length === 0) { assert.strictEqual(c.length, 0); continue; }
+    const d = lz4.decompress(c, src.length);
+    assert.deepStrictEqual(d, src);
+  }
+  assert.ok(lz4.compress(plain).length < plain.length / 4, '重复数据应显著压缩');
+  assert.ok(lz4.compress(Buffer.alloc(1024, 1)).length < 64, '单色块应压得很小');
+});
+
+test('LZ4 解压会拒绝损坏的 offset', () => {
+  const lz4 = require('../src/lz4');
+  // token=0x00：0 字面量 + 匹配长度 4；随后 offset=0（非法）
+  const bad = Buffer.from([0x00, 0x00, 0x00, 0x41]);
+  assert.throws(() => lz4.decompress(bad, 8), /offset/);
+});
+
+console.log('\n[10] DXT 解码');
+
+test('DXT1 纯色块 -> RGBA 精确还原', () => {
+  const dxt = require('../src/dxt');
+  // c0 = c1 = 0xF800 (纯红)，索引全 0 -> 调色板第 0 项
+  const block = Buffer.alloc(8);
+  block.writeUInt16LE(0xf800, 0);
+  block.writeUInt16LE(0xf800, 2);
+  block.writeUInt32LE(0, 4);
+  const rgba = dxt.decode(block, 7, 4, 4);
+  for (let i = 0; i < 16; i++) {
+    assert.deepStrictEqual([rgba[i * 4], rgba[i * 4 + 1], rgba[i * 4 + 2], rgba[i * 4 + 3]], [255, 0, 0, 255]);
+  }
+  assert.strictEqual(dxt.payloadSize(7, 4, 4), 8);
+  assert.strictEqual(dxt.payloadSize(7, 5, 3), 16); // 边缘块按 4x4 补齐
+});
+
+test('DXT5 显式 alpha 端点与 3bit 索引', () => {
+  const dxt = require('../src/dxt');
+  const block = Buffer.alloc(16);
+  block[0] = 255; block[1] = 0;     // a0 > a1 -> 8 档插值
+  block[2] = 0; block[3] = 0; block[4] = 0; block[5] = 0; block[6] = 0; block[7] = 0;
+  block.writeUInt16LE(0x07e0, 8);   // 纯绿
+  block.writeUInt16LE(0x07e0, 10);
+  block.writeUInt32LE(0, 12);
+  const rgba = dxt.decode(block, 4, 4, 4); // 4 号格式 = DXT5
+  for (let i = 0; i < 16; i++) {
+    assert.strictEqual(rgba[i * 4 + 1], 255, '绿色通道应为 255');
+    assert.strictEqual(rgba[i * 4 + 3], 255, '索引 0 的 alpha 应为 a0');
+  }
+});
+
+console.log('\n[11] 纹理路由与转换（2.0）');
+
+const texlib = require('../src/tex');
+
+/** 组装一个 TEX（默认移动端容器形态） */
+function buildTex(opts) {
+  const {
+    format = texlib.TEX_FORMAT.DXT1, flags = 0,
+    texW = 4, texH = 4, imgW = texW, imgH = texH,
+    imageFormat = -1, videoMp4 = 0, container = 'TEXB0004',
+    images = [],
+  } = opts;
+  const parts = [Buffer.from('TEXV0005\0'), Buffer.from('TEXI0001\0')];
+  const head = Buffer.alloc(28);
+  head.writeInt32LE(format, 0);
+  head.writeInt32LE(flags, 4);
+  head.writeInt32LE(texW, 8);
+  head.writeInt32LE(texH, 12);
+  head.writeInt32LE(imgW, 16);
+  head.writeInt32LE(imgH, 20);
+  head.writeUInt32LE(0, 24);
+  parts.push(head, Buffer.from(container + '\0'));
+  const ic = Buffer.alloc(4);
+  ic.writeInt32LE(images.length, 0);
+  parts.push(ic);
+  if (container === 'TEXB0003' || container === 'TEXB0004') {
+    const ifmt = Buffer.alloc(container === 'TEXB0004' ? 8 : 4);
+    ifmt.writeInt32LE(imageFormat, 0);
+    if (container === 'TEXB0004') ifmt.writeInt32LE(videoMp4, 4);
+    parts.push(ifmt);
+  }
+  for (const img of images) {
+    const mc = Buffer.alloc(4);
+    mc.writeInt32LE(img.mips.length, 0);
+    parts.push(mc);
+    for (const m of img.mips) {
+      const recLen = container === 'TEXB0001' ? 8 : 16;
+      const rec = Buffer.alloc(recLen);
+      rec.writeInt32LE(m.w, 0);
+      rec.writeInt32LE(m.h, 4);
+      if (recLen === 16) {
+        rec.writeInt32LE(m.lz4 ? 1 : 0, 8);
+        rec.writeInt32LE(m.decompressed || m.bytes.length, 12);
+      }
+      const len = Buffer.alloc(4);
+      len.writeInt32LE(m.bytes.length, 0);
+      parts.push(rec, len, m.bytes);
+    }
+  }
+  return Buffer.concat(parts);
+}
+
+test('DXT1 纹理会被转成移动端形态（RGBA8 + 单 mip）', () => {
+  const block = Buffer.alloc(8);
+  block.writeUInt16LE(0xf800, 0);
+  block.writeUInt16LE(0xf800, 2);
+  const src = buildTex({ images: [{ mips: [{ w: 4, h: 4, bytes: block }] }] });
+  const r = texlib.convertTexBuffer(src, { relPath: 'materials/背景.tex' });
+  assert.strictEqual(r.changed, true);
+  assert.strictEqual(r.route, 'convert-dxt');
+  const out = texlib.parseTex(r.bytes);
+  assert.strictEqual(out.header.format, texlib.TEX_FORMAT.RGBA8888);
+  assert.strictEqual(out.container.imageFormat, texlib.FREE_IMAGE.UNKNOWN);
+  assert.strictEqual(out.images[0].mips.length, 1);
+  const mip = out.images[0].mips[0];
+  const rgba = mip.lz4 ? require('../src/lz4').decompress(mip.bytes, mip.decompressedBytes) : mip.bytes;
+  assert.strictEqual(rgba.length, 4 * 4 * 4);
+  assert.strictEqual(rgba[0], 255);
+  assert.strictEqual(rgba[1], 0);
+  assert.ok(texlib.isMobileCompatible(out), '转换结果应通过移动端形态校验');
+});
+
+test('已是移动端形态的纹理原样保留（不重复压缩）', () => {
+  const pixels = Buffer.alloc(4 * 4 * 4, 0x40);
+  const src = buildTex({
+    format: texlib.TEX_FORMAT.RGBA8888,
+    images: [{ mips: [{ w: 4, h: 4, bytes: pixels, lz4: 0, decompressed: pixels.length }] }],
+  });
+  const r = texlib.convertTexBuffer(src, { relPath: 'a.tex' });
+  assert.strictEqual(r.changed, false);
+  assert.strictEqual(r.route, 'keep-mobile');
+});
+
+test('超预算纹理保留原文件并给出理由', () => {
+  const src = buildTex({ texW: 20000, texH: 20000, imgW: 20000, imgH: 20000, images: [{ mips: [{ w: 20000, h: 20000, bytes: Buffer.alloc(64) }] }] });
+  const info = texlib.inspectTex(src, { maxRgbaBytes: 64 * 1024 * 1024 });
+  assert.strictEqual(info.route, 'keep-budget');
+  assert.ok(/预算/.test(info.reason));
+  const r = texlib.convertTexBuffer(src, { maxRgbaBytes: 64 * 1024 * 1024 });
+  assert.strictEqual(r.changed, false);
+});
+
+test('画质档位只对彩色图降采样，数据图保持原尺寸', () => {
+  const preset = texlib.presetOf('balanced');
+  const rawTex = () => buildTex({
+    format: texlib.TEX_FORMAT.RGBA8888,
+    container: 'TEXB0001',
+    texW: 8, texH: 8, imgW: 8, imgH: 8,
+    images: [{ mips: [{ w: 8, h: 8, bytes: Buffer.alloc(8 * 8 * 4, 0x20) }] }],
+  });
+  const color = texlib.convertTexBuffer(rawTex(), {
+    relPath: 'materials/background_color.tex', preset, semantic: 'color',
+  });
+  // 8x8 缩小一半 -> 4x4
+  assert.strictEqual(color.width, 4);
+  assert.strictEqual(color.downsampled, true);
+  const data = texlib.convertTexBuffer(rawTex(), {
+    relPath: 'materials/normal_map.tex', preset, semantic: 'data',
+  });
+  assert.strictEqual(data.width, 8);
+  assert.strictEqual(data.downsampled, false);
+});
+
+test('semanticOf 识别数据图 / 彩色图 / 未知', () => {
+  assert.strictEqual(texlib.semanticOf('materials/normal_map.tex'), 'data');
+  assert.strictEqual(texlib.semanticOf('materials/roughness.tex'), 'data');
+  assert.strictEqual(texlib.semanticOf('materials/background_albedo.tex'), 'color');
+  assert.strictEqual(texlib.semanticOf('materials/1.tex'), 'unknown');
+});
+
+test('纹理目录转换：统计与告警自洽', () => {
+  const dir = tmp('texdir');
+  fs.mkdirSync(path.join(dir, 'materials'), { recursive: true });
+  const block = Buffer.alloc(8);
+  block.writeUInt16LE(0xf800, 0);
+  block.writeUInt16LE(0xf800, 2);
+  fs.writeFileSync(path.join(dir, 'materials', 'a.tex'), buildTex({ images: [{ mips: [{ w: 4, h: 4, bytes: block }] }] }));
+  fs.writeFileSync(path.join(dir, 'materials', 'broken.tex'), Buffer.from('not a tex'));
+  const res = texlib.convertTexDir(dir, { onLog: () => {} });
+  assert.strictEqual(res.stats.total, 2);
+  assert.strictEqual(res.stats.converted, 1);
+  assert.strictEqual(res.stats.failed, 1);
+  assert.strictEqual(res.warnings.length, 1);
+});
+
+console.log('\n[12] 转换计划与断点');
+
+test('buildPlan 记录资源清单，Checkpoint 能判重与落盘', () => {
+  const cp = require('../src/convertplan');
+  const dir = tmp('plan');
+  fs.mkdirSync(path.join(dir, 'materials'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'sound'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'shaders'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'materials', 'a.tex'), buildTex({ images: [{ mips: [{ w: 4, h: 4, bytes: Buffer.alloc(8) }] }] }));
+  fs.writeFileSync(path.join(dir, 'sound', 'bgm.mp3'), Buffer.alloc(10));
+  fs.writeFileSync(path.join(dir, 'shaders', 'a.frag'), 'void main(){}');
+  const plan = cp.buildPlan({ dir, preset: texlib.presetOf('high') });
+  assert.strictEqual(plan.version, cp.PLAN_VERSION);
+  assert.strictEqual(plan.resourceCount, 3);
+  const kinds = plan.resources.map((r) => r.kind).sort();
+  assert.deepStrictEqual(kinds, ['audio', 'shader', 'texture']);
+  assert.ok(plan.resources.filter((r) => r.kind !== 'audio').every((r) => /^[0-9a-f]{64}$/.test(r.sha256)));
+
+  const file = path.join(dir, 'cp.json');
+  const checkpoint = new cp.Checkpoint(file);
+  checkpoint.bind('high|v2');
+  assert.strictEqual(checkpoint.isResolved('materials/a.tex', 'deadbeef'), false);
+  checkpoint.record('materials/a.tex', 'in', 'out', 'convert-dxt');
+  assert.strictEqual(checkpoint.isResolved('materials/a.tex', 'out'), true);
+  assert.strictEqual(checkpoint.flush(), true);
+  const reloaded = new cp.Checkpoint(file);
+  assert.strictEqual(reloaded.loadedFromDisk, true);
+  assert.strictEqual(reloaded.isResolved('materials/a.tex', 'out'), true);
+  // 换档位后旧断点作废
+  reloaded.bind('balanced|v2');
+  assert.strictEqual(reloaded.isResolved('materials/a.tex', 'out'), false);
+});
+
+test('损坏的 checkpoint 按"无断点"处理而不是抛错', () => {
+  const cp = require('../src/convertplan');
+  const file = path.join(tmp('cp-bad'), 'cp.json');
+  fs.writeFileSync(file, '{ this is not json');
+  const c = new cp.Checkpoint(file);
+  assert.strictEqual(c.loadedFromDisk, false);
+  assert.strictEqual(c.isResolved('a', 'b'), false);
+});
+
+console.log('\n[13] 流式容器读取');
+
+test('openPkg 与 parsePkg 结果一致，且按条目读取', () => {
+  const entries = [
+    { path: 'project.json', data: Buffer.from('{"type":"scene"}') },
+    { path: 'materials/材质.json', data: Buffer.alloc(500, 3) },
+  ];
+  const dir = tmp('openpkg');
+  const file = path.join(dir, 'a.mpkg');
+  fs.writeFileSync(file, pkgformat.buildPkg(pkgformat.MAGIC_MOBILE, entries));
+  const reader = pkgformat.openPkg(file);
+  try {
+    assert.strictEqual(reader.magic, pkgformat.MAGIC_MOBILE);
+    assert.strictEqual(reader.entryCount, 2);
+    assert.strictEqual(reader.entries[0].path, 'project.json');
+    assert.deepStrictEqual(reader.readEntry(0), entries[0].data);
+    assert.deepStrictEqual(reader.readEntry('materials/材质.json'), entries[1].data);
+  } finally {
+    reader.close();
+  }
+});
+
+console.log('\n[14] 着色器结构性补丁');
+
+const shader = require('../src/shadercompat');
+
+test('sample 变量只在代码区改名，注释里不动', () => {
+  const src = '// sample stays in comment\nvec4 sample = texture2D(t, uv);\nfloat x = 1;\n';
+  const r = shader.rewriteAll(src, { relPath: 'materials/a.frag' });
+  assert.ok(r.text.includes('vec4 _sample ='), '代码区的 sample 应改名');
+  assert.ok(r.text.includes('// sample stays in comment'), '注释里的 sample 不应改');
+  assert.ok(/float x = 1\.0;/i.test(r.text), '字面量补点仍然生效');
+});
+
+test('音频频谱打包下标被展开成一维索引', () => {
+  const src = 'float a = g_AudioSpectrum64Left[i / 4][i % 4];';
+  const r = shader.rewritePackedAudioSpectrum(src);
+  assert.strictEqual(r.count, 1);
+  assert.ok(r.text.includes('g_AudioSpectrum64Left[int(i)]'), r.text);
+});
+
+test('vec3 颜色累加器只在结构吻合时改写', () => {
+  const ok = 'vec3 drawSence(float sence){\nvec4 col = vec4(0.,0.,0.,0.);\nreturn col;\n}';
+  const r = shader.rewriteVec3ColorAccumulator(ok);
+  assert.strictEqual(r.count, 1);
+  assert.ok(r.text.includes('vec3 col = vec3(0.,0.,0.);'));
+  const other = 'vec4 col = vec4(0.,0.,0.,0.);\n';
+  assert.strictEqual(shader.rewriteVec3ColorAccumulator(other).count, 0);
+});
+
+test('xray 只在结构吻合的 effects/xray 上注入 g_PointerState', () => {
+  const src = 'varying vec2 v_PointerUV;\nvarying float v_PointerScale;\nvoid main(){ unprojectedUVs += 0.5; }';
+  const r = shader.rewriteXray(src);
+  assert.strictEqual(r.count, 2);
+  assert.ok(r.text.includes('uniform vec4 g_PointerState;'));
+  assert.ok(r.text.includes('g_PointerState.y'));
+  // 缺 v_PointerUV 的普通 shader 不会被注入
+  const plain = 'varying float v_PointerScale;\nvoid main(){ unprojectedUVs += 0.5; }';
+  assert.strictEqual(shader.rewriteXray(plain).count, 0);
+});
+
+console.log('\n[15] 音频剥离');
+
+test('默认剥离音频，preserveAudio 时保留', () => {
+  const dir = tmp('audio');
+  fs.mkdirSync(path.join(dir, 'sound'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sound', 'bgm.mp3'), Buffer.alloc(64));
+  fs.writeFileSync(path.join(dir, 'scene.json'), '{}');
+  const removed = packer.stripAudio(dir, {});
+  assert.strictEqual(removed.removed, 1);
+  assert.strictEqual(removed.bytes, 64);
+  assert.ok(!fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
+
+  const dir2 = tmp('audio2');
+  fs.mkdirSync(path.join(dir2, 'sound'), { recursive: true });
+  fs.writeFileSync(path.join(dir2, 'sound', 'bgm.mp3'), Buffer.alloc(64));
+  const kept = packer.stripAudio(dir2, { preserveAudio: true });
+  assert.strictEqual(kept.removed, 0);
+  assert.ok(fs.existsSync(path.join(dir2, 'sound', 'bgm.mp3')));
+});
+
 (async () => {
   await testAsync('整条流水线：工坊目录 -> mpkg（async）', async () => {    const itemDir = makeItemDir();
     const outDir = tmp('out2');
     const res = await packer.packFromItemDir(itemDir, { id: '999', title: 'Async', outDir, onLog: () => {} });
     assert.ok(fs.existsSync(res.outFile));
   });
-  await testAsync('未知容器输入会报错', async () => {
-    const f = path.join(tmp('bad'), 'x.pkg');
+  await testAsync('打包接入档位 / 计划 / 音频 / 视频 magic（2.0）', async () => {
+    const itemDir = makeItemDir();
+    const outDir = tmp('out2v');
+    const logs = [];
+    const res = await packer.packFromItemDir(itemDir, {
+      id: '1000',
+      title: 'V2',
+      outDir,
+      preset: 'smooth',
+      videoMagic: '0014',
+      onLog: (l) => logs.push(l),
+    });
+    assert.ok(fs.existsSync(res.outFile));
+    assert.strictEqual(res.preset.id, 'smooth');
+    assert.strictEqual(res.magic, pkgformat.MAGIC_MOBILE); // 类型不是 video，仍用 0020
+    assert.ok(res.tex && typeof res.tex.converted === 'number');
+    assert.ok(res.shader && typeof res.shader.total === 'number');
+    assert.ok(res.audio && typeof res.audio.removed === 'number');
+    assert.ok(res.plan && res.plan.resourceCount > 0, '应返回转换计划摘要');
+    assert.strictEqual(res.plan.preset.id, 'smooth');
+    assert.strictEqual(res.planFile, null, '不续转时不保留工作目录，planFile 应为 null');
+    // 续转时保留工作目录并把计划/断点落盘
+    const keep = await packer.packFromItemDir(makeItemDir(), {
+      id: '1001', title: 'V2Resume', outDir: tmp('out2r'), resume: true, onLog: () => {},
+    });
+    assert.ok(fs.existsSync(keep.planFile), '续转时应写出转换计划');
+    assert.ok(fs.existsSync(keep.checkpointFile), '续转时应写出断点文件');
+    const planDisk = JSON.parse(fs.readFileSync(keep.planFile, 'utf8'));
+    assert.strictEqual(planDisk.version, 2);
+    assert.ok(planDisk.resources.length > 0);
+    // 视频类型 + 显式指定时用 0014
+    assert.strictEqual(packer.pickMagic('video', '0014'), pkgformat.MAGIC_MOBILE_VIDEO);
+    assert.strictEqual(packer.pickMagic('video'), pkgformat.MAGIC_MOBILE);
+    assert.strictEqual(packer.pickMagic('scene', '0014'), pkgformat.MAGIC_MOBILE);
+  });
+
+  await testAsync('未知容器输入会报错', async () => {    const f = path.join(tmp('bad'), 'x.pkg');
     fs.writeFileSync(f, Buffer.from('not a pkg at all'));
     await assert.rejects(() => packer.packFromPath(f, { onLog: () => {} }), /magic|长度/);
   });

@@ -21,6 +21,8 @@ const path = require('path');
 
 const MAGIC_PC = 'PKGV0024';
 const MAGIC_MOBILE = 'PKGM0020';
+/** 视频类壁纸在移动端用的容器魔数（部分实现用 PKGM0014） */
+const MAGIC_MOBILE_VIDEO = 'PKGM0014';
 
 function readInt32(buf, off) {
   if (off + 4 > buf.length) throw new Error(`容器头部越界（offset=${off}）`);
@@ -112,6 +114,79 @@ function normalizeEntryPath(p) {
   return String(p).replace(/\\/g, '/').replace(/^\/+/, '');
 }
 
+/**
+ * 流式打开一个 PKG/MPKG：只把目录读进内存，条目数据按需读。
+ *
+ * 为什么要它：`parsePkg` 会把整个文件读进 Buffer。一条几 GB 的参考包
+ * （或者几百 MB 的原始包）直接读进来，安卓上很容易 OOM。这里改成
+ * 「先读表、再按条目读切片」，同一份逻辑，内存只跟单条大小有关。
+ *
+ * @param {string} file
+ * @returns {{magic:string, entryCount:number, dataStart:number,
+ *           entries:Array<{path:string,offset:number,length:number}>,
+ *           readEntry:Function, close:Function, size:number}}
+ */
+function openPkg(file) {
+  const size = fs.statSync(file).size;
+  const fd = fs.openSync(file, 'r');
+  const readAt = (pos, length) => {
+    if (pos < 0 || length < 0 || pos + length > size) throw new Error('容器读取越界');
+    const buf = Buffer.alloc(length);
+    let done = 0;
+    while (done < length) {
+      const n = fs.readSync(fd, buf, done, length - done, pos + done);
+      if (!n) throw new Error('容器文件提前结束');
+      done += n;
+    }
+    return buf;
+  };
+  const readI32 = (pos) => readAt(pos, 4).readInt32LE(0);
+  const readStr = (pos) => {
+    const len = readI32(pos);
+    if (len < 0 || len > 8192) throw new Error(`非法的字符串长度 ${len}，可能不是 PKG/MPKG 文件`);
+    return { value: readAt(pos + 4, len).toString('utf8'), next: pos + 4 + len };
+  };
+
+  try {
+    const magic = readStr(0);
+    if (!/^PKG[VM]\d{4}$/.test(magic.value)) throw new Error(`不认识的容器 magic: "${magic.value}"`);
+    let off = magic.next;
+    const entryCount = readI32(off);
+    off += 4;
+    if (entryCount < 0 || entryCount > 200000) throw new Error(`条目数异常: ${entryCount}`);
+    const entries = [];
+    for (let i = 0; i < entryCount; i++) {
+      const p = readStr(off);
+      off = p.next;
+      const offset = readI32(off);
+      const length = readI32(off + 4);
+      off += 8;
+      if (offset < 0 || length < 0) throw new Error(`条目 ${p.value} 的 offset/length 非法`);
+      entries.push({ index: i, path: p.value, offset, length });
+    }
+    const dataStart = off;
+    for (const e of entries) {
+      if (dataStart + e.offset + e.length > size) throw new Error(`条目 ${e.path} 数据越界`);
+    }
+    return {
+      magic: magic.value,
+      entryCount,
+      dataStart,
+      entries,
+      size,
+      readEntry: (i) => {
+        const e = typeof i === 'number' ? entries[i] : entries.find((x) => x.path === i);
+        if (!e) throw new Error(`没有该条目: ${i}`);
+        return readAt(dataStart + e.offset, e.length);
+      },
+      close: () => fs.closeSync(fd),
+    };
+  } catch (err) {
+    fs.closeSync(fd);
+    throw err;
+  }
+}
+
 /** 防止路径穿越：拒绝绝对路径、盘符、.. */
 function safeJoin(baseDir, relPath) {
   const cleaned = normalizeEntryPath(relPath);
@@ -178,7 +253,9 @@ function walk(dir, opts = {}) {
 module.exports = {
   MAGIC_PC,
   MAGIC_MOBILE,
+  MAGIC_MOBILE_VIDEO,
   parsePkg,
+  openPkg,
   buildPkg,
   extractPkg,
   packDirToBuffer,

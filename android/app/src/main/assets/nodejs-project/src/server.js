@@ -74,13 +74,16 @@ function refreshWebLogin() {
   } catch { /* ignore */ }
 }
 
-function createJob({ id, title, reference, raw }) {
+function createJob({ id, title, reference, raw, preset, preserveAudio, videoMagic }) {
   const jobId = `j${++jobSeq}`;
   const job = {
     id: jobId,
     itemId: String(id),
     title: title || `wallpaper_${id}`,
     raw: !!raw,
+    preset: typeof preset === 'string' && preset ? preset : 'high',
+    preserveAudio: !!preserveAudio,
+    videoMagic: typeof videoMagic === 'string' ? videoMagic : '0020',
     state: 'queued',
     log: [],
     result: null,
@@ -200,6 +203,9 @@ async function pump() {
       id: job.itemId,
       title: job.title,
       reference,
+      preset: job.preset,
+      preserveAudio: job.preserveAudio,
+      videoMagic: job.videoMagic,
       onLog: job.push,
     });
     job.result = res;
@@ -429,7 +435,15 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       const body = JSON.parse(raw || '{}');
       if (!body.id) return json(res, 400, { error: '缺少 id' });
-      const job = createJob({ id: body.id, title: body.title, reference: body.reference, raw: body.raw });
+      const job = createJob({
+        id: body.id,
+        title: body.title,
+        reference: body.reference,
+        raw: body.raw,
+        preset: body.preset,
+        preserveAudio: body.preserveAudio,
+        videoMagic: body.videoMagic,
+      });
       return json(res, 200, { jobId: job.id });
     }
     if (pn.startsWith('/api/jobs/')) {
@@ -452,6 +466,16 @@ const server = http.createServer(async (req, res) => {
           outPath: job.result.outFile,
           size: job.result.size,
           type: job.result.type,
+          magic: job.result.magic,
+          preset: job.result.preset,
+          tex: job.result.tex,
+          shader: job.result.shader ? {
+            total: job.result.shader.total,
+            rewritten: job.result.shader.rewritten,
+            literals: job.result.shader.literals,
+            structural: job.result.shader.structural,
+          } : null,
+          audio: job.result.audio,
           warnings: job.result.warnings,
           entryCount: job.result.entryCount,
         }) : null,

@@ -506,27 +506,222 @@ function at(s, index) {
   return index >= 0 && index < s.length ? s[index] : '\0';
 }
 
+// ---------------------------------------------------------------------------
+// 结构性补丁：字面量补点解决不了的那几类固定毛病
+//
+// 这几条都来自实测会白屏的材质，规则本身是「先认结构、再动字符串」：
+// 认不出结构就原样返回，绝不会因为规则不匹配而把正常的着色器改坏。
+// ---------------------------------------------------------------------------
+
+/**
+ * 注释 / 字符串掩码：把注释和字符串内容换成空格（保留换行），
+ * 只用来判断「这段代码在不在真正的代码区」，不参与输出。
+ */
+function maskNonCode(source) {
+  const out = source.split('');
+  let i = 0;
+  const n = source.length;
+  while (i < n) {
+    const c = source[i];
+    if (c === '/' && source[i + 1] === '/') {
+      while (i < n && source[i] !== '\n' && source[i] !== '\r') { out[i] = ' '; i++; }
+      continue;
+    }
+    if (c === '/' && source[i + 1] === '*') {
+      out[i] = ' '; out[i + 1] = ' '; i += 2;
+      while (i < n && !(source[i] === '*' && source[i + 1] === '/')) {
+        if (source[i] !== '\n' && source[i] !== '\r') out[i] = ' ';
+        i++;
+      }
+      if (i < n) { out[i] = ' '; out[i + 1] = ' '; i += 2; }
+      continue;
+    }
+    if (c === '"') {
+      out[i] = ' '; i++;
+      while (i < n) {
+        if (source[i] === '\\' && i + 1 < n) { out[i] = ' '; out[i + 1] = ' '; i += 2; continue; }
+        if (source[i] === '"') { out[i] = ' '; i++; break; }
+        if (source[i] !== '\n' && source[i] !== '\r') out[i] = ' ';
+        i++;
+      }
+      continue;
+    }
+    i++;
+  }
+  return out.join('');
+}
+
+/** 只在代码区做正则替换（注释/字符串里的同名内容不动） */
+function replaceInCode(source, regex, replacement) {
+  const mask = maskNonCode(source);
+  const hits = [];
+  regex.lastIndex = 0;
+  let m;
+  while ((m = regex.exec(mask)) !== null) {
+    hits.push({ start: m.index, text: m[0] });
+    if (m[0].length === 0) regex.lastIndex++;
+  }
+  if (!hits.length) return { text: source, count: 0 };
+  let out = source;
+  // 从后往前替换，避免前面的替换改变后面的下标
+  for (let i = hits.length - 1; i >= 0; i--) {
+    const h = hits[i];
+    if (out.slice(h.start, h.start + h.text.length) !== h.text) continue; // 掩码与原文不一致（极少见），跳过
+    out = out.slice(0, h.start) + h.text.replace(regex, replacement) + out.slice(h.start + h.text.length);
+  }
+  return { text: out, count: hits.length };
+}
+
+/**
+ * effects/xray 材质：桌面版靠 g_PointerState 把「鼠标位置」换算成 UV 缩放，
+ * 手机端没有这个 uniform，UV 会整体偏移（表现为画面错位/糊）。
+ * 结构对不上就不动。
+ */
+function rewriteXray(source) {
+  if (!source.includes('v_PointerUV') || !source.includes('v_PointerScale')) return { text: source, count: 0 };
+  if (source.includes('uniform vec4 g_PointerState;')) return { text: source, count: 0 };
+  let out = source;
+  let count = 0;
+  const marker = 'varying float v_PointerScale;';
+  if (out.includes(marker)) {
+    out = out.replace(marker, `${marker}\nuniform vec4 g_PointerState;`);
+    count++;
+  } else {
+    return { text: source, count: 0 };
+  }
+  if (out.includes('unprojectedUVs += 0.5;') && !out.includes('g_PointerState.y')) {
+    out = out.replace(
+      'unprojectedUVs += 0.5;',
+      'unprojectedUVs *= CAST2(1.0 / max(0.00001, g_PointerState.y));\nunprojectedUVs += 0.5;',
+    );
+    count++;
+  }
+  return { text: out, count };
+}
+
+/**
+ * 音频频谱的「打包下标」写法：`g_AudioSpectrum64L[i / 4][i % 4]`。
+ * 移动端把它当两个维度索引会编译失败，官方导出改成 `g_AudioSpectrum64L[int(i)]`。
+ */
+const PACKED_SPECTRUM = /(g_AudioSpectrum64(?:Left|Right))\[([A-Za-z_][A-Za-z0-9_]*)\s*\/\s*4\]\[\2\s*%\s*4\]/g;
+function rewritePackedAudioSpectrum(source) {
+  const r = replaceInCode(source, PACKED_SPECTRUM, (match, name, index) => `${name}[int(${index})]`);
+  return { text: r.text, count: r.count };
+}
+
+/**
+ * 少数老材质用 vec4 装颜色又只返回 xyz，移动端严格类型下编译不过。
+ * 只有签名完全吻合时才改。
+ */
+function rewriteVec3ColorAccumulator(source) {
+  if (!source.includes('vec3 drawSence(') || !source.includes('return col;')) return { text: source, count: 0 };
+  let out = source;
+  let count = 0;
+  const pairs = [
+    ['vec4 col = vec4(0.,0.,0.,0.);', 'vec3 col = vec3(0.,0.,0.);'],
+    ['col = vec4(mix(u_userNewColor, col, step(0., sence)), 1.);', 'col = mix(u_userNewColor, col, step(0., sence));'],
+  ];
+  for (const [from, to] of pairs) {
+    if (out.includes(from)) { out = out.split(from).join(to); count++; }
+  }
+  return { text: out, count };
+}
+
+/**
+ * `#include "common_blur.h"` 的材质：本地声明了 `g_Texture0` 又让 include 再声明一次，
+ * 移动端编译器报重定义。这里把本地声明换成注释占位，再在 include 前补一份声明，
+ * 让声明位置固定下来（与官方导出的处理一致）。
+ */
+const HIDDEN_TEXTURE_DECL = 'uniform sampler2D g_Texture0; // {"hidden":true}';
+const HIDDEN_TEXTURE_MARK = ' // {"hidden":true}';
+const COMMON_BLUR_INCLUDE = '#include "common_blur.h"';
+function rewriteCommonBlurInclude(source) {
+  if (!source.includes(COMMON_BLUR_INCLUDE) || !source.includes(HIDDEN_TEXTURE_DECL)) {
+    return { text: source, count: 0 };
+  }
+  const newline = source.includes('\r\n') ? '\r\n' : '\n';
+  let out = source.replace(HIDDEN_TEXTURE_DECL, HIDDEN_TEXTURE_MARK);
+  if (!out.includes('uniform sampler2D g_Texture0;')) {
+    out = out.replace(COMMON_BLUR_INCLUDE, `uniform sampler2D g_Texture0;${newline}${COMMON_BLUR_INCLUDE}`);
+  }
+  return { text: out, count: 1 };
+}
+
+/**
+ * `sample` 在某些 GLSL ES 版本里是保留字，同名变量直接编译失败，官方导出改成 `_sample`。
+ * 只改代码区，注释和字符串里的原样保留。
+ */
+const SAMPLE_KEYWORD = /\bsample\b/g;
+function rewriteSampleKeyword(source) {
+  const r = replaceInCode(source, SAMPLE_KEYWORD, '_sample');
+  return { text: r.text, count: r.count };
+}
+
+/**
+ * 完整改写：字面量补点 + 结构性补丁。
+ * @param {string} source
+ * @param {{relPath?:string}} [opts]
+ */
+function rewriteAll(source, opts = {}) {
+  const base = patch(source);
+  let text = base.text;
+  let structural = 0;
+  const rel = String(opts.relPath || '').replace(/\\/g, '/').toLowerCase();
+
+  // xray 只对 effects/xray 生效，别把通用 shader 的 UV 也改了
+  if (rel.endsWith('effects/xray.vert') || rel.endsWith('effects/xray.frag')) {
+    const r = rewriteXray(text);
+    text = r.text; structural += r.count;
+  }
+  for (const fn of [rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword]) {
+    const r = fn(text);
+    text = r.text;
+    structural += r.count;
+  }
+  return {
+    text,
+    linesChanged: base.linesChanged,
+    literalsChanged: base.literalsChanged,
+    structural,
+  };
+}
+
 /**
  * 批量改写目录里的 .vert/.frag
+ * @param {{onLog?:Function, checkpoint?:object}} opts checkpoint 为 convertplan.Checkpoint
  */
 function patchDir(dir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const fs = require('fs');
   const path = require('path');
-  const stats = { total: 0, rewritten: 0, literals: 0 };
+  const { sha256Buffer } = require('./convertplan');
+  const checkpoint = opts.checkpoint || null;
+  const stats = { total: 0, rewritten: 0, literals: 0, structural: 0, failed: 0, resumed: 0 };
   const walk = (d) => {
     for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
       const abs = path.join(d, ent.name);
       if (ent.isDirectory()) { walk(abs); continue; }
       if (!isShaderPath(ent.name)) continue;
       stats.total++;
-      const src = fs.readFileSync(abs, 'utf8');
-      const r = patch(src);
-      if (r.literalsChanged > 0) {
-        fs.writeFileSync(abs, r.text);
-        stats.rewritten++;
-        stats.literals += r.literalsChanged;
-        onLog(`  [着色器] ${path.relative(dir, abs).split(path.sep).join('/')}: ${r.linesChanged} 行 / ${r.literalsChanged} 处补 .0`);
+      const rel = path.relative(dir, abs).split(path.sep).join('/');
+      try {
+        const src = fs.readFileSync(abs, 'utf8');
+        const shaIn = checkpoint ? sha256Buffer(Buffer.from(src, 'utf8')) : null;
+        if (checkpoint && checkpoint.isResolved(rel, shaIn)) { stats.resumed++; continue; }
+        const r = rewriteAll(src, { relPath: rel });
+        if (r.text !== src) {
+          fs.writeFileSync(abs, r.text);
+          if (checkpoint) checkpoint.record(rel, shaIn, sha256Buffer(Buffer.from(r.text, 'utf8')), 'shader');
+          stats.rewritten++;
+          stats.literals += r.literalsChanged;
+          stats.structural += r.structural;
+          onLog(`  [着色器] ${rel}: ${r.linesChanged} 行 / ${r.literalsChanged} 处补 .0${r.structural ? `，${r.structural} 处结构性修正` : ''}`);
+        } else if (checkpoint) {
+          checkpoint.record(rel, shaIn, shaIn, 'shader');
+        }
+      } catch (e) {
+        stats.failed++;
+        onLog(`  [着色器] ${rel}: 改写失败，保留原文件（${e.message}）`);
       }
     }
   };
@@ -534,4 +729,4 @@ function patchDir(dir, opts = {}) {
   return stats;
 }
 
-module.exports = { patch, patchDir, isShaderPath };
+module.exports = { patch, patchDir, isShaderPath, rewriteAll, maskNonCode, rewriteXray, rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword };

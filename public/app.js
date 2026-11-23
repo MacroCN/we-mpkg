@@ -12,6 +12,8 @@ const I18N = {
     downloadPack: '下载并打包为 MPKG', steamPage: 'Steam 页面', saveMpkg: '保存 .mpkg', importWe: '导入壁纸引擎',
     needLogin: '先登录再下载', notLogged: '未登录，点右上角 ⚙ 登录',
     rawOnly: '只下载原始文件（不打包 mpkg）',
+    quality: '画质', qHigh: '高画质（原尺寸）', qBalanced: '均衡（1/2 尺寸）', qSmooth: '流畅（1/4 尺寸）',
+    keepAudio: '保留壁纸自带音频',
     rawTip: '勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。',
     exitApp: '退出程序（关闭后台服务）',
     exitConfirm: '确定退出？后台服务会被关闭，本页随即失效。',
@@ -49,6 +51,8 @@ const I18N = {
     downloadPack: 'Download & pack MPKG', steamPage: 'Steam page', saveMpkg: 'Save .mpkg', importWe: 'Import to Wallpaper Engine',
     needLogin: 'Sign in first', notLogged: 'Not signed in — tap ⚙ to sign in',
     rawOnly: 'Download raw files only (no mpkg)',
+    quality: 'Quality', qHigh: 'High (native size)', qBalanced: 'Balanced (1/2)', qSmooth: 'Smooth (1/4)',
+    keepAudio: 'Keep wallpaper audio',
     rawTip: 'Downloads the original files into "download dir/js-<id>" (scene.pkg, mp4, …) untouched — handy for your own conversion or other tools.',
     exitApp: 'Quit (stop background service)',
     exitConfirm: 'Quit now? The background service will be stopped and this page will stop working.',
@@ -433,7 +437,13 @@ async function startDownload() {
     const { jobId } = await api('/api/jobs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: cur.id, title: cur.seed.title, raw: state.rawOnly }),
+      body: JSON.stringify({
+        id: cur.id,
+        title: cur.seed.title,
+        raw: state.rawOnly,
+        preset: ($('d-quality') || {}).value || 'high',
+        preserveAudio: !!($('d-audio') && $('d-audio').checked),
+      }),
     });
     pollJob(jobId);
   } catch (e) {

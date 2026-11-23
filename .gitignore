@@ -45,3 +45,7 @@ local.properties
 # 测试脚本生成的样例图（含第三方壁纸素材，不入库）
 tools/_sample.png
 
+
+# ---- 签名材料（绝对不要提交）----
+*.jks
+*.keystore
