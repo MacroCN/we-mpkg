@@ -14,6 +14,7 @@ const I18N = {
     rawOnly: '只下载原始文件（不打包 mpkg）',
     hub: '下载中心', openHub: '在下载中心查看（独立进程，关页面也不中断）', cancelTask: '取消任务',
     hubHint: '独立进程运行，关掉本页面任务也会继续',
+    openSetup: '启动页：本地 / 远程 / 导入凭据', setupHint: '想切换本地 / 远程服务，或粘贴电脑上的凭据导入，点这个按钮回启动页（页面状态不会丢）。',
     quality: '画质', qHigh: '高画质（原尺寸）', qBalanced: '均衡（1/2 尺寸）', qSmooth: '流畅（1/4 尺寸）',
     keepAudio: '保留壁纸自带音频',
     rawTip: '勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。',
@@ -55,6 +56,7 @@ const I18N = {
     rawOnly: 'Download raw files only (no mpkg)',
     hub: 'Downloads', openHub: 'Open download center (separate process, closing this page won\'t stop it)',
     cancelTask: 'Cancel task', hubHint: 'runs in a separate process, safe to close this page',
+    openSetup: 'Launcher: local / remote / import credential', setupHint: 'Use this to switch local / remote service or paste a desktop credential; page state is kept.',
     quality: 'Quality', qHigh: 'High (native size)', qBalanced: 'Balanced (1/2)', qSmooth: 'Smooth (1/4)',
     keepAudio: 'Keep wallpaper audio',
     rawTip: 'Downloads the original files into "download dir/js-<id>" (scene.pkg, mp4, …) untouched — handy for your own conversion or other tools.',
@@ -601,6 +603,10 @@ async function cancelCurrentJob() {
 // ---------------- 设置 / 登录 ----------------
 async function openSettings() {
   $('modal').classList.remove('hidden');
+  // 安卓壳里才有「回启动页」入口（本地/远程、导入凭据都在那边）
+  const hasSetup = !!(window.Android && typeof window.Android.openSetup === 'function');
+  if ($('setupRow')) $('setupRow').classList.toggle('hidden', !hasSetup);
+  if ($('setupHint')) $('setupHint').classList.toggle('hidden', !hasSetup);
   try {
     const s = await api('/api/settings');
     $('outputDir').value = s.outputDir || '';
@@ -807,6 +813,14 @@ function wire() {
     applyLang();
   };
   $('settingsBtn').onclick = openSettings;
+  if ($('openSetupBtn')) {
+    $('openSetupBtn').onclick = () => {
+      if (window.Android && typeof window.Android.openSetup === 'function') {
+        $('modal').classList.add('hidden');
+        window.Android.openSetup();
+      }
+    };
+  }
   $('modalClose').onclick = () => {
     $('modal').classList.add('hidden');
     if (state.loginPoll) clearTimeout(state.loginPoll);

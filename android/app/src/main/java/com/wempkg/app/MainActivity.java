@@ -105,6 +105,12 @@ public class MainActivity extends Activity {
             public void setDownloadsOpen(boolean open) {
                 downloadsOpen = open;
             }
+
+            /** 从网页里回到启动页（本地/远程切换、导入凭据、退出），不销毁 WebView */
+            @android.webkit.JavascriptInterface
+            public void openSetup() {
+                showSetupPanel();
+            }
         }, "Android");
 
         editRemote.setText(getPreferences(MODE_PRIVATE).getString("remote", ""));
@@ -159,7 +165,19 @@ public class MainActivity extends Activity {
         if (web.restoreState(ws) == null) return false;
         setupPanel.setVisibility(View.GONE);
         web.setVisibility(View.VISIBLE);
+        loadedUrl = web.getUrl();     // 回来时按当前地址认，避免重复加载
         return true;
+    }
+
+    /** 切到启动页：隐藏 WebView 但不销毁，回来不重载 */
+    private void showSetupPanel() {
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                setupPanel.setVisibility(View.VISIBLE);
+                web.setVisibility(View.GONE);
+                status("启动页：本地 / 远程 / 导入凭据 / 退出都在这里");
+            }
+        });
     }
 
     private void startLocal() {
@@ -419,13 +437,22 @@ public class MainActivity extends Activity {
         return sb.toString().trim();
     }
 
+    /** 当前 WebView 已加载的地址：同地址再「切回网页」时只显示，不重新加载 */
+    private String loadedUrl = null;
+
     private void showWeb(final String url) {
         runOnUiThread(new Runnable() {
             @Override
             public void run() {
                 setupPanel.setVisibility(View.GONE);
                 web.setVisibility(View.VISIBLE);
+                // 从启动页/设置页切回来时不要 reload：页面状态（列表、滚动位置）原样保留
+                if (url.equals(loadedUrl)) {
+                    status("已回到: " + url);
+                    return;
+                }
                 web.loadUrl(url);
+                loadedUrl = url;
                 status("已连接: " + url);
             }
         });
@@ -468,7 +495,7 @@ public class MainActivity extends Activity {
                     @Override public void onReceiveValue(String consumed) {
                         if ("true".equals(consumed)) return;   // 网页自己关掉了抽屉/弹窗
                         if (web.canGoBack()) web.goBack();
-                        else moveTaskToBack(true);            // 退到后台，保活 Node，不退出
+                        else showSetupPanel();               // 回启动页（可导入凭据 / 切本地远程）
                     }
                 });
             return;
