@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.2.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
-| `we-mpkg-android-2.0.2.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
-| `we-mpkg-src-2.0.2.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.0.3.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
+| `we-mpkg-android-2.0.3.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
+| `we-mpkg-src-2.0.3.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.0.2.zip
+解压 we-mpkg-portable-2.0.3.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
