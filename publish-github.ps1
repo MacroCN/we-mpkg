@@ -106,10 +106,9 @@ if (-not $repoExists) {
   }
 }
 
-# ---------- 3. 推代码（token 只放在这次命令的请求头里）----------
+# ---------- 3. 推代码（token 只出现在本次命令的临时 URL 里）----------
 Say "==> 推送 main 与 tag $Tag"
 $remoteUrl = "https://github.com/$Owner/$Repo.git"
-$basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("x-access-token:$Token"))
 
 # 已存在 origin 就先删掉（没有时 git 会报错，用 try 吃掉）
 if ((& $git remote) -contains 'origin') {
@@ -118,12 +117,23 @@ if ((& $git remote) -contains 'origin') {
 & $git remote add origin $remoteUrl
 
 # git 会把进度打到 stderr，用 Stop 会误判成失败；这一段只看退出码
+# 认证走「URL 里带 x-access-token」：实测 http.extraheader 这套在国内网络下
+# 会被拒（Invalid username or token），换 URL 方式才稳定；token 只存在于本次命令的
+# 临时 URL 里，不会写进 .git/config（origin 仍是干净的 https 地址）
 $ErrorActionPreference = 'Continue'
-& $git -c "http.extraheader=AUTHORIZATION: basic $basic" push -u origin main 2>&1 | Select-Object -Last 3
+$authedUrl = "https://x-access-token:$Token@github.com/$Owner/$Repo.git"
+& $git push $authedUrl main 2>&1 | Select-Object -Last 3
 if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = 'Stop'; Die "推送失败（可能是 token 权限不足或网络不通）" }
 
-& $git -c "http.extraheader=AUTHORIZATION: basic $basic" push origin $Tag 2>&1 | Select-Object -Last 2
+& $git push $authedUrl "refs/tags/$Tag" 2>&1 | Select-Object -Last 2
 if ($LASTEXITCODE -ne 0) { Say "⚠ tag 推送失败（可能已存在），继续" }
+
+# 推送走的是临时 URL，顺手把本地分支的 upstream 补成 origin/main
+$sha = (& $git rev-parse HEAD).Trim()
+& $git update-ref refs/remotes/origin/main $sha 2>$null
+& $git config branch.main.remote origin 2>$null
+& $git config branch.main.merge refs/heads/main 2>$null
+$ErrorActionPreference = 'Stop'
 
 Say "    代码地址: https://github.com/$Owner/$Repo"
 
