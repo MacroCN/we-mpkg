@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { config, ensureDirs } = require('./config');
+const cdn = require('./cdn');
 
 const APP_ID = 431960;
 const DEPOT_ID = 431960;
@@ -256,16 +257,14 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
     return { resumed: totalDone > 0, bytes: totalDone };
   }
 
-  const allServers = ((await client.getContentServers(APP_ID)).servers || []);
+  // 按测速排序拿节点（开机那次测速的结果 + 运行时失败降级都在 src/cdn.js 里）
+  const allServers = opts.servers && opts.servers.length
+    ? opts.servers
+    : await cdn.getOrderedServers(client, { onLog });
   if (!allServers.length) { fs.closeSync(fd); throw new Error('拿不到 Steam 内容服务器列表'); }
-  // 某台 CDN 节点解析不了（getaddrinfo ENOTFOUND 之类）就从候选里剔除，
-  // 免得 4 个 worker 一直随机撞到那台死节点把整份文件拖失败。
-  let servers = allServers.slice();
-  const dropServer = (s) => {
-    if (servers.length <= 1) return;
-    servers = servers.filter((x) => x !== s);
-    onLog(`节点 ${s.Host || '?'} 不可用，已剔除（剩 ${servers.length} 个）`);
-  };
+  const picker = new cdn.ServerPicker(allServers);
+  // 上一轮遗留的 keep-alive 连接可能已经被对端静默丢弃，先清掉，免得首个请求撞死
+  cdn.releaseIdleSockets();
 
   let saveTimer = null;
   let savePending = false;
@@ -290,7 +289,8 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
   const oneChunk = async (c) => {
     let lastErr = null;
     for (let attempt = 0; attempt < 8; attempt++) {
-      const server = servers[Math.floor(Math.random() * servers.length)];
+      const server = picker.next();
+      if (!server) break;
       const res = await new Promise((resolve) => {
         client.downloadChunk(APP_ID, DEPOT_ID, c.sha, server, (err, data) => resolve({ err, data }));
       });
@@ -303,10 +303,11 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
         return;
       }
       lastErr = res.err;
-      // 这台节点连不上（DNS/超时）→ 换一台，并把它从候选里剔掉
-      if (res.err && /ENOTFOUND|ECONNREFUSED|ETIMEDOUT|EHOSTUNREACH/i.test(res.err.message || '')) {
-        dropServer(server);
-      }
+      // 任何失败（含 Request timed out）都算这台节点这一轮不行：换排序里的下一台，
+      // 而不是对着同一个节点重试到整份文件失败。
+      onLog(`分块重试：${server.Host || '?'} 失败（${(res.err && res.err.message) || '无数据'}），换下一台节点`);
+      picker.fail(server);
+      if (!picker.alive().length) await new Promise((r) => setTimeout(r, 300));
     }
     throw new Error(`分块 ${c.sha} 下载失败: ${lastErr ? lastErr.message : '未知错误'}`);
   };
@@ -363,6 +364,45 @@ function sha1File(file) {
 }
 
 /**
+ * 从指定节点取 manifest（steam-user 的 getManifest 内部会随机挑节点，
+ * 这里临时把 getContentServers 固定成单台，就能强制它走我们选好的线路）。
+ */
+async function getManifestFrom(client, manifestId, server) {
+  const orig = client.getContentServers;
+  client.getContentServers = async () => ({ servers: [server] });
+  try {
+    return await invoke(client, 'getManifest', APP_ID, DEPOT_ID, String(manifestId), 'public');
+  } finally {
+    client.getContentServers = orig;
+  }
+}
+
+/**
+ * 取 manifest 时按测速顺序逐台重试：steam-user 默认只有一次机会、10 秒硬超时，
+ * 国内链路一次抖动就整条任务判死（就是「第一个下载完后面全报 Request timed out」的病根）。
+ */
+async function getManifestWithFailover(client, manifestId, orderedServers, { onLog = () => {} } = {}) {
+  const picker = new cdn.ServerPicker(orderedServers);
+  const attempts = Math.min(4, Math.max(2, orderedServers.length));
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    const server = picker.next();
+    if (!server) break;
+    const t0 = Date.now();
+    try {
+      const m = await getManifestFrom(client, manifestId, server);
+      onLog(`manifest 已取回（${server.Host}，${Date.now() - t0}ms）`);
+      return m;
+    } catch (err) {
+      lastErr = err;
+      onLog(`manifest 节点 ${server.Host} 失败（${Date.now() - t0}ms）：${err.message}，按测速顺序换下一台`);
+      picker.fail(server);
+    }
+  }
+  throw lastErr || new Error('取 manifest 失败：没有可用节点');
+}
+
+/**
  * 下载一个创意工坊条目到目录。
  */
 async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog = () => {}, onProgress = () => {} }) {
@@ -381,10 +421,13 @@ async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog
     if (!manifestId) throw new Error('条目没有内容 manifest（可能不是标准工坊物品）');
     onLog(`内容 manifest: ${manifestId}`);
 
+    // 按测速排序拿节点；manifest / 分块都走同一份顺序
+    const orderedServers = await cdn.getOrderedServers(client, { onLog });
+    if (!orderedServers.length) throw new Error('拿不到 Steam 内容服务器列表');
+
     let manifest;
     try {
-      // invoke() 已把单返回值拆出来，这里直接就是 manifest 对象
-      manifest = await invoke(client, 'getManifest', APP_ID, DEPOT_ID, String(manifestId), 'public');
+      manifest = await getManifestWithFailover(client, manifestId, orderedServers, { onLog });
     } catch (err) {
       throw new Error(`取内容 manifest 失败（账号是否拥有 Wallpaper Engine 431960？）: ${err.message}`);
     }
@@ -424,7 +467,7 @@ async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog
       onLog(`下载 ${rel} (${f.size} B)…`);
       let r;
       try {
-        r = await downloadFileResumable(client, f, target, { onLog, onProgress: progressTo(rel) });
+        r = await downloadFileResumable(client, f, target, { onLog, onProgress: progressTo(rel), servers: orderedServers });
       } catch (e) {
         throw new Error(`下载 ${rel} 失败: ${e.message}`);
       }
@@ -440,6 +483,8 @@ async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog
     onLog(`下载完成: ${written.length} 个文件（跳过 ${skipped.length} 个） → ${root}`);
     return { dir: root, files: written, skipped, title: d.title, fileSize: Number(d.file_size) || 0 };
   } finally {
+    // 别把 Valve CDN 的 keep-alive 连接留到下一次任务：对端静默丢掉的连接被复用就会挂 10 秒
+    cdn.releaseIdleSockets();
     if (ownsClient) { try { client.logOff(); } catch { /* ignore */ } }
   }
 }

@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.3.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
-| `we-mpkg-android-2.0.3.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
-| `we-mpkg-src-2.0.3.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.0.4.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
+| `we-mpkg-android-2.0.4.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
+| `we-mpkg-src-2.0.4.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -81,6 +81,28 @@ node bin\wempkg.js serve --port 3090
 | `scene` | 可用（DXT/直通图解码成 RGBA8 并按 LZ4 压缩、着色器做移动端改写） |
 | `web` | 可用（渲染成视频封装，含音频轨与音频响应频谱） |
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
+
+---
+
+## 2.0.4 改进（下载链路）
+
+针对「第一个条目下完之后，后面每条都报 `Request timed out`」：根因不是代理，而是**取 manifest 这一步**——steam-user 随机挑一台 CDN、10 秒硬超时、失败不换源；而国内到这些边缘节点的建连抖动很常见（实测同一主机首次连接经常 10s+，第二次只要 0.2s）。第一条能成功是因为分块下载对每个 chunk 有 8 次重试，把抖动吃掉了；manifest 只有一次机会，所以第一条之后的每一条都死在 10 秒上。
+
+这一版把下载链路按「官方客户端的方式」重做了一遍：
+
+| # | 改动 | 说明 |
+|---|---|---|
+| 1 | **按客户端出口 IP 定地域优先级** | 启动时用 IP 归属接口（直连，不走代理）判断所在国家；国内用户优先阿里 / Edgenext 的国内边缘 + 港台集群，其次日新韩，欧美远端排最后。拿不到 IP 时可用 `WE_MPKG_CDN_COUNTRY=CN` 手动指定 |
+| 2 | **每次启动测一遍节点延迟** | `GetServersForSteamPipe` 返回的全部节点（十几到二十台）并发测「TCP+TLS+首字节」，抖动大的补测一次取更小值；结果按 tier + 延迟排序落 `.cache/cdn-ranking.json`，下载中心进程直接复用 |
+| 3 | **界面里能看能测** | 设置页新增「下载节点」：显示出口地区、每台节点的延迟/地域/可用状态，一个「测速」按钮可随时重测（测速复用下载中心的 CM 连接，不会和正在跑的任务抢会话） |
+| 4 | **失败按顺序换点，不再死磕一台** | 分块下载改成严格按测速顺序取节点，任何失败（含 `Request timed out`）都记为这台不可用并换下一台，全部失败后重置再来；manifest 也一样，最多按顺序试 4 台 |
+| 5 | **不再留僵尸连接** | steam-user 的 CDN 请求超时后只 reject、不 abort；现在给 CDN 请求加 15 秒空闲兜底（比它自己的 10 秒晚，只关掉它已经放弃的请求），每个任务结束时再清一遍全局 agent 的闲置连接 |
+
+实测（同一条 CM 连接连下两个条目，网络正在抖动的情况下）：
+
+- 第一条：manifest 依次试 `alibaba`（10.0s 超时）→ `fastly`（10.0s 超时）→ `cache12-hkg1`（1.3s 成功），分块阶段多个节点超时后自动换到可用节点，**17.6 MB 下载完成**。
+- 第二条（此前必挂的《出包王女-梦梦》）：manifest 直接 1.5s 取回，分块同样换点后**31.8 MB 下载完成**，没有再出现「整条任务被一次超时判死」。
+- 命令行：`run.bat cdn --test` 立即重测并打印排序；不带 `--test` 显示上次结果。
 
 ---
 
@@ -195,6 +217,8 @@ run.bat get <id>                 下载 + 打包成 .mpkg（一步到位）
 run.bat fetch <id>               只下载原始文件
 run.bat pack <目录|.pkg>          把本地内容打成 .mpkg（支持 --quality / --keep-audio / --resume / --video-magic）
 run.bat inspect <目录|容器>       查看内部结构
+run.bat cdn                      查看上次的 CDN 节点测速结果
+run.bat cdn --test               立即重测节点延迟并按顺序打印
 run.bat steamjs login|status|logout|token|webcookie
 ```
 
@@ -213,6 +237,7 @@ run.bat steamjs login|status|logout|token|webcookie
 | `WE_MPKG_DOWNLOAD_DIR` | 下载缓存目录 | 程序目录 `downloads/` |
 | `WE_MPKG_KEEP_DOWNLOAD` | `1` = 打包后保留缓存 | 打包后清理 |
 | `WE_MPKG_TIMEOUT_MS` | 单条下载超时 | `900000`（15 分钟） |
+| `WE_MPKG_CDN_COUNTRY` | 强制指定测速的地域优先级（`CN` / `HK` / `US` …），IP 归属接口不可用时用 | 按出口 IP 自动判断 |
 | `STEAM_API_KEY` | 走 `IPublishedFileService/QueryFiles`（每页 100 条，上限更高） | 空 |
 | `STEAM_USERNAME` / `STEAM_PASSWORD` | SteamCMD 引擎的账号 | 空 |
 | `PORT` | 网页端口 | `3090` |

@@ -1081,6 +1081,70 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     await assert.rejects(() => packer.packFromPath(f, { onLog: () => {} }), /magic|长度/);
   });
 
+  console.log('\n[17] CDN 节点分类 / 排序 / 失败换点');
+  const cdn = require('../src/cdn');
+
+  test('主机名分类：阿里、Edgenext、Akamai、Fastly、就近集群', () => {
+    const ali = cdn.classifyHost('alibaba.cdn.steampipe.steamcontent.com');
+    assert.strictEqual(ali.provider, 'alibaba');
+    assert.strictEqual(ali.domestic, true, '阿里 CDN 应视为国内节点');
+    const edge = cdn.classifyHost('edgenext.cdn.steampipe.steamcontent.com');
+    assert.strictEqual(edge.domestic, true);
+    const hkg = cdn.classifyHost('cache10-hkg1.steamcontent.com');
+    assert.strictEqual(hkg.cluster, 'hkg');
+    assert.strictEqual(hkg.region, 'hk');
+    assert.strictEqual(hkg.domestic, false);
+    const tpe = cdn.classifyHost('cache3-tpe-hnet.steamcontent.com');
+    assert.strictEqual(tpe.cluster, 'tpe');
+    const fastly = cdn.classifyHost('fastly.cdn.steampipe.steamcontent.com');
+    assert.strictEqual(fastly.provider, 'fastly');
+    const akamai = cdn.classifyHost('steampipe.akamaized.net');
+    assert.strictEqual(akamai.provider, 'akamai');
+  });
+
+  test('国内客户端的地域优先级：国内 > 港台 > 日新韩 > 远端', () => {
+    const mk = (host) => ({ Host: host });
+    assert.strictEqual(cdn.tierOf(mk('alibaba.cdn.steampipe.steamcontent.com'), 'CN'), 0);
+    assert.strictEqual(cdn.tierOf(mk('cache10-hkg1.steamcontent.com'), 'CN'), 1);
+    assert.strictEqual(cdn.tierOf(mk('cache3-tpe-hnet.steamcontent.com'), 'CN'), 1);
+    assert.strictEqual(cdn.tierOf(mk('cache8-tyo3.steamcontent.com'), 'CN'), 2);
+    assert.strictEqual(cdn.tierOf(mk('fastly.cdn.steampipe.steamcontent.com'), 'CN'), 3);
+    // 海外客户端：本国集群优先，国内节点不再加分
+    assert.strictEqual(cdn.tierOf(mk('cache5-lax1.steamcontent.com'), 'US'), 0);
+    assert.ok(cdn.tierOf(mk('alibaba.cdn.steampipe.steamcontent.com'), 'US') > 0);
+  });
+
+  test('排序：同 tier 比延迟，慢太多会被更近的节点压过，失败垫底', () => {
+    const results = [
+      { server: { Host: 'alibaba.cdn.steampipe.steamcontent.com' }, ok: true, latencyMs: 9000 },
+      { server: { Host: 'cache10-hkg1.steamcontent.com' }, ok: true, latencyMs: 600 },
+      { server: { Host: 'fastly.cdn.steampipe.steamcontent.com' }, ok: false, error: 'timeout' },
+    ];
+    const ranked = cdn.rankResults(results, 'CN');
+    assert.strictEqual(ranked[ranked.length - 1].host, 'fastly.cdn.steampipe.steamcontent.com', '失败节点排最后');
+    assert.strictEqual(ranked[0].host, 'cache10-hkg1.steamcontent.com', '9 秒的国内节点不该压过 0.6 秒的香港节点');
+    // 国内节点足够快时优先
+    const ranked2 = cdn.rankResults([
+      { server: { Host: 'alibaba.cdn.steampipe.steamcontent.com' }, ok: true, latencyMs: 300 },
+      { server: { Host: 'cache10-hkg1.steamcontent.com' }, ok: true, latencyMs: 600 },
+    ], 'CN');
+    assert.strictEqual(ranked2[0].host, 'alibaba.cdn.steampipe.steamcontent.com');
+  });
+
+  test('失败换点：按排序依次换，全部失败后自动重置再来一轮', () => {
+    const a = { Host: 'a' };
+    const b = { Host: 'b' };
+    const picker = new cdn.ServerPicker([a, b]);
+    assert.strictEqual(picker.next(), a);
+    picker.fail(a);
+    assert.strictEqual(picker.next(), b, 'a 失败后应换 b');
+    picker.fail(b);
+    assert.strictEqual(picker.alive().length, 0);
+    const again = picker.next();
+    assert.ok(again === a || again === b, '全部判死后要能重置再试');
+    assert.strictEqual(picker.rounds, 1);
+  });
+
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);
   if (failed) {
     for (const f of failures) console.error(`\n失败: ${f.name}\n${f.error.stack}`);

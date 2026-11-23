@@ -12,6 +12,65 @@ const workshop = require('./workshop');
 const packer = require('./pack');
 const packjob = require('./packjob');
 const dlhub = require('./dlhub');
+const cdn = require('./cdn');
+
+/** CDN 测速状态（页面轮询用） */
+let cdnTestState = { state: 'idle', startedAt: 0, finishedAt: 0, error: null, progress: null };
+
+/** 下载中心在跑就直接问它要（复用它的 CM 连接），否则本进程临时连一次 */
+async function runCdnTest() {
+  if (cdnTestState.state === 'running') return cdnTestState;
+  const steamjs = require('./steamjs');
+  const token = steamjs.readToken();
+  if (!token || !token.refreshToken) throw new Error('还没有登录 Steam，无法测速');
+  cdnTestState = { state: 'running', startedAt: Date.now(), finishedAt: 0, error: null, progress: null };
+  try {
+    let data = null;
+    const alive = await dlhub.pingHub(HUB_PORT, 800);
+    if (alive) {
+      if ((alive.running || 0) > 0) throw new Error('有下载任务正在跑，等它结束再测速（同一个账号不能同时开两条 CM 会话）');
+      try {
+        const r = await dlhub.hubJson(HUB_PORT, 'POST', '/api/hub/cdn/test', {}, 120000);
+        if (r.status === 200 && r.body && r.body.ok !== false) data = r.body;
+        // 404 = 老版本下载中心还没有这个接口，下面退回本进程测
+      } catch { /* 退回本进程 */ }
+    }
+    if (!data) {
+      const client = await steamjs.connect(token.refreshToken, { onLog: () => {} });
+      try {
+        data = await cdn.testRanking(client, {
+          onProgress: (p) => { cdnTestState.progress = p; },
+        });
+      } finally {
+        try { client.logOff(); } catch { /* ignore */ }
+        cdn.releaseIdleSockets();
+      }
+    }
+    cdnTestState = {
+      state: 'done',
+      startedAt: cdnTestState.startedAt,
+      finishedAt: Date.now(),
+      error: null,
+      progress: null,
+      testedAt: data.testedAt,
+      geo: data.geo,
+      servers: data.servers,
+    };
+    return cdnTestState;
+  } catch (e) {
+    cdnTestState = { state: 'error', startedAt: cdnTestState.startedAt, finishedAt: Date.now(), error: e.message, progress: null };
+    throw e;
+  }
+}
+
+/** 当前的节点排序：优先内存测速结果，其次磁盘缓存 */
+function currentRanking() {
+  if (cdnTestState.servers) {
+    return { testedAt: cdnTestState.testedAt, geo: cdnTestState.geo, servers: cdnTestState.servers };
+  }
+  const cached = cdn.loadCached();
+  return cached ? { testedAt: cached.testedAt, geo: cached.geo, servers: cached.servers } : { testedAt: 0, geo: null, servers: [] };
+}
 
 /** 手机端登录会话状态（/api/login/*） */
 let pendingLogin = null;
@@ -245,6 +304,24 @@ const server = http.createServer(async (req, res) => {
           : '还没有登录 Steam：请点右上角 ⚙ 填账号密码登录，或导入 Steam 凭据（get-token.bat 得到的那段 Base64）。',
       });
     }
+    if (pn === '/api/cdn/nodes') {
+      const rank = currentRanking();
+      return json(res, 200, {
+        ...rank,
+        state: cdnTestState.state,
+        error: cdnTestState.error,
+        progress: cdnTestState.progress,
+      });
+    }
+    if (pn === '/api/cdn/test' && req.method === 'POST') {
+      if (cdnTestState.state === 'running') return json(res, 202, { ok: true, running: true });
+      try {
+        const st = await runCdnTest();
+        return json(res, 200, { ok: true, ...st });
+      } catch (e) {
+        return json(res, 500, { ok: false, error: e.message });
+      }
+    }
     if (pn === '/api/browse') {
       const tags = (u.searchParams.get('tags') || '').split(',').map((s) => s.trim()).filter(Boolean);
       // groups：[{ name, tags }]，官方语义的载体（组内或 / 组间与 / 空组不过滤）
@@ -455,6 +532,26 @@ function start(port = config.PORT) {
       }
     } catch { /* 保持匿名态 */ }
   })();
+  // 每次启动（打开客户端）测一遍 CDN 节点延迟，结果落 .cache/cdn-ranking.json 给下载层用
+  (async () => {
+    try {
+      const steamjs = require('./steamjs');
+      const token = steamjs.readToken();
+      if (!token || !token.refreshToken) return;
+      const cached = cdn.loadCached();
+      // 两小时内测过就不重复测（避免反复重启也一直占带宽）
+      if (cached && Date.now() - cached.testedAt < 2 * 3600 * 1000) {
+        console.log(`  CDN 节点: 使用 ${Math.round((Date.now() - cached.testedAt) / 60000)} 分钟前的测速结果`);
+        return;
+      }
+      console.log('  CDN 节点: 开始启动测速…');
+      const st = await runCdnTest();
+      console.log(`  CDN 节点: 测速完成（${(st.servers || []).filter((s) => s.ok).length}/${(st.servers || []).length} 可用）`);
+    } catch (e) {
+      console.log(`  CDN 节点: 测速失败 ${e.message}`);
+    }
+  })();
+
   return new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(port, '0.0.0.0', () => {

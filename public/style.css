@@ -310,6 +310,21 @@ main { padding: 10px 14px 24px; }
 .check { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 13px; color: var(--text); cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent, #35c3b4); margin: 0; }
 .hint { font-size: 12px; color: var(--dim); margin: 8px 0 0; word-break: break-all; }
+
+/* CDN 节点测速 */
+.cdn-head { align-items: center; justify-content: space-between; }
+.cdn-head strong { font-size: 13px; }
+.cdn-head button { padding: 6px 12px; font-size: 12px; }
+.cdn-list { margin: 8px 0 0; max-height: 190px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; }
+.cdn-row { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; border-top: 1px solid var(--line); }
+.cdn-row:first-child { border-top: none; }
+.cdn-row .cdn-host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.cdn-row .cdn-tag { flex: none; color: var(--dim); }
+.cdn-row .cdn-ms { flex: none; width: 64px; text-align: right; color: var(--dim); font-variant-numeric: tabular-nums; }
+.cdn-row.bad { opacity: .55; }
+.cdn-row.bad .cdn-ms { color: #e05a5a; }
+.cdn-empty { padding: 10px; font-size: 12px; color: var(--dim); }
+
 hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 
 .foot {

@@ -483,6 +483,28 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
         if (!job || !job.result || !job.result.outFile) { res.writeHead(404); return res.end('Not Found'); }
         return sendFile(res, job.result.outFile);
       }
+      if (pn === '/api/hub/cdn' && req.method === 'GET') {
+        const cdn = require('./cdn');
+        const cached = cdn.loadCached();
+        return json(res, 200, {
+          ok: true,
+          testedAt: cached ? cached.testedAt : 0,
+          geo: cached ? cached.geo : null,
+          servers: cached ? cached.servers : [],
+        });
+      }
+      // 复用下载中心这条 CM 连接测速，避免同一 refresh token 同时开两条会话
+      if (pn === '/api/hub/cdn/test' && req.method === 'POST') {
+        const cdn = require('./cdn');
+        const packjob = require('./packjob');
+        const client = await packjob.getSharedClient(() => {});
+        try {
+          const data = await cdn.testRanking(client, { onLog: () => {} });
+          return json(res, 200, { ok: true, testedAt: data.testedAt, geo: data.geo, servers: data.servers });
+        } finally {
+          cdn.releaseIdleSockets();
+        }
+      }
       if (pn === '/api/hub/outputs') {
         ensureDirs();
         const files = fs.readdirSync(config.OUTPUT_DIR)

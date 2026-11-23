@@ -80,6 +80,7 @@ async function downloadWithEngine(itemId, opts = {}) {
   onLog(`[engine] ${engine}`);
   if (engine === 'steamjs') {
     const steamjs = require('./steamjs');
+    const cdn = require('./cdn');
     const token = steamjs.readToken();
     if (!token || !token.refreshToken) throw new Error(noLoginMessage());
     const outDir = path.join(config.DOWNLOAD_DIR, `js-${itemId}`);
@@ -88,9 +89,11 @@ async function downloadWithEngine(itemId, opts = {}) {
       const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress });
       return { ok: true, dir: r.dir };
     } catch (e) {
-      // 连接被 Steam 踢掉/过期时，下次重试用新连接
-      if (/403|HTTP error|Not Logged On|not logged on|disconnected/i.test(e.message || '')) resetSharedClient();
+      // 连接被 Steam 踢掉/过期/超时类故障时，下次重试用新连接
+      if (/403|HTTP error|Not Logged On|not logged on|disconnected|timed out|ETIMEDOUT|timeout/i.test(e.message || '')) resetSharedClient();
       throw e;
+    } finally {
+      cdn.releaseIdleSockets();
     }
   }
   return steamcmd.downloadWorkshopItem({ id: itemId, onLog });

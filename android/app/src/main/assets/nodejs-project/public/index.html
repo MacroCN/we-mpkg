@@ -145,6 +145,16 @@
       </div>
       <p id="dirHint" class="hint"></p>
 
+      <hr />
+
+      <div class="row cdn-head">
+        <strong data-i18n="cdnTitle">下载节点</strong>
+        <button id="cdnTest" class="ghost" data-i18n="cdnTest">测速</button>
+      </div>
+      <p id="cdnHint" class="hint" data-i18n="cdnHint">启动时会自动测一次；下载按这里的延迟顺序走，节点失败自动换下一台。</p>
+      <p id="cdnGeo" class="hint"></p>
+      <div id="cdnList" class="cdn-list"></div>
+
       <label class="check">
         <input id="rawOnly" type="checkbox" />
         <span data-i18n="rawOnly">只下载原始文件（不打包 mpkg）</span>

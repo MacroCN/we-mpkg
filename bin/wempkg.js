@@ -397,6 +397,40 @@ function ask(question) {
   });
 }
 
+async function cmdCdn(args) {
+  const steamjs = require('../src/steamjs');
+  const cdn = require('../src/cdn');
+  const show = (data) => {
+    const geo = data.geo || {};
+    console.log(`\n客户端地区: ${geo.region || geo.country || geo.countryCode || '未知'}${geo.isp ? ` / ${geo.isp}` : ''}（来源 ${geo.source || '?'}）`);
+    console.log(`测速时间: ${new Date(data.testedAt).toLocaleString()}\n`);
+    (data.servers || []).forEach((s, i) => {
+      const tag = s.domestic ? '国内' : (s.cluster || s.provider || '');
+      console.log(`${String(i + 1).padStart(2)}. ${s.ok ? `${String(s.latencyMs).padStart(5)}ms` : '   ✘   '}  tier${s.tier}  ${s.host}  ${tag}`);
+    });
+    console.log('');
+  };
+  if (!args.test) {
+    const cached = cdn.loadCached();
+    if (!cached) {
+      console.log('还没有测速结果。跑一次：node bin/wempkg.js cdn --test');
+      return;
+    }
+    show(cached);
+    return;
+  }
+  const token = steamjs.readToken();
+  if (!token || !token.refreshToken) throw new Error('还没有登录 Steam，先执行: run.bat steamjs login');
+  const client = await steamjs.connect(token.refreshToken, { onLog: (m) => console.log(`  ${m}`) });
+  try {
+    const data = await cdn.testRanking(client, { onLog: (m) => console.log(`  ${m}`) });
+    show(data);
+  } finally {
+    try { client.logOff(); } catch { /* ignore */ }
+    cdn.releaseIdleSockets();
+  }
+}
+
 async function main() {
   const argv = process.argv.slice(2);
   const args = parseArgs(argv);
@@ -417,6 +451,7 @@ async function main() {
             --resume       沿用上次工作目录与断点，中断后接着转
             --max-texture-mb N  单张纹理解码内存预算（默认 192）
   inspect  查看目录或容器的内部结构
+  cdn      CDN 节点测速（--test 立即重测，否则显示上次结果）
   steamjs  纯 JS 下载引擎（不依赖 SteamCMD，安卓可用）
            steamjs login            扫码登录，凭据存 .cache/steam-token.json
            steamjs status / logout  查看 / 清除登录态
@@ -431,7 +466,7 @@ async function main() {
     return;
   }
   ensureDirs();
-  const table = { serve: cmdServe, dlhub: cmdDlHub, browse: cmdBrowse, info: cmdInfo, get: cmdGet, fetch: cmdFetch, pack: cmdPack, inspect: cmdInspect, steamjs: cmdSteamjs };
+  const table = { serve: cmdServe, dlhub: cmdDlHub, browse: cmdBrowse, info: cmdInfo, get: cmdGet, fetch: cmdFetch, pack: cmdPack, inspect: cmdInspect, cdn: cmdCdn, steamjs: cmdSteamjs };
   const fn = table[cmd];
   if (!fn) throw new Error(`未知命令: ${cmd}（用 help 查看用法）`);
   await fn(args);

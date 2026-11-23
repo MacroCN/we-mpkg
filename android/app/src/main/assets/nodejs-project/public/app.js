@@ -43,6 +43,11 @@ const I18N = {
     groupMisc: '其他特性', groupType: '类型', groupAge: '年龄分级', groupGenre: '题材',
     groupRes: '分辨率', groupCategory: '分类', groupAssetType: '素材类型',
     groupAssetGenre: '素材题材', groupScript: '脚本类型',
+    cdnTitle: '下载节点', cdnTest: '测速', cdnTesting: '正在测速…',
+    cdnHint: '启动时会自动测一次；zip 下载按这里的延迟顺序走，节点失败自动换下一台。',
+    cdnEmpty: '还没有测速结果，点「测速」开始。',
+    cdnGeo: '你的出口地区：{c}', cdnRanked: '{n} 台可用 · 测于 {t}',
+    cdnFail: '测速失败：', cdnNoLogin: '先登录 Steam 再测速。',
   },
   en: {
     title: 'Workshop → MPKG',
@@ -83,6 +88,11 @@ const I18N = {
     loginDone: 'Signed in: {a}', loginFailed: 'Login failed: ', loginIdle: 'Not signed in', logout: 'Sign out',    groupMisc: 'Miscellaneous', groupType: 'Type', groupAge: 'Age Rating', groupGenre: 'Genre',
     groupRes: 'Resolution', groupCategory: 'Category', groupAssetType: 'Asset Type',
     groupAssetGenre: 'Asset Genre', groupScript: 'Script Type',
+    cdnTitle: 'Download nodes', cdnTest: 'Speed test', cdnTesting: 'Testing…',
+    cdnHint: 'Runs once at startup; downloads follow this latency order and fail over to the next node automatically.',
+    cdnEmpty: 'No result yet — tap “Speed test”.',
+    cdnGeo: 'Your region: {c}', cdnRanked: '{n} nodes OK · tested {t}',
+    cdnFail: 'Speed test failed: ', cdnNoLogin: 'Sign in to Steam first.',
   },
 };
 
@@ -617,6 +627,7 @@ async function openSettings() {
   } catch (e) {
     $('dirHint').textContent = e.message;
   }
+  loadCdnNodes();
 }
 
 /** 调起系统目录选择器（安卓端），选完由原生回填 __folderPicked */
@@ -657,8 +668,79 @@ async function saveDir() {  try {
   }
 }
 
-function openExternal(url) {
-  if (window.Android && typeof window.Android.openExternal === 'function') {
+// ---------------- CDN 节点测速 ----------------
+const CDN_REGION_LABEL = {
+  cn: '国内', hk: '香港', tw: '台湾', jp: '日本', kr: '韩国', sg: '新加坡',
+  us: '美国', de: '德国', gb: '英国', fr: '法国', nl: '荷兰', au: '澳洲', br: '巴西',
+};
+
+function cdnTag(s) {
+  if (s.domestic) return CDN_REGION_LABEL.cn;
+  if (s.region && CDN_REGION_LABEL[s.region]) return CDN_REGION_LABEL[s.region];
+  if (s.provider === 'akamai') return 'Akamai';
+  if (s.provider === 'fastly') return 'Fastly';
+  if (s.provider === 'google') return 'Google';
+  return s.provider || '—';
+}
+
+function cdnTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())} ${p(d.getMonth() + 1)}/${p(d.getDate())}`;
+}
+
+function renderCdn(data) {
+  const list = $('cdnList');
+  if (!list) return;
+  const servers = (data && data.servers) || [];
+  if (!servers.length) {
+    list.innerHTML = `<div class="cdn-empty">${esc(tr('cdnEmpty'))}</div>`;
+  } else {
+    list.innerHTML = servers.map((s) => `<div class="cdn-row${s.ok ? '' : ' bad'}">
+  <span class="cdn-host">${esc(s.host || '')}</span>
+  <span class="cdn-tag">${esc(cdnTag(s))}</span>
+  <span class="cdn-ms">${s.ok ? `${s.latencyMs} ms` : '✘'}</span>
+</div>`).join('');
+  }
+  const geo = $('cdnGeo');
+  if (geo) {
+    const g = (data && data.geo) || {};
+    geo.textContent = servers.length
+      ? `${tr('cdnGeo', { c: g.region || g.country || g.countryCode || '—' })} · ${tr('cdnRanked', { n: servers.filter((s) => s.ok).length, t: cdnTime(data.testedAt) })}`
+      : '';
+  }
+  const btn = $('cdnTest');
+  if (btn) {
+    btn.disabled = !!(data && data.state === 'running');
+    btn.textContent = data && data.state === 'running' ? tr('cdnTesting') : tr('cdnTest');
+  }
+}
+
+async function loadCdnNodes() {
+  try {
+    renderCdn(await api('/api/cdn/nodes'));
+  } catch (e) {
+    const g = $('cdnGeo');
+    if (g) g.textContent = tr('cdnFail') + e.message;
+  }
+}
+
+async function testCdnNodes() {
+  const btn = $('cdnTest');
+  const geo = $('cdnGeo');
+  if (btn) { btn.disabled = true; btn.textContent = tr('cdnTesting'); }
+  if (geo) geo.textContent = tr('cdnTesting');
+  try {
+    const r = await api('/api/cdn/test', { method: 'POST' });
+    if (!r.ok) throw new Error(r.error || 'failed');
+    renderCdn(r);
+  } catch (e) {
+    if (geo) geo.textContent = tr('cdnFail') + e.message;
+  }
+}
+
+function openExternal(url) {  if (window.Android && typeof window.Android.openExternal === 'function') {
     window.Android.openExternal(url);
     return true;
   }
@@ -826,6 +908,7 @@ function wire() {
     if (state.loginPoll) clearTimeout(state.loginPoll);
   };
   $('saveDir').onclick = saveDir;
+  if ($('cdnTest')) $('cdnTest').onclick = testCdnNodes;
   if ($('pickDir')) $('pickDir').onclick = pickFolder;
   $('rawOnly').checked = state.rawOnly;
   $('rawOnly').onchange = (e) => {
