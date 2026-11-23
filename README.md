@@ -94,9 +94,12 @@ node bin\wempkg.js serve --port 3090
 | 2 | 大图整体被"超预算"放过原图 | 96MB 解码预算太小，超了就直接保留原文件 → 手机读不出 | 默认预算 96MB → **192MB**；无文件名语义的直通图按 `color` 处理，让 6000×4500 正常降到 4096×3072 |
 | 3 | X-ray 等效果整块不画（只剩清屏色） | 之前给 `xray` 着色器补了一行 `uniform vec4 g_PointerState;`，而引擎头部已经全局注入过 → 移动端 uniform 重定义编译失败 | `rewriteXray` 改成**完全不改写**（真机 `libscenejni.so` 字符串表可证 `g_PointerState` 由引擎提供） |
 | 4 | 频谱类效果编译失败 | `#elif AUDIOSAMPLES == 32;` 这类预处理行尾多余分号；`float left[N] = g_AudioSpectrum32Left;` 整数组初始化在 GLSL ES 不合法 | 新增 `rewritePreprocessorCondition`（去掉 `#if/#elif` 行尾分号）与 `rewriteAudioSpectrumArray`（拆成声明 + `for` 循环逐元素拷贝） |
-| 5 | 画面出现一块**白色实心矩形** | 纯色层（`models/util/solidlayer.json`）挂音频频谱效果，shader 在移动端编译失败后露出未上色的白色实心层 | 新增 `dropAudioReactiveSolidLayers`：打包时自动移除「纯色层 + 音频频谱效果」的对象（默认已剥离音频，这层留着也没数据可画），日志与告警里写明移除了哪一层；主图、文字层、普通纯色层不动 |
+| 5 | 画面出现一块**白色实心矩形** | 纯色层（`models/util/solidlayer.json`）挂音频频谱效果，shader 在移动端编译失败后露出未上色的白色实心层 | 根因是频谱 shader 用浮点变量做数组下标（`left[i]`），移动端 GLSL ES 只接受常量下标表达式。新增 `rewriteDynamicArrayIndex`：把带动态下标的那条语句放进以数组长度为界的 `for` 循环、用相等判断挑元素，语义不变；层不再被删，`--drop-audio-layers` 可强制移除 |
+| 6 | 音频频谱层「不亮」 | 默认剥离音频，频谱监听器（引擎侧 `g_AudioSpectrum*`）收不到数据，只能画一条平线 | `stripAudio` 检测场景里是否有音频频谱效果，有就**自动保留音频**并打印原因；音频文件不存在时仍按引擎的系统音频数据（`sendAudioData`）出效果 |
+| 7 | 叠加层错位 / 整层消失 | 之前"看到音频层就删"，被删的层如果挂着文字/贴图子对象，子对象 `parent` 就成了孤儿；`alpha` 写成字符串时移动端按默认值渲染，叠加层变实心 | `repairSceneCompat`：音频层优先保留，只有 shader 改写后仍不可移植才移除；移除时把子层重挂到祖父层并告警；`alpha` 字符串归一为数字；孤儿父级断开；`alpha/color/multiply/blendmode` 一律不动。顺带：PNG 直通纹理按数据图处理（蒙版/叠加贴图不降采样，避免边缘糊掉发白） |
+| 8 | 互动效果（鼠标/触摸）整块不画 | 部分材质的 shader 自己又写了一遍 `uniform vec4 g_PointerState;`，引擎头部已注入同名 uniform → 重定义编译失败 | `rewriteEngineUniformDecl` 去掉重复声明（`g_PointerState`/`g_ParallaxPosition`），用法一处不改；`xray` 仍保持"完全不改写"，互动脚本原样保留 |
 
-删除范围有单测保护（`test/run-tests.js`，54 项）：普通纯色层保留、主图挂同一效果不删、被删对象的 `scene.json` 能正确重写。
+删除/保留范围都有单测保护（`test/run-tests.js`，62 项）：频谱层可移植时保留、不可移植时才移除并重挂子层、`--drop-audio-layers` 强制移除、有频谱时保留音频、`alpha` 归一、叠加属性不被改动。
 
 ---
 

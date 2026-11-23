@@ -707,9 +707,13 @@ function convertTexBuffer(buf, opts = {}) {
   }
   const preset = typeof opts.preset === 'string' ? presetOf(opts.preset) : (opts.preset || presetOf('high'));
   let semantic = opts.semantic || semanticOf(opts.relPath);
-  // 文件名没有语义线索（materials/1.tex 这种）但载荷是 JPEG/PNG 直通图时，基本可以按彩色图处理，
-  // 否则 6000×4500 这类超尺寸照片会原尺寸写进 mpkg，体积和显存都顶不住。
-  if (semantic === 'unknown' && tex.container.imageFormat >= 0) semantic = 'color';
+  // 文件名没有语义线索（materials/1.tex 这种）但载荷是直通图时按格式兜底：
+  // JPEG 没有 alpha，基本都是照片/背景 → 当彩色图，可以降采样（否则 6000×4500 原尺寸写进 mpkg，
+  // 体积和显存都顶不住）；PNG/GIF 常被用来做**叠加层的蒙版或带透明边的贴图**，一旦降采样，
+  // 叠加层的边缘/透明度就会糊掉、整块发白 → 当数据图处理，只做无损重编码。
+  if (semantic === 'unknown' && tex.container.imageFormat >= 0) {
+    semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
+  }
   const animated = (tex.header.flags & TEX_FLAGS.IsGif) !== 0;
   const framesTail = tex.framesStart < buf.length ? buf.subarray(tex.framesStart) : null;
   // 动图不降采样：帧表里记着像素矩形，尺寸一变帧表就对不上了

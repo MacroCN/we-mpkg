@@ -190,69 +190,151 @@ function validateProject(projectDir, project, type) {
   return warnings;
 }
 
-/**
- * 手机端不兼容的音频频谱层清理。
- *
- * 工坊里常见的做法是「纯色层（util/solidlayer）+ 音频频谱效果」，效果 shader 一编译失败，
- * 纯色层就退化成一块不透明白色矩形（现场表现就是壁纸画面里凭空一块白板）。
- * 打包默认会剥掉音频，这类层在手机上本来也画不出任何东西，直接移除最稳。
- */
 function readMaybe(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
 }
 
-function dropAudioReactiveSolidLayers(projectDir, opts = {}) {
-  const onLog = opts.onLog || (() => {});
-  const scenePath = path.join(projectDir, 'scene.json');
-  const raw = readMaybe(scenePath);
-  if (!raw) return { removed: [], warnings: [] };
-  let scene;
-  try { scene = JSON.parse(raw); } catch { return { removed: [], warnings: [] }; }
-  if (!Array.isArray(scene.objects)) return { removed: [], warnings: [] };
+/**
+ * 手机端图层兼容修复（音频频谱层 / 叠加层 / 互动效果）。
+ *
+ * 三类问题的共同点：图层本身没坏，坏的是「它挂的 effect 在移动端编译不过」。
+ * shadercompat 已经把已知的编译杀手都改写掉了（动态数组下标、预处理分号、
+ * 频谱数组整拷贝、指针 uniform 重声明……），所以这里的策略从「看到音频层就删」
+ * 改成「先保留，只有修不好时才退化」：
+ *
+ *   1. 音频频谱层：shader 修好 → 保留（配合 stripAudio 的自动保留音频，频谱才有数据）；
+ *      改写后仍残留动态数组下标 → 才移除，避免又变回白块。--drop-audio-layers 可强制移除。
+ *   2. 叠加层：一律不再当作垃圾删掉；被移除的层如果还挂着子对象（parent 指向它），
+ *      把子对象重挂到祖父层，避免文字层/贴图层因为父层消失而整体不见或错位。
+ *   3. 叠加/互动属性：alpha 统一成数字（字符串会让移动端按默认值渲染，叠加层整块变实心），
+ *      并校验 parent 是否存在（孤儿父级直接断开，否则整层不画）。
+ */
+function readScene(projectDir) {
+  const raw = readMaybe(path.join(projectDir, 'scene.json'));
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
 
-  const shaderCache = new Map();
-  const isAudioReactive = (effectFile) => {
-    const effectPath = path.join(projectDir, effectFile);
-    const effectRaw = readMaybe(effectPath);
-    if (!effectRaw) return false;
-    let effect;
-    try { effect = JSON.parse(effectRaw); } catch { return false; }
-    const deps = Array.isArray(effect.dependencies) ? effect.dependencies : [];
-    for (const dep of deps) {
-      if (!/\.(frag|vert)$/i.test(dep)) continue;
-      const depPath = path.join(projectDir, dep);
-      if (!shaderCache.has(depPath)) shaderCache.set(depPath, readMaybe(depPath) || '');
-      if (/(g_AudioSpectrum\d*(?:Left|Right))/.test(shaderCache.get(depPath))) return true;
+/** 收集某条 effect 依赖里的若非着色器文本 */
+function effectShaderTexts(projectDir, effectFile, cache) {
+  const effectRaw = readMaybe(path.join(projectDir, effectFile));
+  if (!effectRaw) return [];
+  let effect;
+  try { effect = JSON.parse(effectRaw); } catch { return []; }
+  const deps = Array.isArray(effect.dependencies) ? effect.dependencies : [];
+  const out = [];
+  for (const dep of deps) {
+    if (!/\.(frag|vert)$/i.test(dep)) continue;
+    const depPath = path.join(projectDir, dep);
+    if (!cache.has(depPath)) cache.set(depPath, readMaybe(depPath) || '');
+    const text = cache.get(depPath);
+    if (text) out.push({ rel: dep, text });
+  }
+  return out;
+}
+
+/** 场景里是否用到了音频频谱（决定默认是否保留音频） */
+function sceneUsesAudioSpectrum(projectDir) {
+  const scene = readScene(projectDir);
+  if (!scene || !Array.isArray(scene.objects)) return false;
+  const cache = new Map();
+  for (const obj of scene.objects) {
+    const effects = Array.isArray(obj.effects) ? obj.effects : [];
+    for (const e of effects) {
+      if (!e || typeof e.file !== 'string') continue;
+      const texts = effectShaderTexts(projectDir, e.file, cache);
+      if (texts.some((t) => /g_AudioSpectrum\d+(?:Left|Right)/.test(t.text))) return true;
     }
-    return false;
-  };
+  }
+  return false;
+}
 
-  const kept = [];
-  const removed = [];
+function repairSceneCompat(projectDir, opts = {}) {
+  const onLog = opts.onLog || (() => {});
+  const scene = readScene(projectDir);
+  if (!scene || !Array.isArray(scene.objects)) {
+    return { removed: [], kept: [], warnings: [], repaired: [] };
+  }
+
   const warnings = [];
+  const repaired = [];
+  const removed = [];
+  const kept = [];
+  const shaderCache = new Map();
+
+  const isAudioReactive = (effectFile) => effectShaderTexts(projectDir, effectFile, shaderCache)
+    .some((t) => /g_AudioSpectrum\d+(?:Left|Right)/.test(t.text));
+
+  // ---- 1. 音频频谱层：优先保留（shader 已修可编译），修不好才退化 ----
+  const objects = [];
   for (const obj of scene.objects) {
     const image = String(obj.image || '').replace(/\\/g, '/').toLowerCase();
     const effects = Array.isArray(obj.effects) ? obj.effects : [];
     const isSolid = image === 'models/util/solidlayer.json';
-    // 纯色层只要挂了一条音频频谱效果，它存在的意义就是频谱可视化（perspective 之类只是变形）
-    const hasAudio = effects.some((e) => isAudioReactive(e.file));
-    if (isSolid && hasAudio) {
-      removed.push({ id: obj.id, name: obj.name || '', effects: effects.map((e) => e.file) });
+    const audioEffects = effects.filter((e) => e && typeof e.file === 'string' && isAudioReactive(e.file));
+    if (!audioEffects.length) { objects.push(obj); continue; }
+
+    // 改写后这些 effect 的 shader 是否仍然过不了移动端
+    const unportable = audioEffects.some((e) => effectShaderTexts(projectDir, e.file, shaderCache)
+      .some((t) => shadercompat.hasResidualDynamicArrayIndex(t.text)));
+
+    if (isSolid && (opts.dropAudioLayers || unportable)) {
+      removed.push({ id: obj.id, name: obj.name || '', reason: opts.dropAudioLayers ? '手动指定移除' : 'shader 仍不可移植' });
+      const label = obj.name || `id ${obj.id}`;
+      onLog(`  [场景] 移除音频频谱层「${label}」（${opts.dropAudioLayers ? '手动指定' : 'shader 改写后仍含移动端不接受的下标写法'}）`);
       continue;
     }
-    kept.push(obj);
+    kept.push({ id: obj.id, name: obj.name || '' });
+    if (isSolid) onLog(`  [场景] 保留音频频谱层「${obj.name || obj.id}」（shader 已改写为移动端可编译写法）`);
+    objects.push(obj);
   }
-  if (!removed.length) return { removed, warnings };
 
-  scene.objects = kept;
-  fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
-  for (const r of removed) {
-    const label = r.name || `id ${r.id}`;
-    warnings.push(`已移除手机端不兼容的音频频谱层「${label}」（效果 shader 在移动端编译失败会留下白色实心块）`);
-    onLog(`  [场景] 移除音频频谱层「${label}」`);
+  // ---- 2. 移除时给子对象重挂父级，避免整层消失/错位 ----
+  if (removed.length) {
+    const goneIds = new Set(removed.map((r) => Number(r.id)));
+    // 被移除对象本身已经不在 objects 里了，祖父层要从原始场景表里找
+    const origById = new Map(scene.objects.map((o) => [Number(o.id), o]));
+    for (const obj of objects) {
+      if (obj.parent == null || !goneIds.has(Number(obj.parent))) continue;
+      const victim = origById.get(Number(obj.parent));
+      const grand = victim && victim.parent != null ? victim.parent : null;
+      if (grand != null && !goneIds.has(Number(grand))) obj.parent = grand;
+      else delete obj.parent;
+      repaired.push({ id: obj.id, name: obj.name || '', action: 'parent-remap' });
+      onLog(`  [场景] 子层「${obj.name || obj.id}」父级已移除，重挂到 ${grand != null ? grand : '根层'}`);
+    }
+    warnings.push(`已移除手机端不可兼容的音频频谱层${removed.map((r) => `「${r.name || `id ${r.id}`}」`).join('')}（该层 shader 在移动端编译失败会留下白色实心块）`);
   }
-  return { removed, warnings };
+
+  // ---- 3. 叠加属性归一 + 孤儿父级检查 ----
+  const ids = new Set(objects.map((o) => Number(o.id)));
+  let changed = false;
+  for (const obj of objects) {
+    // alpha 是字符串时，移动端解析会走默认值 → 叠加层整块变实心
+    if (typeof obj.alpha === 'string') {
+      const n = Number(obj.alpha);
+      if (Number.isFinite(n)) {
+        obj.alpha = n;
+        changed = true;
+        repaired.push({ id: obj.id, name: obj.name || '', action: 'alpha-numeric' });
+        onLog(`  [场景] 叠加层「${obj.name || obj.id}」alpha 已由字符串归一为数字 ${n}`);
+      }
+    }
+    if (obj.parent != null && !ids.has(Number(obj.parent))) {
+      delete obj.parent;
+      changed = true;
+      repaired.push({ id: obj.id, name: obj.name || '', action: 'orphan-parent-dropped' });
+      onLog(`  [场景] 叠加层「${obj.name || obj.id}」的父层 ${obj.parent} 不存在，已断开到根层`);
+    }
+  }
+
+  scene.objects = objects;
+  if (removed.length || changed) {
+    fs.writeFileSync(path.join(projectDir, 'scene.json'), JSON.stringify(scene, null, '\t'), 'utf8');
+  }
+  return { removed, kept, warnings, repaired };
 }
+
 
 /**
  * 手机端适配：纹理转换 + 着色器兼容改写
@@ -288,10 +370,10 @@ function adaptForMobile(projectDir, opts = {}) {
   }
   if (shaderStats.failed) warnings.push(`${shaderStats.failed} 个着色器改写失败，已保留原文件`);
 
-  const dropped = dropAudioReactiveSolidLayers(projectDir, { onLog });
+  const dropped = repairSceneCompat(projectDir, { onLog, dropAudioLayers: opts.dropAudioLayers });
   warnings.push(...dropped.warnings);
 
-  return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes, droppedLayers: dropped.removed };
+  return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes, droppedLayers: dropped.removed, sceneRepairs: dropped.repaired };
 }
 
 /** 音频文件扩展名（可与 .tex/.frag/.vert 之外的所有资源共存） */
@@ -308,8 +390,15 @@ const AUDIO_EXT = new Set(['.mp3', '.wav', '.ogg', '.flac', '.aac', '.m4a', '.op
  */
 function stripAudio(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
-  const result = { removed: 0, bytes: 0, files: [] };
+  const result = { removed: 0, bytes: 0, files: [], keptForAudioReactive: false };
   if (opts.preserveAudio) return result;
+  // 音频频谱可视化层：手机端频谱数据来自音频管线（引擎侧 sendAudioData / g_AudioSpectrum*），
+  // 把音频删了监听器就是一条平线、整层什么都画不出来 —— 这类场景默认保留音频。
+  if (opts.autoKeepAudioReactive !== false && sceneUsesAudioSpectrum(projectDir)) {
+    result.keptForAudioReactive = true;
+    onLog('  音频保留：场景里有音频频谱可视化效果，删掉音频后频谱监听器收不到数据');
+    return result;
+  }
   const walk = (d) => {
     for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
       const abs = path.join(d, ent.name);
@@ -443,6 +532,7 @@ async function packFromItemDir(itemDir, opts = {}) {
     checkpoint,
     textureTotal,
     onProgress,
+    dropAudioLayers: !!opts.dropAudioLayers,
   });
   warnings.push(...adapted.warnings);
   if (!checkpoint.flush()) warnings.push('转换断点写入失败，本次结果不能续转（不影响打包）');
@@ -611,5 +701,5 @@ function analyze(inputPath) {
 module.exports = {
   packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
   detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
-  stripAudio, pickMagic, stableWorkDir, dropAudioReactiveSolidLayers,
+  stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum,
 };

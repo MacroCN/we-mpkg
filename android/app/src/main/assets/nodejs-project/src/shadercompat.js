@@ -667,6 +667,168 @@ function rewriteSampleKeyword(source) {
 }
 
 /**
+ * 音频频谱 → 「动态下标」。
+ *
+ * 工坊里的音频频谱材质普遍是这么写的：
+ *   float i = floor(v_TexCoord.x * len);
+ *   float l = saturate(mix(left[i], right[i], 0.5));
+ * 桌面 GLSL 允许任意整数表达式做数组下标，**移动端 GLSL ES 只接受常量下标表达式**
+ * （只有 for 循环变量能以常量下标表达式的方式索引数组），所以这一行必然编译失败，
+ * 整个 effect 挂掉 → 纯色层退化成白色实心块（工坊壁纸里那块白板的真正来源）。
+ *
+ * 改法：把「带动态下标的那条语句」放进以数组长度为界的 for 循环里，用相等判断挑出目标元素：
+ *   float l;
+ *   for (int _i0 = 0; _i0 < AUDIOSAMPLES; _i0++) {
+ *   	if (float(_i0) == i) l = saturate(mix(left[_i0], right[_i0], 0.5));
+ *   }
+ * 循环变量本身就是常量下标表达式，语义与原写法完全一致。
+ */
+
+/** 收集文件里的局部数组（名字 → 长度表达式）与 for 循环变量名 */
+function collectArrayAndLoopInfo(codeMasked) {
+  const arrays = new Map();
+  const loopVars = new Set();
+  for (const rawLine of codeMasked.split('\n')) {
+    const line = rawLine.trim();
+    if (!line || line[0] === '#') continue;
+    const loop = line.match(/for\s*\(\s*int\s+([A-Za-z_]\w*)/);
+    if (loop) loopVars.add(loop[1]);
+    // 只关心局部数组：uniform 数组由引擎/材质系统声明，改了容易伤到别处
+    const decl = line.match(/^(float|int|vec2|vec3|vec4)\s+([A-Za-z_]\w*)\s*\[([^\]]+)\]/);
+    if (decl) arrays.set(decl[2], { type: decl[1], size: decl[3].trim() });
+  }
+  return { arrays, loopVars };
+}
+
+const CONST_INDEX = /^[0-9+\-*/() \t]+$/;
+
+function isDynamicIndex(expr, loopVars) {
+  const e = expr.trim();
+  if (!e) return false;
+  if (CONST_INDEX.test(e)) return false;
+  if (loopVars.has(e)) return false; // 循环变量本身就是常量下标表达式
+  return true;
+}
+
+/** 找出一行里所有「局部数组 + 动态下标」的读取 */
+function findDynamicReads(code, arrays, loopVars) {
+  const reads = [];
+  const re = /([A-Za-z_]\w*)\s*\[([^\]]*)\]/g;
+  let m;
+  while ((m = re.exec(code)) !== null) {
+    // 声明行 `float left[AUDIOSAMPLES];` 里的方括号是数组长度，不是读取
+    if (/(?:^|[^A-Za-z0-9_])(?:float|int|vec2|vec3|vec4)[ \t]+$/.test(code.slice(0, m.index))) continue;
+    const name = m[1];
+    const info = arrays.get(name);
+    if (!info) continue;
+    if (!isDynamicIndex(m[2], loopVars)) continue;
+    reads.push({
+      start: m.index,
+      end: m.index + m[0].length,
+      name,
+      expr: m[2].trim(),
+      size: info.size,
+      text: m[0],
+    });
+  }
+  return reads;
+}
+
+let dynIndexLoopId = 0;
+
+function rewriteDynamicIndexLine(line, arrays, loopVars) {
+  const masked = maskNonCode(line);
+  const reads = findDynamicReads(masked, arrays, loopVars);
+  if (!reads.length) return { text: line, count: 0 };
+
+  // 同一行里同一个下标表达式对应的数组长度必须一致，否则不敢动
+  const byExpr = new Map();
+  for (const r of reads) {
+    if (!byExpr.has(r.expr)) byExpr.set(r.expr, new Set());
+    byExpr.get(r.expr).add(r.size);
+  }
+  for (const sizes of byExpr.values()) if (sizes.size !== 1) return { text: line, count: 0 };
+
+  const indent = (line.match(/^[ \t]*/) || [''])[0];
+  let body = line;
+  // 从后往前把 A[expr] 换成 A[循环变量]
+  const loopVarsForExpr = new Map();
+  for (const [expr, sizes] of byExpr) {
+    const id = `_i${dynIndexLoopId++}`;
+    loopVarsForExpr.set(expr, { id, size: [...sizes][0], expr });
+  }
+  for (let i = reads.length - 1; i >= 0; i--) {
+    const r = reads[i];
+    const lv = loopVarsForExpr.get(r.expr);
+    body = body.slice(0, r.start) + `${r.name}[${lv.id}]` + body.slice(r.end);
+  }
+
+  // 语句必须能拆成「声明 + 赋值」或纯赋值，其它形态（return / 多语句）不动
+  const stmt = body.trim();
+  const declInit = stmt.match(/(float|int|vec2|vec3|vec4)[ \t]+([A-Za-z_]\w*)[ \t]*=[ \t]*(.+);[ \t]*$/);
+  const plainAssign = stmt.match(/([A-Za-z_]\w*(?:[ \t]*\.[ \t]*[A-Za-z_]\w*)*)[ \t]*=[^=](.+);[ \t]*$/);
+  if (!declInit && !plainAssign) return { text: line, count: 0 };
+
+  const guard = [...loopVarsForExpr.values()]
+    .map((lv) => `float(${lv.id}) == float(${lv.expr})`)
+    .join(' && ');
+
+  const out = [];
+  if (declInit) {
+    out.push(`${indent}${declInit[1]} ${declInit[2]};`);
+  }
+  let depth = 0;
+  for (const lv of loopVarsForExpr.values()) {
+    out.push(`${indent}${'\t'.repeat(depth)}for (int ${lv.id} = 0; ${lv.id} < ${lv.size}; ${lv.id}++) {`);
+    depth++;
+  }
+  const assign = declInit
+    ? `${declInit[2]} = ${declInit[3]};`
+    : `${plainAssign[1]} = ${plainAssign[2].trim()};`;
+  out.push(`${indent}${'\t'.repeat(depth)}if (${guard}) ${assign}`);
+  for (let i = depth - 1; i >= 0; i--) out.push(`${indent}${'\t'.repeat(i)}}`);
+  return { text: out.join('\n'), count: reads.length };
+}
+
+function rewriteDynamicArrayIndex(source) {
+  const masked = maskNonCode(source);
+  const { arrays, loopVars } = collectArrayAndLoopInfo(masked);
+  if (!arrays.size) return { text: source, count: 0 };
+  let count = 0;
+  const lines = source.split('\n');
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const r = rewriteDynamicIndexLine(lines[i], arrays, loopVars);
+    if (r.count) count += r.count;
+    out.push(r.text);
+  }
+  return { text: out.join('\n'), count };
+}
+
+/** 改写后是否还残留「局部数组 + 动态下标」（残留说明这条 shader 仍然过不了移动端） */
+function hasResidualDynamicArrayIndex(source) {
+  const masked = maskNonCode(source);
+  const { arrays, loopVars } = collectArrayAndLoopInfo(masked);
+  if (!arrays.size) return false;
+  for (const line of masked.split('\n')) {
+    if (findDynamicReads(line, arrays, loopVars).length) return true;
+  }
+  return false;
+}
+
+/**
+ * 引擎已全局注入的 uniform（`g_PointerState` 是实测证据：工坊 xray 材质直接用、自己不声明，
+ * 桌面端照样跑；`libscenejni.so` 里也有该符号）。
+ * 材质自己再写一份 `uniform vec4 g_PointerState;` 就是重定义，移动端直接编译失败 →
+ * 依赖鼠标/触摸的互动效果整块不画。这里把重复声明去掉，用法一个都不动。
+ */
+const ENGINE_UNIFORM_DECL = /^([ \t]*)uniform[ \t]+vec4[ \t]+(g_PointerState|g_ParallaxPosition)[ \t]*;[ \t]*$/gm;
+function rewriteEngineUniformDecl(source) {
+  const r = replaceInCode(source, ENGINE_UNIFORM_DECL, () => '');
+  return { text: r.text, count: r.count };
+}
+
+/**
  * 完整改写：字面量补点 + 结构性补丁。
  * @param {string} source
  * @param {{relPath?:string}} [opts]
@@ -682,7 +844,17 @@ function rewriteAll(source, opts = {}) {
     const r = rewriteXray(text);
     text = r.text; structural += r.count;
   }
-  for (const fn of [rewritePreprocessorCondition, rewriteAudioSpectrumArray, rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword]) {
+  const fns = [
+    rewritePreprocessorCondition,
+    rewriteAudioSpectrumArray,
+    rewritePackedAudioSpectrum,
+    rewriteEngineUniformDecl,
+    rewriteDynamicArrayIndex,
+    rewriteVec3ColorAccumulator,
+    rewriteCommonBlurInclude,
+    rewriteSampleKeyword,
+  ];
+  for (const fn of fns) {
     const r = fn(text);
     text = r.text;
     structural += r.count;
@@ -738,4 +910,9 @@ function patchDir(dir, opts = {}) {
   return stats;
 }
 
-module.exports = { patch, patchDir, isShaderPath, rewriteAll, maskNonCode, rewriteXray, rewritePreprocessorCondition, rewriteAudioSpectrumArray, rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword };
+module.exports = {
+  patch, patchDir, isShaderPath, rewriteAll, maskNonCode, rewriteXray,
+  rewritePreprocessorCondition, rewriteAudioSpectrumArray, rewritePackedAudioSpectrum,
+  rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword,
+  rewriteDynamicArrayIndex, hasResidualDynamicArrayIndex, rewriteEngineUniformDecl,
+};

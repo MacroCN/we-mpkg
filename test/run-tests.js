@@ -621,35 +621,137 @@ test('频谱 uniform 整数组拷贝展开成逐元素循环', () => {
   assert.ok(r.text.includes('float l = left[i];'), '使用处保持不动');
 });
 
-console.log('\n[15] 音频剥离（含音频频谱层清理）');
+test('频谱动态下标改写成循环取值（移动端 GLSL ES 只接受常量下标）', () => {
+  const src = [
+    '\tfloat left[AUDIOSAMPLES];',
+    '\tfloat right[AUDIOSAMPLES];',
+    '\tfloat i = floor(v_TexCoord.x * len);',
+    '\tfloat l = saturate(mix(left[i], right[i], 0.5));',
+  ].join('\n') + '\n';
+  const r = shader.rewriteDynamicArrayIndex(src);
+  assert.strictEqual(r.count, 2, r.text);
+  assert.ok(!/left\[i\]|right\[i\]/.test(r.text), r.text);
+  assert.ok(r.text.includes('for (int _i'), r.text);
+  assert.ok(r.text.includes('l = saturate(mix(left[_i'), r.text);
+  assert.ok(shader.hasResidualDynamicArrayIndex(src), '原写法应被判为不可移植');
+  assert.ok(!shader.hasResidualDynamicArrayIndex(r.text), '改写后不应再有动态下标');
+});
 
-test('纯色音频频谱层会被移除，普通纯色层保留', () => {
-  const dir = tmp('audioLayer');
+test('常量下标 / 循环变量下标不动', () => {
+  const src = '\tfloat arr[4];\n\tvec4 a = arr[3];\n\tfor (int k = 0; k < 4; k++) s += arr[k];\n';
+  const r = shader.rewriteDynamicArrayIndex(src);
+  assert.strictEqual(r.count, 0);
+  assert.strictEqual(r.text, src);
+});
+
+test('赋值语句里的动态下标也能改写（不是声明就不能丢初值）', () => {
+  const src = '\tfloat arr[4];\n\tvec4 albedo;\n\tfloat i = floor(u);\n\talbedo.rgb = mix(arr[i], vec3(0.), 0.5);\n';
+  const r = shader.rewriteDynamicArrayIndex(src);
+  assert.strictEqual(r.count, 1, r.text);
+  assert.ok(r.text.includes('albedo.rgb = mix(arr[_i'), r.text);
+});
+
+test('引擎注入的指针/视差 uniform 重复声明被去掉（互动效果的编译杀手）', () => {
+  const src = 'uniform vec4 g_PointerState;\nuniform vec4 g_ParallaxPosition;\nvoid main(){ vec2 p = g_PointerState.xy; }\n';
+  const r = shader.rewriteEngineUniformDecl(src);
+  assert.strictEqual(r.count, 2, r.text);
+  assert.ok(!r.text.includes('uniform vec4 g_PointerState'), r.text);
+  assert.ok(r.text.includes('g_PointerState.xy'), '用法必须保留');
+});
+
+console.log('\n[15] 图层兼容（音频频谱 / 叠加层 / 互动）与音频剥离');
+
+/** 造一个最小工程：带音频频谱层 + 子层 + 重叠属性 */
+function makeLayerProject(name, shaderBody) {
+  const dir = tmp(name);
   fs.mkdirSync(path.join(dir, 'effects', 'bar'), { recursive: true });
-  fs.mkdirSync(path.join(dir, 'shaders', 'effects'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'effects', 'plain'), { recursive: true });
-  fs.writeFileSync(path.join(dir, 'shaders', 'effects', 'bar.frag'),
-    'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
+  fs.mkdirSync(path.join(dir, 'shaders', 'effects'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'shaders', 'effects', 'bar.frag'), shaderBody);
   fs.writeFileSync(path.join(dir, 'shaders', 'effects', 'plain.frag'), 'void main(){}\n');
-  fs.writeFileSync(path.join(dir, 'effects', 'bar', 'effect.json'), JSON.stringify({
-    dependencies: ['shaders/effects/bar.frag'],
-  }));
-  fs.writeFileSync(path.join(dir, 'effects', 'plain', 'effect.json'), JSON.stringify({
-    dependencies: ['shaders/effects/plain.frag'],
-  }));
+  fs.writeFileSync(path.join(dir, 'effects', 'bar', 'effect.json'), JSON.stringify({ dependencies: ['shaders/effects/bar.frag'] }));
+  fs.writeFileSync(path.join(dir, 'effects', 'plain', 'effect.json'), JSON.stringify({ dependencies: ['shaders/effects/plain.frag'] }));
+  fs.mkdirSync(path.join(dir, 'sound'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'sound', 'bgm.mp3'), Buffer.alloc(64));
+  return dir;
+}
+
+test('音频频谱层：shader 可移植时保留（不再直接删掉）', () => {
+  const dir = makeLayerProject('keepAudioLayer', 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
   fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
     objects: [
-      { id: 1, name: '频谱', image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] },
+      { id: 386, name: '纯色', image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] },
       { id: 2, name: '普通纯色', image: 'models/util/solidlayer.json', effects: [{ file: 'effects/plain/effect.json' }] },
-      { id: 3, name: '主图', image: 'models/1.json', effects: [{ file: 'effects/bar/effect.json' }] },
     ],
   }));
-  const r = packer.dropAudioReactiveSolidLayers(dir, {});
-  assert.strictEqual(r.removed.length, 1);
-  assert.strictEqual(r.removed[0].id, 1);
-  assert.strictEqual(r.warnings.length, 1);
+  const r = packer.repairSceneCompat(dir, {});
+  assert.strictEqual(r.removed.length, 0);
+  assert.strictEqual(r.kept.length, 1);
+  assert.strictEqual(r.warnings.length, 0);
   const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
-  assert.deepStrictEqual(scene.objects.map((o) => o.id), [2, 3]);
+  assert.deepStrictEqual(scene.objects.map((o) => o.id), [386, 2]);
+});
+
+test('音频频谱层：shader 改写后仍不可移植时才移除，并把子层重挂到祖父层', () => {
+  const dir = makeLayerProject('dropAudioLayer', 'uniform float g_AudioSpectrum32Left[32];\n\tfloat arr[AUDIOSAMPLES];\n\tfloat i = floor(u);\n\tfloat l = arr[i];\n');
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 113, name: '容器', solid: true },
+      { id: 386, name: '纯色', parent: 113, image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] },
+      { id: 114, name: 'Year 年', parent: 386 },
+    ],
+  }));
+  const r = packer.repairSceneCompat(dir, {});
+  assert.strictEqual(r.removed.length, 1);
+  assert.ok(r.warnings[0].includes('纯色'), r.warnings[0]);
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.deepStrictEqual(scene.objects.map((o) => o.id), [113, 114]);
+  assert.strictEqual(scene.objects.find((o) => o.id === 114).parent, 113, '子层要重挂到祖父层，不能变孤儿');
+});
+
+test('叠加层：alpha 字符串归一为数字，孤儿父级断开', () => {
+  const dir = tmp('overlay');
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 1, name: '底图' },
+      { id: 2, name: '叠加', alpha: '0.35', parent: 99, multiply: '1 1 1' },
+    ],
+  }));
+  const r = packer.repairSceneCompat(dir, {});
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(scene.objects[1].alpha, 0.35);
+  assert.strictEqual(scene.objects[1].parent, undefined);
+  assert.strictEqual(scene.objects[1].multiply, '1 1 1', '叠加属性必须原样保留');
+  assert.deepStrictEqual(r.repaired.map((x) => x.action).sort(), ['alpha-numeric', 'orphan-parent-dropped']);
+});
+
+test('--drop-audio-layers 可强制移除音频频谱层', () => {
+  const dir = makeLayerProject('forceDrop', 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [{ id: 386, name: '纯色', image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] }],
+  }));
+  const r = packer.repairSceneCompat(dir, { dropAudioLayers: true });
+  assert.strictEqual(r.removed.length, 1);
+  assert.ok(r.removed[0].reason.includes('手动'));
+});
+
+test('场景用到音频频谱时默认保留音频（否则监听器收不到数据）', () => {
+  const dir = makeLayerProject('audioKeep', 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [{ id: 1, image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] }],
+  }));
+  assert.ok(packer.sceneUsesAudioSpectrum(dir));
+  const kept = packer.stripAudio(dir, {});
+  assert.strictEqual(kept.removed, 0);
+  assert.strictEqual(kept.keptForAudioReactive, true);
+  assert.ok(fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
+
+  const dir2 = makeLayerProject('audioStrip', 'void main(){}\n');
+  fs.writeFileSync(path.join(dir2, 'scene.json'), JSON.stringify({
+    objects: [{ id: 1, effects: [{ file: 'effects/plain/effect.json' }] }],
+  }));
+  const removed = packer.stripAudio(dir2, {});
+  assert.strictEqual(removed.removed, 1);
 });
 
 test('默认剥离音频，preserveAudio 时保留', () => {

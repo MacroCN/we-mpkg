@@ -372,14 +372,16 @@ function webOptions(args) {
  * 打包相关参数
  *   --quality high|balanced|smooth|original  画质档位（默认 high）
  *   --keep-audio                             保留壁纸自带音频（默认剥离）
+ *   --drop-audio-layers                      强制移除音频频谱可视化层（默认修复并保留）
  *   --resume                                 沿用上次的工作目录与断点，中断后接着转
  *   --video-magic 0014|0020                  视频类 mpkg 的容器魔数（默认 0020）
- *   --max-texture-mb N                       单张纹理解码内存预算（默认 96）
+ *   --max-texture-mb N                       单张纹理解码内存预算（默认 192）
  */
 function packOptions(args) {
   const o = {};
   if (typeof args.quality === 'string') o.preset = args.quality;
   if (args['keep-audio']) o.preserveAudio = true;
+  if (args['drop-audio-layers']) o.dropAudioLayers = true;
   if (args.resume) o.resume = true;
   if (typeof args['video-magic'] === 'string') o.videoMagic = args['video-magic'];
   const mb = Number(args['max-texture-mb']);
@@ -411,8 +413,9 @@ async function main() {
   pack     把本地目录 / .pkg 打成 .mpkg
             --quality high|balanced|smooth|original  画质档位（默认 high）
             --keep-audio   保留壁纸自带音频（默认剥离）
+            --drop-audio-layers  强制移除音频频谱可视化层（默认修复后保留）
             --resume       沿用上次工作目录与断点，中断后接着转
-            --max-texture-mb N  单张纹理解码内存预算（默认 96）
+            --max-texture-mb N  单张纹理解码内存预算（默认 192）
   inspect  查看目录或容器的内部结构
   steamjs  纯 JS 下载引擎（不依赖 SteamCMD，安卓可用）
            steamjs login            扫码登录，凭据存 .cache/steam-token.json
