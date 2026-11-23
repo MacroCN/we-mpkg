@@ -659,6 +659,36 @@ test('引擎注入的指针/视差 uniform 重复声明被去掉（互动效果�
   assert.ok(r.text.includes('g_PointerState.xy'), '用法必须保留');
 });
 
+test('CRLF 文件里的 `* 2.0 - 1` 也补成 1.0（行尾 \\r 曾让改写静默失效）', () => {
+  const src = '\tvec3 n1 = texSample2D(g_Texture2, rippleCoords.xy).xyz * 2.0 - 1;\r\n\tvec3 n2 = 2.0 - 1;\r\n';
+  const r = shader.rewriteAll(src, { relPath: 'shaders/effects/a.frag' });
+  assert.strictEqual(r.literalsChanged, 2, r.text);
+  assert.ok(r.text.includes('* 2.0 - 1.0;'), r.text);
+  assert.ok(/\r\n/.test(r.text), '换行风格保持 CRLF');
+});
+
+test('整数表达式塞进 float 变量时包一层 float()', () => {
+  const src = 'const int sampleCount = 50;\nconst float sampleDrop = sampleCount - 1;\n';
+  const r = shader.rewriteIntFloatMix(src);
+  assert.strictEqual(r.count, 1, r.text);
+  assert.ok(r.text.includes('const float sampleDrop = float(sampleCount - 1);'), r.text);
+});
+
+test('int / float 混型运算给 int 那侧套 float()', () => {
+  const src = 'for (int i = 0; i < n; ++i) { x += (i / drop); }\n';
+  const r = shader.rewriteIntFloatMix(src);
+  assert.strictEqual(r.count, 1, r.text);
+  assert.ok(r.text.includes('(float(i) / drop)'), r.text);
+});
+
+test('重复改写是幂等的（否则复检会把 float() 套两层变成 floatfloat）', () => {
+  const src = '\tfloat gap = u_gap / (100 * AUDIOSAMPLES);\r\n\tfloat left[AUDIOSAMPLES] = g_AudioSpectrum32Left;\r\n';
+  const once = shader.rewriteAll(src, { relPath: 'x.frag' }).text;
+  const twice = shader.rewriteAll(once, { relPath: 'x.frag' }).text;
+  assert.strictEqual(twice, once);
+  assert.ok(!/floatfloat/.test(twice), twice);
+});
+
 console.log('\n[15] 图层兼容（音频频谱 / 叠加层 / 互动）与音频剥离');
 
 /** 造一个最小工程：带音频频谱层 + 子层 + 重叠属性 */
