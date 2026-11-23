@@ -163,6 +163,8 @@
     if (foot) {
       foot.innerHTML = `<span>${t('任务跑在后台进程，关掉这个浮层也不会中断', 'Runs in a background process — closing this panel is safe')}</span>`;
     }
+    // 任务增减会改变面板高度，已拖动的面板要重新夹回可见范围
+    if (open && isPositioned()) reflowPos(false);
   }
 
   function schedule() {
@@ -187,15 +189,42 @@
   }
 
   // ---------- 拖动 ----------
-  function clampPos(x, y) {
-    const w = panel.offsetWidth, h = panel.offsetHeight;
-    const vw = window.innerWidth, vh = window.innerHeight;
-    const safeTop = 8;
-    const safeBottom = vh - 8 - h;
+  function viewport() {
+    const de = document.documentElement;
+    const iw = window.innerWidth || (de && de.clientWidth) || 0;
+    const ih = window.innerHeight || (de && de.clientHeight) || 0;
+    const vv = window.visualViewport;
+    // 取较小者：软键盘/缩放时也保证面板不被裁掉；不用 offsetTop/Left，避免缩放时整体位移
     return {
-      x: Math.max(6, Math.min(x, vw - w - 6)),
-      y: Math.max(safeTop + (window.__dlcTopInset || 0), Math.min(y, safeBottom)),
+      w: Math.round(vv && vv.width ? Math.min(iw, vv.width) : iw),
+      h: Math.round(vv && vv.height ? Math.min(ih, vv.height) : ih),
     };
+  }
+
+  /** 面板隐藏（display:none）时 offsetWidth/Height 是 0，按 CSS 上限兜个底，避免把坐标算到屏幕外 */
+  function panelSize() {
+    const vp = viewport();
+    return {
+      vp,
+      w: panel.offsetWidth || Math.min(420, vp.w - 24),
+      h: panel.offsetHeight || Math.min(vp.h * 0.66, 560),
+    };
+  }
+
+  function clampPos(x, y) {
+    const { vp, w, h } = panelSize();
+    const pad = 8;
+    const maxX = Math.max(pad, vp.w - w - pad);
+    const maxY = Math.max(pad, vp.h - h - pad);
+    const topLimit = Math.min(pad + (window.__dlcTopInset || 0), maxY);
+    return {
+      x: Math.min(Math.max(x, pad), maxX),
+      y: Math.min(Math.max(y, topLimit), maxY),
+    };
+  }
+
+  function isPositioned() {
+    return !!panel.style.left && panel.style.left !== 'auto';
   }
 
   function applyPos(x, y) {
@@ -207,10 +236,19 @@
     return p;
   }
 
+  /** 视口/内容高度变了以后，把已拖动的面板重新夹回可见区域 */
+  function reflowPos(save) {
+    if (!open || !isPositioned()) return;
+    const p = applyPos(panel.offsetLeft, panel.offsetTop);
+    if (save !== false) {
+      try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
+    }
+  }
+
   function restorePos() {
     let saved = null;
     try { saved = JSON.parse(localStorage.getItem(POS_KEY) || 'null'); } catch { /* ignore */ }
-    if (!saved || typeof saved.x !== 'number') {
+    if (!saved || typeof saved.x !== 'number' || typeof saved.y !== 'number') {
       // 默认右下角
       panel.style.left = 'auto';
       panel.style.top = 'auto';
@@ -224,16 +262,16 @@
   let drag = null;
   function onHeadDown(ev) {
     if (ev.target.closest('button')) return;
+    if (ev.pointerType === 'mouse' && ev.button !== 0) return;
     const rect = panel.getBoundingClientRect();
-    drag = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top, moved: false };
-    try { panel.setPointerCapture ? panel.setPointerCapture(ev.pointerId) : null; } catch { /* ignore */ }
+    drag = { dx: ev.clientX - rect.left, dy: ev.clientY - rect.top };
+    // 捕获在按下头的那个元素上（挂到 panel 上会让 head 收不到后续 move）
+    try { ev.currentTarget.setPointerCapture(ev.pointerId); } catch { /* ignore */ }
     ev.preventDefault();
   }
   function onHeadMove(ev) {
     if (!drag) return;
-    const x = ev.clientX - drag.dx, y = ev.clientY - drag.dy;
-    if (Math.abs(x - (panel.offsetLeft || 0)) > 2 || Math.abs(y - (panel.offsetTop || 0)) > 2) drag.moved = true;
-    applyPos(x, y);
+    applyPos(ev.clientX - drag.dx, ev.clientY - drag.dy);
   }
   function onHeadUp() {
     if (!drag) return;
@@ -317,8 +355,10 @@
   function openPanel() {
     open = true;
     if (panel) {
-      restorePos();
+      // 先显示再量尺寸：隐藏状态下尺寸为 0，先 clamp 会把面板算到屏幕外
       panel.classList.add('on');
+      restorePos();
+      reflowPos();
     }
     if (pill) pill.classList.remove('on');
     notifyAndroid(true);
@@ -389,12 +429,10 @@
       jobAction(id, act);
     });
 
-    window.addEventListener('resize', () => {
-      if (panel.style.left && panel.style.left !== 'auto' && open) {
-        const p = applyPos(panel.offsetLeft, panel.offsetTop);
-        try { localStorage.setItem(POS_KEY, JSON.stringify(p)); } catch { /* ignore */ }
-      }
-    });
+    const onViewportChange = () => reflowPos();
+    window.addEventListener('resize', onViewportChange);
+    window.addEventListener('orientationchange', () => setTimeout(() => reflowPos(), 260));
+    if (window.visualViewport) window.visualViewport.addEventListener('resize', onViewportChange);
 
     render();
   }

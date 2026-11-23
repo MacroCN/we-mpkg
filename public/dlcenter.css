@@ -46,8 +46,9 @@
   right: 12px;
   bottom: calc(12px + env(safe-area-inset-bottom));
   left: auto;
-  width: 420px;
-  max-width: calc(100vw - 24px);
+  /* 宽度统一由 CSS 决定：拖动后 JS 只改 left/top，避免和媒体查询的左右定位互相打架导致变形 */
+  width: min(420px, calc(100vw - 24px));
+  max-width: none;
   max-height: min(66vh, 560px);
   display: none;
   flex-direction: column;
@@ -222,12 +223,11 @@
 .dlc-foot a { color: var(--dim); text-decoration: none; }
 .dlc-foot a:hover { color: var(--accent); }
 
-/* 窄屏（手机）铺满可用宽度，不要贴着右边缘被裁掉 */
+/* 窄屏不需要额外规则：宽度已由 min(420px, calc(100vw - 24px)) 自适应，
+   这里只保证初始位置不贴边（拖动后仍由 JS 统一按 left/top 摆放） */
 @media (max-width: 480px) {
   #dlc-panel {
-    left: 8px;
     right: 8px;
-    width: auto;
-    max-width: none;
+    bottom: calc(8px + env(safe-area-inset-bottom));
   }
 }
