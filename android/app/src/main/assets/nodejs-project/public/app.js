@@ -12,6 +12,8 @@ const I18N = {
     downloadPack: '下载并打包为 MPKG', steamPage: 'Steam 页面', saveMpkg: '保存 .mpkg', importWe: '导入壁纸引擎',
     needLogin: '先登录再下载', notLogged: '未登录，点右上角 ⚙ 登录',
     rawOnly: '只下载原始文件（不打包 mpkg）',
+    hub: '下载中心', openHub: '在下载中心查看（独立进程，关页面也不中断）', cancelTask: '取消任务',
+    hubHint: '独立进程运行，关掉本页面任务也会继续',
     quality: '画质', qHigh: '高画质（原尺寸）', qBalanced: '均衡（1/2 尺寸）', qSmooth: '流畅（1/4 尺寸）',
     keepAudio: '保留壁纸自带音频',
     rawTip: '勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。',
@@ -51,6 +53,8 @@ const I18N = {
     downloadPack: 'Download & pack MPKG', steamPage: 'Steam page', saveMpkg: 'Save .mpkg', importWe: 'Import to Wallpaper Engine',
     needLogin: 'Sign in first', notLogged: 'Not signed in — tap ⚙ to sign in',
     rawOnly: 'Download raw files only (no mpkg)',
+    hub: 'Downloads', openHub: 'Open download center (separate process, closing this page won\'t stop it)',
+    cancelTask: 'Cancel task', hubHint: 'runs in a separate process, safe to close this page',
     quality: 'Quality', qHigh: 'High (native size)', qBalanced: 'Balanced (1/2)', qSmooth: 'Smooth (1/4)',
     keepAudio: 'Keep wallpaper audio',
     rawTip: 'Downloads the original files into "download dir/js-<id>" (scene.pkg, mp4, …) untouched — handy for your own conversion or other tools.',
@@ -144,6 +148,7 @@ function applyLang() {
 
 // ---------------- 状态 ----------------
 const state = {
+  currentJob: null,       // 正在展示进度的下载中心任务 id
   page: 1,
   perPage: 24,
   pages: 1,               // 一次连续抓几页（1/3/5），用于尽量接近客户端「无限滚动」
@@ -432,6 +437,9 @@ async function startDownload() {
   $('p-file').classList.add('hidden');
   $('p-state').textContent = '…';
   $('p-log').textContent = '';
+  if ($('p-bar')) $('p-bar').style.width = '0%';
+  if ($('p-sub')) $('p-sub').textContent = '';
+  if ($('p-cancel')) $('p-cancel').classList.remove('hidden');
 
   try {
     const { jobId } = await api('/api/jobs', {
@@ -445,6 +453,8 @@ async function startDownload() {
         preserveAudio: !!($('d-audio') && $('d-audio').checked),
       }),
     });
+    // 任务跑在独立进程（下载中心）里：网页关掉也会继续下，进度页可单独打开
+    $('p-log').textContent = `已加入下载中心（${tr('hubHint')}）`;
     pollJob(jobId);
   } catch (e) {
     $('p-state').textContent = '✘ ' + e.message;
@@ -487,13 +497,43 @@ function showResultAction(jobId, result) {
   el.classList.remove('hidden');
 }
 
+// 任务阶段文案（下载中心返回的 phase）
+const PHASE_LABEL = { prepare: '解包检查', download: '下载', convert: '纹理转换', shader: '着色器适配', reference: '替换资源', write: '写入 mpkg', done: '完成' };
+
+/** 把下载中心的进度写进详情页的进度条 */
+function applyProgress(job) {
+  const p = job.progress || {};
+  const bar = $('p-bar');
+  const wrap = bar ? bar.parentElement : null;
+  const running = job.state === 'downloading' || job.state === 'packing' || job.state === 'queued';
+  const percent = job.state === 'done' ? 100 : (p.percent === undefined ? null : p.percent);
+  if (wrap) {
+    wrap.classList.toggle('indeterminate', percent === null && running);
+    bar.style.width = percent === null ? '' : `${Math.max(1, Math.min(100, percent))}%`;
+  }
+  const stateText = { queued: '排队中', downloading: '下载中', packing: '打包中', done: '完成', failed: '失败', cancelled: '已取消' }[job.state] || job.state;
+  $('p-state').textContent = stateText + (job.state === 'done' ? ' ✔' : '');
+  const late = PHASE_LABEL[p.phase] ? ` · ${PHASE_LABEL[p.phase]}` : '';
+  const parts = [];
+  if (p.total) parts.push(`${human(p.bytes || 0)} / ${human(p.total)}`);
+  if (running && p.speed) parts.push(`${human(p.speed)}/s`);
+  if (running && p.eta) parts.push(`剩 ${p.eta}s`);
+  if (p.phase === 'convert' && p.total) parts.push(`${p.done || 0}/${p.total} 张`);
+  const sub = $('p-sub');
+  if (sub) sub.textContent = (percent === null ? '' : `${percent}%`) + (parts.length ? `  ${parts.join(' · ')}` : '');
+  $('p-note').textContent = (p.detail || '') + late;
+  const cancel = $('p-cancel');
+  if (cancel) cancel.classList.toggle('hidden', !running);
+}
+
 function pollJob(jobId) {
   if (state.poll) clearTimeout(state.poll);
+  state.currentJob = jobId;
   const tick = async () => {
     try {
       const job = await api('/api/jobs/' + jobId);
-      $('p-state').textContent = job.state + (job.state === 'done' ? ' ✔' : '');
-      $('p-note').textContent = job.result ? `${human(job.result.size)} · ${job.result.type}` : '';
+      if (state.currentJob !== jobId) return;
+      applyProgress(job);
       const log = $('p-log');
       const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
       log.textContent = (job.log || []).join('\n');
@@ -509,14 +549,16 @@ function pollJob(jobId) {
           showResultAction(jobId, r);
         }
         setDownloadLabel();
+        $('p-cancel').classList.add('hidden');
         if (job.result && job.result.warnings && job.result.warnings.length) {
           $('p-log').textContent += '\n\n⚠ ' + job.result.warnings.join('\n⚠ ');
         }
         return;
       }
-      if (job.state === 'failed') {
-        $('p-note').textContent = job.error || '';
+      if (job.state === 'failed' || job.state === 'cancelled') {
+        $('p-note').textContent = job.error || '已取消';
         setDownloadLabel();
+        $('p-cancel').classList.add('hidden');
         return;
       }
       state.poll = setTimeout(tick, 900);
@@ -525,6 +567,17 @@ function pollJob(jobId) {
     }
   };
   tick();
+}
+
+/** 取消按钮：只发请求，实际停在下个阶段边界（下载缓存保留，可续传） */
+async function cancelCurrentJob() {
+  const id = state.currentJob;
+  if (!id) return;
+  try {
+    await api('/api/jobs/' + id + '/cancel', { method: 'POST' });
+  } catch (e) {
+    $('p-note').textContent = '取消失败：' + e.message;
+  }
 }
 
 // ---------------- 设置 / 登录 ----------------
@@ -715,6 +768,7 @@ function wire() {
   $('next').onclick = () => { state.page += state.pages; load(); };
   $('close').onclick = closeDetail;
   $('d-download').onclick = startDownload;
+  if ($('p-cancel')) $('p-cancel').onclick = cancelCurrentJob;
   $('filterToggle').onclick = () => {
     state.filtersOpen = !state.filtersOpen;
     applyFiltersOpen();

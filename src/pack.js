@@ -197,18 +197,27 @@ function validateProject(projectDir, project, type) {
  */
 function adaptForMobile(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
+  const onProgress = opts.onProgress || (() => {});
   const warnings = [];
+  const textureTotal = Math.max(0, Number(opts.textureTotal) || 0);
+  let textureDone = 0;
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
   onLog(`  画质档位: ${preset.label}（reduction=${preset.reduction}, maxDimension=${preset.maxDimension || '不限'}）`);
 
+  onProgress({ phase: 'convert', done: 0, total: textureTotal, detail: '纹理转换' });
   const texRes = tex.convertTexDir(projectDir, {
     onLog,
     preset,
     maxRgbaBytes: opts.maxRgbaBytes,
     checkpoint: opts.checkpoint,
+    onResource: () => {
+      textureDone++;
+      onProgress({ phase: 'convert', done: textureDone, total: textureTotal, detail: '纹理转换' });
+    },
   });
   warnings.push(...texRes.warnings);
 
+  onProgress({ phase: 'shader', detail: '着色器兼容改写' });
   const shaderStats = shadercompat.patchDir(projectDir, { onLog, checkpoint: opts.checkpoint });
   if (shaderStats.rewritten) {
     onLog(`  着色器兼容改写: ${shaderStats.rewritten} 个文件 / ${shaderStats.literals} 处补 .0 / ${shaderStats.structural} 处结构性修正`);
@@ -308,10 +317,12 @@ async function adaptWebToVideo(projectDir, opts = {}, onLog = () => {}) {
  */
 async function packFromItemDir(itemDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
+  const onProgress = opts.onProgress || (() => {});
   const id = String(opts.id || path.basename(itemDir));
   const title = opts.title || `wallpaper_${id}`;
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
 
+  onProgress({ phase: 'prepare', detail: '解包与检查' });
   onLog(`\n=== 打包 ${title} (${id}) ===`);
   // 续转需要一个稳定的工作目录：临时目录一删，断点就没了
   const workDir = opts.workDir || (opts.resume ? stableWorkDir(id) : tempDir('pack'));
@@ -356,16 +367,20 @@ async function packFromItemDir(itemDir, opts = {}) {
   }
 
   onLog('纹理/着色器适配（手机端）...');
+  const textureTotal = plan.resources.filter((r) => r.kind === 'texture').length;
   const adapted = adaptForMobile(mobileDir, {
     onLog,
     preset,
     maxRgbaBytes: opts.maxRgbaBytes,
     checkpoint,
+    textureTotal,
+    onProgress,
   });
   warnings.push(...adapted.warnings);
   if (!checkpoint.flush()) warnings.push('转换断点写入失败，本次结果不能续转（不影响打包）');
 
   if (opts.reference) {
+    onProgress({ phase: 'reference', detail: '替换参考包资源' });
     onLog(`应用参考 mpkg: ${path.basename(opts.reference)}`);
     const r = applyReference(mobileDir, opts.reference, onLog);
     warnings.push(...r.warnings);
@@ -374,8 +389,10 @@ async function packFromItemDir(itemDir, opts = {}) {
   const outDir = opts.outDir || config.OUTPUT_DIR;
   const outFile = path.join(outDir, `${safeFileName(title)}_${id}.mpkg`);
   const magic = pickMagic(prepared.type, opts.videoMagic);
+  onProgress({ phase: 'write', detail: '写入 mpkg' });
   const built = writeMpkg(mobileDir, outFile, { magic });
   onLog(`✔ 输出: ${outFile} (${(built.size / 1024 / 1024).toFixed(2)} MB, ${built.entries.length} 个文件, ${magic})`);
+  onProgress({ phase: 'done', percent: 100, detail: '完成' });
 
   const keepWorkDir = !!(opts.keepWorkDir || opts.resume);
   if (!keepWorkDir && prepared.workDir) {

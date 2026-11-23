@@ -365,9 +365,12 @@ function sha1File(file) {
 /**
  * 下载一个创意工坊条目到目录。
  */
-async function downloadItem({ id, outDir, refreshToken, onLog = () => {}, onProgress = () => {} }) {
+async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog = () => {}, onProgress = () => {} }) {
   ensureDirs();
-  const client = await connect(refreshToken, { onLog });
+  // 同一个进程里多条任务共用一条 CM 连接（同一 refresh token 同时两条会被 Steam 判 403），
+  // 分块请求本身是并发的，所以多任务共用一个 client 仍然能跑满带宽。
+  const client = extClient || await connect(refreshToken, { onLog });
+  const ownsClient = !extClient;
   try {
     const details = await getPublishedFileDetails(client, [id]);
     if (!details.length) throw new Error(`条目 ${id} 不存在、不可见，或详情接口返回异常`);
@@ -394,6 +397,20 @@ async function downloadItem({ id, outDir, refreshToken, onLog = () => {}, onProg
     fs.mkdirSync(root, { recursive: true });
     const written = [];
     const skipped = [];
+    // 整个条目的进度：manifest 里所有文件大小的总和，按已完成文件 + 当前文件字节累计
+    const grandTotal = files.reduce((s, f) => s + (Number(f.size) || 0), 0);
+    let doneBytes = 0;
+    const progressTo = (rel) => (p) => {
+      const cur = Number(p.bytesDownloaded) || 0;
+      const total = Number(p.totalSizeBytes) || 0;
+      onProgress({
+        bytesDownloaded: Math.min(grandTotal, doneBytes + cur),
+        totalSizeBytes: grandTotal || total,
+        currentFile: rel,
+        fileBytes: cur,
+        fileTotal: total,
+      });
+    };
     for (const f of files) {
       const rel = String(f.filename || '').replace(/\\/g, '/');
       if (!rel) continue;
@@ -407,10 +424,12 @@ async function downloadItem({ id, outDir, refreshToken, onLog = () => {}, onProg
       onLog(`下载 ${rel} (${f.size} B)…`);
       let r;
       try {
-        r = await downloadFileResumable(client, f, target, { onLog, onProgress });
+        r = await downloadFileResumable(client, f, target, { onLog, onProgress: progressTo(rel) });
       } catch (e) {
         throw new Error(`下载 ${rel} 失败: ${e.message}`);
       }
+      doneBytes += Number(f.size) || 0;
+      onProgress({ bytesDownloaded: Math.min(grandTotal, doneBytes), totalSizeBytes: grandTotal, currentFile: rel });
       if (r && r.skipped) skipped.push({ rel, size: Number(f.size) || 0 });
       else written.push(rel);
     }
@@ -421,7 +440,7 @@ async function downloadItem({ id, outDir, refreshToken, onLog = () => {}, onProg
     onLog(`下载完成: ${written.length} 个文件（跳过 ${skipped.length} 个） → ${root}`);
     return { dir: root, files: written, skipped, title: d.title, fileSize: Number(d.file_size) || 0 };
   } finally {
-    try { client.logOff(); } catch { /* ignore */ }
+    if (ownsClient) { try { client.logOff(); } catch { /* ignore */ } }
   }
 }
 

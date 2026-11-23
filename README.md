@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.0.0**（格式转换重构，见 [2.0 改进](#20-改进)）
+- 当前版本：**2.0.1**（下载中心 + 并发下载，见 [2.0.1 改进](#201-改进)）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -19,6 +19,7 @@
 | 下载 | 两种引擎：`steamjs`（纯 JS，默认，全平台含安卓）、`steamcmd`（Windows 可选用）；支持分块级断点续传、坏 CDN 节点自动剔除 |
 | 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理按 DXT1/3/5/R8/RG88/直通图解码为 RGBA8 并 LZ4 压缩、着色器 GLSL ES 兼容改写（含结构性补丁）、`project.json`/`preview.gif` 补齐；支持画质档位、断点续转、默认剥离音频 |
 | 网页类壁纸 | 安卓客户端没有 Web 引擎，本工具把网页渲染成视频并按 `video` 类型封装；同时注入音频响应 API，音频可视化壁纸的频谱不再为 0 |
+| 下载中心 | 下载/打包在独立进程里跑，网页关掉也不中断；最多 3 条同时下载，带字节级进度条、速度与 ETA；队列落盘，重启后自动续跑 |
 | 安卓端 | 下载缓存放 `Android/data/com.wempkg.app/files/downloads`，打包成功自动清理、失败保留续传；成品用 `content://` 直接拉起「导入壁纸引擎」 |
 
 ---
@@ -27,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 37 MB） |
-| `we-mpkg-android-2.0.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
-| `we-mpkg-src-2.0.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.0.1.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
+| `we-mpkg-android-2.0.1.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
+| `we-mpkg-src-2.0.1.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -40,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.0.zip
+解压 we-mpkg-portable-2.0.1.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -83,6 +84,24 @@ node bin\wempkg.js serve --port 3090
 
 ---
 
+## 2.0.1 改进
+
+这版解决「下载/打包跑在网页进程里」的两个实际问题：关掉页面就断，一次只能跑一条。
+
+| # | 改进 | 落地方式 |
+|---|---|---|
+| 1 | 下载跑在独立进程 | 新增 `bin/dlhub.js` 下载中心（默认 `http://127.0.0.1:3091`）：网页与主服务只负责投任务、读进度，真正的下载/打包在进程外独立的 Node 进程里。关掉网页、关掉主服务、`Stop-Process` 强杀主进程，任务都继续跑；只有显式退出（`stop.bat` / `/api/shutdown`）才一并停掉 |
+| 2 | 队列持久化 + 续跑 | 队列与进度落 `.cache/dlhub-state.json`（原子写、600ms 节流、退出前 flush）。下载中心重启后，`downloading/packing` 自动回落 `queued` 继续跑；下载本身仍是分块级断点续传 |
+| 3 | 并发上限 3 | `MAX_CONCURRENT = 3`，按当前运行数自动补位；历史保留 20 条超出自动裁剪 |
+| 4 | 下载进度条 | 下载按**字节**算百分比（manifest 全文件总量 → 已完成文件 + 当前文件已收字节），带速度（EMA 平滑）与 ETA；转换阶段按纹理资源 `done/total` 推进，`prepare / write / shader / reference` 这类不确定阶段画流动条 |
+| 5 | 独立下载中心页 | `/downloads`（主服务 302 跳到 3091）：任务卡片、阶段文案、进度条、日志折叠、取消 / 重试 / 保存 `.mpkg`、成品目录列表、清空历史 |
+
+一个实现上的坑：Steam 不允许同一个 refresh token 同时建两条 CM 会话（第二条取 manifest 直接 `403`）。所以下载中心内部改成**进程级共享单连接**——多条任务共用一个 client；分块请求本身是并发的，带宽该吃满还是吃满；连接异常时自动丢弃，下次重试换新连接。
+
+安卓端没有多进程（nodejs-mobile），App 里下载中心退回「进程内 embedded 模式」，关页面同样不中断下载；但 App 被系统杀掉仍会断。
+
+---
+
 ## 2.0 改进
 
 这版把格式转换流水线按「手机端真正能读」的目标重做了一遍，参考了开源项目 WallHub2.0 的后端实现（未照搬其 ETC2 / JNI 方案）。逐条对应：
@@ -120,6 +139,7 @@ run.bat pack <目录|.pkg> --quality balanced --keep-audio --resume --max-textur
 
 ```
 run.bat serve                    启动网页界面（默认 3090）
+run.bat dlhub                    只启动下载中心（默认 127.0.0.1:3091，独立进程）
 run.bat browse --search 夜城      搜索创意工坊
 run.bat browse --group "Genre:Anime,Fantasy" --group "Type:Video"
                                  按官方语义筛选：同组内「或」，组间「与」
@@ -143,6 +163,7 @@ run.bat steamjs login|status|logout|token|webcookie
 | `WE_MPKG_PROXY` / `HTTPS_PROXY` | HTTP 代理，创意工坊页面直连不通时必填 | 自动读 Windows 系统代理 |
 | `WE_MPKG_ENGINE` | `steamjs`（纯 JS）或 `steamcmd` | `steamjs` |
 | `WE_MPKG_OUTPUT_DIR` | 成品输出目录（也可在网页里改） | 程序目录 `output/` |
+| `WE_MPKG_DLHUB_PORT` | 下载中心端口 | `3091` |
 | `WE_MPKG_DOWNLOAD_DIR` | 下载缓存目录 | 程序目录 `downloads/` |
 | `WE_MPKG_KEEP_DOWNLOAD` | `1` = 打包后保留缓存 | 打包后清理 |
 | `WE_MPKG_TIMEOUT_MS` | 单条下载超时 | `900000`（15 分钟） |
@@ -163,6 +184,7 @@ run.bat steamjs login|status|logout|token|webcookie
 6. **筛选是「组内或」的多次请求合并**：Steam 的 `requiredtags[]` 只支持「与」，所以同组多选会拆成多个组合分别请求再取并集——组合超过 8 个时退化为每组只取第一个标签，结果会是交集；这种模式下每次只取 1 页。
 7. **超预算纹理不转换**：单张纹理解码超过 96MB 内存（默认）就原样保留、只告警；要放宽用 `--max-texture-mb`。
 8. **视频容器魔数默认 `PKGM0020`**：这是我们真机验证过的组合；`PKGM0014` 是可选 A/B，未做逐机型验证。
+9. **安卓端下载中心是进程内模式**：手机上不能多进程，App 在后台被杀掉时下载仍会中断；桌面端是真正的独立进程。
 
 ---
 

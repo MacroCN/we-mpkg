@@ -18,6 +18,7 @@
     </div>
   </div>
   <div class="top-actions">
+    <a id="hubBtn" class="ghost" href="/downloads" target="_blank" rel="noreferrer" data-i18n="hub">下载中心</a>
     <button id="langBtn" class="ghost" title="Language">EN</button>
     <button id="settingsBtn" class="ghost" title="Settings">⚙</button>
   </div>
@@ -112,6 +113,12 @@
     </div>
     <div id="d-progress" class="progress hidden">
       <div class="progress-head"><span id="p-state">…</span><span id="p-note"></span></div>
+      <div class="bar"><i id="p-bar"></i></div>
+      <div id="p-sub" class="progress-sub"></div>
+      <div class="progress-links">
+        <a id="p-hub" class="link" href="/downloads" target="_blank" rel="noreferrer" data-i18n="openHub">在下载中心查看（独立进程，关页面也不中断）</a>
+        <button id="p-cancel" class="ghost hidden" data-i18n="cancelTask">取消任务</button>
+      </div>
       <pre id="p-log" class="log"></pre>
       <a id="p-file" class="download hidden" data-i18n="saveMpkg">保存 .mpkg</a>
     </div>

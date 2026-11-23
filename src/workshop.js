@@ -344,7 +344,7 @@ async function ensureWebLogin(onLog) {
   if (loginChecked) return;
   try {
     const webcookie = require('./webcookie');
-    const busy = loginBusyCheck ? !!loginBusyCheck() : false;
+    const busy = loginBusyCheck ? !!(await loginBusyCheck()) : false;
     const c = await webcookie.getLoginCookie({ onLog, allowFetch: !busy });
     if (c && c.cookie) {
       net.setLoginCookie(c.cookie);

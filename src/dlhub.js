@@ -1,0 +1,599 @@
+'use strict';
+/**
+ * 下载中心（独立进程）
+ *
+ * 为什么单独一个进程：网页一关、主界面一退，下载/打包不能跟着断。
+ *   - 桌面端：由主服务按需 spawn 一个 detached 子进程，拥有自己的 HTTP 端口与页面；
+ *   - 安卓端（nodejs-mobile 不能多进程）：同一个模块在主进程内起服务，
+ *     页面关掉不影响任务，只有 App 被系统杀掉才会中断。
+ *
+ * 并发：最多同时跑 3 条任务（其余排队），队列与进度落盘，进程重启后自动接着排队。
+ */
+const fs = require('fs');
+const path = require('path');
+const http = require('http');
+const { URL } = require('url');
+const { spawn } = require('child_process');
+
+const configMod = require('./config');
+const { config, ensureDirs } = configMod;
+
+const DEFAULT_PORT = parseInt(String(process.env.WE_MPKG_DLHUB_PORT || '').trim() || '3091', 10);
+const MAX_CONCURRENT = 3;
+
+// ---------------- 文件位置 ----------------
+
+function stateFile() {
+  return path.join(config.CACHE_DIR, 'dlhub-state.json');
+}
+function infoFile() {
+  return path.join(config.CACHE_DIR, 'dlhub.json');
+}
+
+function writeJsonAtomic(file, obj) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2));
+  fs.renameSync(tmp, file);
+}
+
+function readJsonSafe(file) {
+  try {
+    const v = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return v && typeof v === 'object' ? v : null;
+  } catch { return null; }
+}
+
+// ---------------- 队列 ----------------
+
+const KEEP_HISTORY = 20;
+const JOB_PARAMS = ['itemId', 'title', 'raw', 'preset', 'preserveAudio', 'videoMagic', 'reference'];
+
+function defaultProgress() {
+  return { phase: 'queued', percent: null, detail: '排队中', bytes: 0, total: 0, speed: 0, eta: null };
+}
+
+/**
+ * 创建队列（不涉及 HTTP，方便单测）。
+ * @param {{maxConcurrent?:number, runner?:Function, file?:string, logger?:Function}} opts
+ */
+function createHub(opts = {}) {
+  const maxConcurrent = Math.max(1, Math.min(MAX_CONCURRENT, Number(opts.maxConcurrent) || MAX_CONCURRENT));
+  const runner = opts.runner || require('./packjob').runJob;
+  const file = opts.file || stateFile();
+  const logger = opts.logger || (() => {});
+  const jobs = new Map();
+  let seq = 0;
+  let running = 0;
+  let persistTimer = null;
+  let stopped = false;
+
+  // ---- 持久化（节流写盘，进程退出前 flush）----
+  function serializeJob(j) {
+    return {
+      id: j.id, itemId: j.itemId, title: j.title,
+      raw: !!j.raw, preset: j.preset, preserveAudio: !!j.preserveAudio,
+      videoMagic: j.videoMagic, reference: j.reference || null,
+      state: j.state, progress: j.progress, error: j.error,
+      result: j.result ? {
+        outFile: j.result.outFile, size: j.result.size, type: j.result.type,
+        magic: j.result.magic, entryCount: j.result.entryCount,
+        preset: j.result.preset, tex: j.result.tex, shader: j.result.shader,
+        audio: j.result.audio, warnings: j.result.warnings,
+        rawDir: j.result.rawDir, raw: !!j.result.raw,
+        files: j.result.raw ? (j.result.files || []).length : undefined,
+      } : null,
+      createdAt: j.createdAt, startedAt: j.startedAt, finishedAt: j.finishedAt,
+      log: j.log.slice(-400),
+    };
+  }
+
+  function persistNow() {
+    try {
+      writeJsonAtomic(file, { version: 2, savedAt: new Date().toISOString(), maxConcurrent, jobs: [...jobs.values()].map(serializeJob) });
+    } catch (e) {
+      logger(`⚠ 队列写盘失败: ${e.message}`);
+    }
+  }
+
+  function persist() {
+    if (stopped) return;
+    if (persistTimer) return;
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      persistNow();
+    }, 600);
+    if (persistTimer.unref) persistTimer.unref();
+  }
+
+  function load() {
+    const st = readJsonSafe(file);
+    if (!st || !Array.isArray(st.jobs)) return;
+    for (const raw of st.jobs) {
+      if (!raw || !raw.id || !raw.itemId) continue;
+      const job = {
+        id: raw.id, itemId: String(raw.itemId), title: raw.title || `wallpaper_${raw.itemId}`,
+        raw: !!raw.raw, preset: raw.preset || 'high', preserveAudio: !!raw.preserveAudio,
+        videoMagic: raw.videoMagic || '0020', reference: raw.reference || null,
+        state: raw.state === 'downloading' || raw.state === 'packing' ? 'queued' : (raw.state || 'queued'),
+        progress: defaultProgress(), error: raw.error || null, result: raw.result || null,
+        log: Array.isArray(raw.log) ? raw.log.slice(-400) : [],
+        createdAt: raw.createdAt || Date.now(), startedAt: raw.startedAt || null,
+        finishedAt: raw.finishedAt || null, cancelRequested: false,
+      };
+      if (raw.state === 'downloading' || raw.state === 'packing') {
+        job.log.push('上次进程中断，已重新排队（下载支持按块续传）');
+        job.progress = { phase: 'queued', percent: null, detail: '上次中断，重新排队', bytes: 0, total: 0, speed: 0, eta: null };
+      }
+      if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') {
+        job.progress = raw.progress || job.progress;
+      }
+      jobs.set(job.id, job);
+      const n = parseInt(String(job.id).replace(/^d/, ''), 10);
+      if (Number.isFinite(n) && n > seq) seq = n;
+    }
+  }
+
+  function pruneHistory() {
+    const finished = [...jobs.values()].filter((j) => j.state === 'done' || j.state === 'failed' || j.state === 'cancelled');
+    if (finished.length <= KEEP_HISTORY) return;
+    finished.sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0));
+    for (const j of finished.slice(KEEP_HISTORY)) jobs.delete(j.id);
+  }
+
+  function pushLog(job, line) {
+    if (!line) return;
+    job.log.push(String(line));
+    if (job.log.length > 800) job.log.splice(0, job.log.length - 800);
+  }
+
+  // ---- 进度：下载按字节算百分比，转换按已完成/总数算，其余阶段为不确定态 ----
+  function makeProgressTracker(job) {
+    let lastBytes = 0;
+    let lastTime = 0;
+    let speed = 0;
+    let lastPhase = '';
+    return (p) => {
+      if (!p || typeof p !== 'object') return;
+      const now = Date.now();
+      const phase = p.phase === 'download' ? 'download' : (p.phase === 'done' ? 'done' : 'packing');
+      if (phase !== lastPhase) {
+        lastPhase = phase;
+        if (phase === 'download') pushLog(job, '开始下载');
+        if (phase === 'packing') pushLog(job, '开始打包（纹理 / 着色器适配）');
+      }
+      const bytes = Number(p.bytes) || 0;
+      const total = Number(p.total) || 0;
+      if (phase === 'download' && lastTime && bytes >= lastBytes) {
+        const dt = (now - lastTime) / 1000;
+        if (dt >= 0.4) {
+          const inst = (bytes - lastBytes) / dt;
+          speed = speed ? speed * 0.6 + inst * 0.4 : inst; // 平滑，避免跳字
+        }
+      } else if (phase === 'download' && !lastTime) {
+        speed = 0;
+      }
+      lastBytes = bytes;
+      lastTime = now;
+      let percent = null;
+      if (typeof p.percent === 'number' && Number.isFinite(p.percent)) percent = Math.max(0, Math.min(100, Math.round(p.percent)));
+      else if (Number(p.total) > 0 && Number(p.done) >= 0) percent = Math.max(0, Math.min(100, Math.round((Number(p.done) / Number(p.total)) * 100)));
+      const eta = speed > 1024 && total > bytes ? Math.round((total - bytes) / speed) : null;
+      job.progress = {
+        phase: p.phase || job.progress.phase,
+        percent,
+        detail: p.detail || job.progress.detail,
+        bytes,
+        total,
+        speed: Math.round(speed),
+        eta,
+        updatedAt: now,
+      };
+      job.progressAt = now;
+    };
+  }
+
+  function noLoginHint(err) {
+    return /还没有登录/.test(err.message || '') ? '（先登录 Steam 再重试）' : '';
+  }
+
+  async function run(job) {
+    running++;
+    job.state = 'downloading';
+    job.startedAt = job.startedAt || Date.now();
+    job.error = null;
+    const onProgress = makeProgressTracker(job);
+    try {
+      const { result } = await runner(job, {
+        onLog: (l) => pushLog(job, l),
+        onProgress,
+        isCancelled: () => !!job.cancelRequested,
+      });
+      job.result = result;
+      if (job.cancelRequested) {
+        job.state = 'cancelled';
+        pushLog(job, '任务在阶段边界被取消（成品若已生成会保留）');
+      } else {
+        job.state = 'done';
+        job.progress = { phase: 'done', percent: 100, detail: '完成', bytes: job.progress.total || 0, total: job.progress.total || 0, speed: 0, eta: 0, updatedAt: Date.now() };
+      }
+    } catch (e) {
+      job.error = e && e.message ? e.message : String(e);
+      job.state = e && e.cancelled ? 'cancelled' : 'failed';
+      pushLog(job, `✘ ${job.error}${noLoginHint({ message: job.error })}`);
+    } finally {
+      job.finishedAt = Date.now();
+      running--;
+      pruneHistory();
+      persist();
+      setImmediate(tick);
+    }
+  }
+
+  function tick() {
+    if (stopped) return;
+    while (running < maxConcurrent) {
+      const next = [...jobs.values()]
+        .filter((j) => j.state === 'queued' && !j.cancelRequested)
+        .sort((a, b) => a.createdAt - b.createdAt)[0];
+      if (!next) return;
+      next.progress = { phase: 'download', percent: 0, detail: '准备下载', bytes: 0, total: 0, speed: 0, eta: null };
+      run(next); // 不 await：并发由 running 计数控制
+    }
+  }
+
+  function add(req = {}) {
+    if (!req.id) throw new Error('缺少 id');
+    const itemId = String(req.id);
+    const job = {
+      id: `d${++seq}`,
+      itemId,
+      title: String(req.title || `wallpaper_${itemId}`),
+      raw: !!req.raw,
+      preset: typeof req.preset === 'string' && req.preset ? req.preset : 'high',
+      preserveAudio: !!req.preserveAudio,
+      videoMagic: typeof req.videoMagic === 'string' ? req.videoMagic : '0020',
+      reference: req.reference || null,
+      state: 'queued',
+      progress: defaultProgress(),
+      error: null,
+      result: null,
+      log: [`已加入下载中心（并发上限 ${maxConcurrent}）`],
+      createdAt: Date.now(),
+      startedAt: null,
+      finishedAt: null,
+      cancelRequested: false,
+    };
+    for (const k of JOB_PARAMS) if (job[k] === undefined) job[k] = req[k];
+    jobs.set(job.id, job);
+    persistNow();
+    setImmediate(tick);
+    return job;
+  }
+
+  function get(id) {
+    return jobs.get(String(id)) || null;
+  }
+
+  function list() {
+    return [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  function cancel(id) {
+    const job = get(id);
+    if (!job) return false;
+    if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return false;
+    job.cancelRequested = true;
+    if (job.state === 'queued') {
+      job.state = 'cancelled';
+      job.finishedAt = Date.now();
+      job.progress = { phase: 'cancelled', percent: null, detail: '已取消', bytes: 0, total: 0, speed: 0, eta: null };
+      pushLog(job, '已取消（排队中）');
+      persistNow();
+    } else {
+      pushLog(job, '已请求取消，将在当前阶段边界停止');
+      persist();
+    }
+    return true;
+  }
+
+  function retry(id) {
+    const job = get(id);
+    if (!job) return null;
+    if (job.state === 'queued' || job.state === 'downloading' || job.state === 'packing') return job;
+    job.state = 'queued';
+    job.error = null;
+    job.result = null;
+    job.cancelRequested = false;
+    job.startedAt = null;
+    job.finishedAt = null;
+    job.progress = defaultProgress();
+    pushLog(job, `重新排队（第 ${job.attempts = (job.attempts || 0) + 1} 次重试）`);
+    persistNow();
+    setImmediate(tick);
+    return job;
+  }
+
+  /** 从历史里移除（只允许已完成/失败/取消的任务） */
+  function forget(id) {
+    const job = get(id);
+    if (!job) return false;
+    if (!['done', 'failed', 'cancelled'].includes(job.state)) return false;
+    jobs.delete(job.id);
+    persistNow();
+    return true;
+  }
+
+  function view(j, { logs = false } = {}) {
+    const base = {
+      id: j.id, itemId: j.itemId, title: j.title, state: j.state,
+      raw: j.raw, preset: j.preset, preserveAudio: j.preserveAudio, videoMagic: j.videoMagic,
+      progress: j.progress, error: j.error, createdAt: j.createdAt,
+      finishedAt: j.finishedAt, hasResult: !!j.result,
+      outFile: j.result && j.result.outFile ? path.basename(j.result.outFile) : null,
+      size: j.result ? j.result.size : null,
+      type: j.result ? j.result.type : null,
+      rawDir: j.result && j.result.raw ? j.result.rawDir : null,
+      result: j.result ? (j.result.raw ? { raw: true, files: (j.result.files || []).length } : {
+        type: j.result.type, size: j.result.size, magic: j.result.magic,
+        preset: j.result.preset, tex: j.result.tex, shader: j.result.shader, audio: j.result.audio,
+        warnings: j.result.warnings, entryCount: j.result.entryCount,
+      }) : null,
+    };
+    if (logs) base.log = j.log.slice(-120);
+    return base;
+  }
+
+  function stop() {
+    stopped = true;
+    if (persistTimer) { clearTimeout(persistTimer); persistTimer = null; }
+    persistNow();
+  }
+
+  load();
+  const restored = [...jobs.values()].filter((j) => j.state === 'queued').length;
+  if (restored) setImmediate(tick);
+
+  return {
+    maxConcurrent,
+    add, get, list, cancel, retry, forget, view, stop, persistNow,
+    stats: () => ({
+      total: jobs.size, running,
+      queued: [...jobs.values()].filter((j) => j.state === 'queued').length,
+      done: [...jobs.values()].filter((j) => j.state === 'done').length,
+      failed: [...jobs.values()].filter((j) => j.state === 'failed').length,
+      restored,
+    }),
+    tick,
+    _jobs: jobs, // 测试用（只读）
+  };
+}
+
+// ---------------- HTTP ----------------
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.ico': 'image/x-icon',
+};
+
+function json(res, code, obj) {
+  const body = JSON.stringify(obj);
+  res.writeHead(code, {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-store',
+    'Access-Control-Allow-Origin': '*',
+  });
+  res.end(body);
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > 2 * 1024 * 1024) { reject(new Error('请求体过大')); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+function serveStatic(res, pathname) {
+  const rel = pathname === '/' || pathname === '' ? '/downloads.html' : pathname;
+  const safe = path.normalize(path.join(config.PUBLIC_DIR, decodeURIComponent(rel)));
+  if (!safe.startsWith(path.resolve(config.PUBLIC_DIR))) { res.writeHead(403); return res.end('Forbidden'); }
+  fs.stat(safe, (err, st) => {
+    if (err || !st.isFile()) { res.writeHead(404); return res.end('Not Found'); }
+    res.writeHead(200, { 'Content-Type': MIME[path.extname(safe).toLowerCase()] || 'application/octet-stream' });
+    fs.createReadStream(safe).pipe(res);
+  });
+}
+
+function sendFile(res, file) {
+  if (!fs.existsSync(file)) { res.writeHead(404); return res.end('Not Found'); }
+  const st = fs.statSync(file);
+  const name = encodeURIComponent(path.basename(file));
+  res.writeHead(200, {
+    'Content-Type': 'application/octet-stream',
+    'Content-Length': String(st.size),
+    'Content-Disposition': `attachment; filename="${name}"; filename*=UTF-8''${name}`,
+  });
+  fs.createReadStream(file).pipe(res);
+}
+
+/**
+ * 给 hub 配一个 HTTP 服务。
+ * @param {{hub:object, port?:number, host?:string, onShutdown?:Function}} opts
+ */
+function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown } = {}) {
+  const server = http.createServer(async (req, res) => {
+    const u = new URL(req.url, 'http://localhost');
+    const pn = u.pathname;
+    try {
+      if (pn === '/api/hub/ping') {
+        return json(res, 200, { ok: true, pid: process.pid, version: '2.0.1', maxConcurrent: hub.maxConcurrent, ...hub.stats() });
+      }
+      if (pn === '/api/hub/jobs' && req.method === 'GET') {
+        return json(res, 200, {
+          maxConcurrent: hub.maxConcurrent, running: hub.stats().running,
+          jobs: hub.list().map((j) => hub.view(j, { logs: true })),
+        });
+      }
+      if (pn === '/api/hub/jobs' && req.method === 'POST') {
+        const body = JSON.parse((await readBody(req)) || '{}');
+        const job = hub.add(body);
+        return json(res, 200, { jobId: job.id });
+      }
+      if (pn.startsWith('/api/hub/jobs/')) {
+        const parts = pn.split('/').filter(Boolean); // api hub jobs <id> [action]
+        const id = parts[3];
+        const action = parts[4];
+        if (action === 'cancel' && req.method === 'POST') {
+          const ok = hub.cancel(id);
+          return json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '任务不存在或已结束' });
+        }
+        if (action === 'retry' && req.method === 'POST') {
+          const job = hub.retry(id);
+          return json(res, job ? 200 : 404, job ? { ok: true, jobId: job.id } : { error: '任务不存在' });
+        }
+        if (action === 'forget' && req.method === 'POST') {
+          const ok = hub.forget(id);
+          return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: '只能移除已结束的任务' });
+        }
+        const job = hub.get(id);
+        if (!job) return json(res, 404, { error: '任务不存在' });
+        return json(res, 200, hub.view(job, { logs: true }));
+      }
+      if (pn.startsWith('/api/hub/file/')) {
+        const id = pn.split('/')[4];
+        const job = hub.get(id);
+        if (!job || !job.result || !job.result.outFile) { res.writeHead(404); return res.end('Not Found'); }
+        return sendFile(res, job.result.outFile);
+      }
+      if (pn === '/api/hub/outputs') {
+        ensureDirs();
+        const files = fs.readdirSync(config.OUTPUT_DIR)
+          .filter((f) => f.toLowerCase().endsWith('.mpkg'))
+          .map((f) => {
+            const fp = path.join(config.OUTPUT_DIR, f);
+            const st = fs.statSync(fp);
+            return { name: f, size: st.size, mtime: st.mtimeMs };
+          })
+          .sort((a, b) => b.mtime - a.mtime);
+        return json(res, 200, { dir: config.OUTPUT_DIR, files });
+      }
+      if (pn === '/api/hub/shutdown' && req.method === 'POST') {
+        json(res, 200, { ok: true });
+        setTimeout(() => { try { hub.stop(); } catch { /* ignore */ } if (onShutdown) onShutdown(); }, 50);
+        return;
+      }
+      if (pn.startsWith('/api/')) return json(res, 404, { error: 'Not Found' });
+      return serveStatic(res, pn);
+    } catch (e) {
+      return json(res, 500, { error: e.message });
+    }
+  });
+  server.listen(port, host);
+  return server;
+}
+
+// ---------------- 主服务侧：按需拉起 ----------------
+
+function portOf(port) {
+  return Number(port) || DEFAULT_PORT;
+}
+
+function hubUrl(port) {
+  return `http://127.0.0.1:${portOf(port)}`;
+}
+
+/** 问一次 hub 是否活着（同步 HTTP，3 秒超时） */
+function pingHub(port, timeoutMs = 3000) {
+  return new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port: portOf(port), path: '/api/hub/ping', timeout: timeoutMs }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(body);
+          resolve(res.statusCode === 200 && j && j.ok ? j : null);
+        } catch { resolve(null); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.on('error', () => resolve(null));
+  });
+}
+
+/** 转发一个 JSON 请求到 hub，返回 {status, body} */
+function hubJson(port, method, pathname, body, timeoutMs = 30000) {
+  return new Promise((resolve, reject) => {
+    const payload = body === undefined ? null : Buffer.from(JSON.stringify(body));
+    const req = http.request({
+      host: '127.0.0.1', port: portOf(port), path: pathname, method,
+      headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {},
+      timeout: timeoutMs,
+    }, (res) => {
+      let text = '';
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => {
+        try { resolve({ status: res.statusCode, body: JSON.parse(text) }); }
+        catch { resolve({ status: res.statusCode, body: { error: text.slice(0, 200) } }); }
+      });
+    });
+    req.on('timeout', () => { req.destroy(new Error('下载中心响应超时')); });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 确保 hub 在跑：桌面端 spawn 独立进程，安卓端在主进程内起服务。
+ * @returns {Promise<{port:number,url:string,embedded:boolean}>}
+ */
+async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () => {} } = {}) {
+  const p = portOf(port);
+  const alive = await pingHub(p);
+  if (alive) return { port: p, url: hubUrl(p), embedded: !!alive.embedded };
+
+  if (embedded || process.platform === 'android') {
+    const hub = createHub({ logger });
+    createServer({ hub, port: p, onShutdown: () => process.exit(0) });
+    logger(`下载中心已在应用进程内启动: ${hubUrl(p)}`);
+    return { port: p, url: hubUrl(p), embedded: true };
+  }
+
+  const entry = path.join(__dirname, '..', 'bin', 'dlhub.js');
+  const child = spawn(process.execPath, [entry, '--port', String(p)], {
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true,
+    env: Object.assign({}, process.env, { WE_MPKG_DLHUB_EMBEDDED: '0' }),
+  });
+  child.unref();
+  logger(`已拉起下载中心进程 pid=${child.pid}，端口 ${p}`);
+
+  for (let i = 0; i < 40; i++) {
+    await sleep(250);
+    const info = await pingHub(p, 1000);
+    if (info) return { port: p, url: hubUrl(p), embedded: !!info.embedded };
+  }
+  throw new Error('下载中心启动超时（可查看 .cache/dlhub.log，或用 run.bat dlhub 手动启动）');
+}
+
+module.exports = {
+  DEFAULT_PORT, MAX_CONCURRENT,
+  createHub, createServer, ensureHub, pingHub, hubJson, hubUrl,
+  stateFile, infoFile,
+};

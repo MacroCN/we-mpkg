@@ -630,6 +630,211 @@ test('默认剥离音频，preserveAudio 时保留', () => {
 });
 
 (async () => {
+  console.log('\n[16] 下载中心：队列 / 并发 / 断点');
+
+const dlhub = require('../src/dlhub');
+
+/** 造一个可手动控制完成时机的假 runner */
+function deferredRunner() {
+  const calls = [];
+  let started = 0;
+  const runner = (job, hooks) => {
+    started++;
+    let resolve;
+    let reject;
+    const p = new Promise((res, rej) => { resolve = res; reject = rej; });
+    calls.push({ job, hooks, resolve, reject, started });
+    return p;
+  };
+  return { runner, calls, get started() { return started; } };
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+await testAsync('并发上限 3：第 4 条任务排队，前一条结束后自动补位', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub1'), 'state.json'), maxConcurrent: 3 });
+  const ids = [1, 2, 3, 4, 5].map((i) => hub.add({ id: String(i), title: `t${i}` }).id);
+  await sleepMs(10);
+  assert.strictEqual(hub.stats().running, 3, '只应有 3 条在跑');
+  assert.strictEqual(hub.stats().queued, 2);
+  d.calls[0].resolve({ result: { outFile: '/tmp/a.mpkg', size: 1, type: 'scene' } });
+  await sleepMs(20);
+  assert.strictEqual(hub.stats().running, 3, '空出一个位置应立刻补上第 4 条');
+  assert.strictEqual(hub.get(ids[0]).state, 'done');
+  for (const c of d.calls) c.resolve({ result: {} });
+  await sleepMs(30);
+  hub.stop();
+});
+
+await testAsync('进度：下载阶段按字节算百分比，速度/ETA 随之更新', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub2'), 'state.json'), maxConcurrent: 3 });
+  const job = hub.add({ id: '77' });
+  await sleepMs(10);
+  d.calls[0].hooks.onProgress({ phase: 'download', percent: 25, bytes: 25, total: 100, detail: '下载 a.png' });
+  assert.strictEqual(job.progress.percent, 25);
+  assert.strictEqual(job.progress.bytes, 25);
+  assert.strictEqual(job.progress.total, 100);
+  assert.strictEqual(job.progress.detail, '下载 a.png');
+  d.calls[0].hooks.onProgress({ phase: 'convert', done: 2, total: 4 });
+  assert.strictEqual(job.progress.percent, 50, '转换阶段按 done/total 折算');
+  d.calls[0].resolve({ result: {} });
+  await sleepMs(20);
+  assert.strictEqual(hub.get(job.id).state, 'done');
+  assert.strictEqual(hub.get(job.id).progress.percent, 100);
+  hub.stop();
+});
+
+await testAsync('取消：排队的立即取消，运行中的在阶段边界停', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub3'), 'state.json'), maxConcurrent: 1 });
+  const j1 = hub.add({ id: '1' });
+  const j2 = hub.add({ id: '2' });
+  await sleepMs(10);
+  assert.strictEqual(hub.cancel(j2.id), true);
+  assert.strictEqual(j2.state, 'cancelled');
+  assert.strictEqual(hub.cancel(j1.id), true);
+  assert.strictEqual(d.calls[0].hooks.isCancelled(), true, '运行中的任务应看到取消标记');
+  d.calls[0].reject(new (require('../src/packjob').CancelledError)());
+  await sleepMs(20);
+  assert.strictEqual(j1.state, 'cancelled');
+  hub.stop();
+});
+
+await testAsync('失败后重试会重新排队', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub4'), 'state.json'), maxConcurrent: 3 });
+  const job = hub.add({ id: '9' });
+  await sleepMs(10);
+  d.calls[0].reject(new Error('网络断了'));
+  await sleepMs(20);
+  assert.strictEqual(job.state, 'failed');
+  assert.match(job.error, /网络断了/);
+  const again = hub.retry(job.id);
+  assert.strictEqual(again.state, 'queued');
+  await sleepMs(20);
+  assert.strictEqual(d.calls.length, 2, '重试应产生第二次执行');
+  d.calls[1].resolve({ result: {} });
+  await sleepMs(20);
+  assert.strictEqual(job.state, 'done');
+  hub.stop();
+});
+
+await testAsync('队列落盘：重启后未完成任务重新排队、完成记录保留', async () => {
+  const dir = tmp('hub5');
+  const file = path.join(dir, 'state.json');
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file, maxConcurrent: 3 });
+  const a = hub.add({ id: '11', title: '完成过的' });
+  await sleepMs(10);
+  d.calls[0].resolve({ result: { outFile: '/tmp/x.mpkg', size: 12, type: 'scene' } });
+  await sleepMs(20);
+  const b = hub.add({ id: '12', title: '跑到一半' });
+  await sleepMs(10);
+  hub.persistNow();
+  hub.stop();
+
+  const d2 = deferredRunner();
+  const hub2 = dlhub.createHub({ runner: d2.runner, file, maxConcurrent: 3 });
+  assert.strictEqual(hub2.get(a.id).state, 'done', '完成的记录应保留');
+  assert.strictEqual(hub2.get(b.id).state, 'queued', '中断的任务应重新排队');
+  await sleepMs(20);
+  assert.strictEqual(d2.calls.length, 1, '重启后自动续跑');
+  d2.calls[0].resolve({ result: {} });
+  await sleepMs(10);
+  hub2.stop();
+});
+
+await testAsync('历史超过 20 条会裁剪，forget 只能删已结束的', async () => {
+  let n = 0;
+  const fastRunner = () => Promise.resolve({ result: { outFile: `/tmp/x${++n}.mpkg`, size: 1, type: 'scene' } });
+  const hub = dlhub.createHub({ runner: fastRunner, file: path.join(tmp('hub6'), 'state.json'), maxConcurrent: 3 });
+  for (let i = 0; i < 27; i++) hub.add({ id: `h${i}` });
+  await sleepMs(200);
+  assert.ok(hub.list().length <= 23, `历史应被裁剪到 20 条左右，实际 ${hub.list().length}`);
+  const doneId = hub.list().find((j) => j.state === 'done').id;
+  assert.strictEqual(hub.forget(doneId), true, '已完成任务可移除');
+  const queued = hub.add({ id: 'still-running' });
+  assert.strictEqual(hub.forget(queued.id), false, '排队中的不可移除');
+  hub.stop();
+});
+
+await testAsync('HTTP 接口：创建 / 列表 / 取消 / 文件', async () => {
+  const http = require('http');
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub7'), 'state.json'), maxConcurrent: 3 });
+  const server = dlhub.createServer({ hub, port: 0 });
+  await new Promise((r) => server.once('listening', r));
+  const port = server.address().port;
+
+  const req = (method, p, body) => new Promise((resolve, reject) => {
+    const payload = body ? Buffer.from(JSON.stringify(body)) : null;
+    const r = http.request({ host: '127.0.0.1', port, path: p, method, headers: payload ? { 'Content-Type': 'application/json', 'Content-Length': payload.length } : {} }, (res) => {
+      let text = '';
+      res.on('data', (c) => { text += c; });
+      res.on('end', () => {
+        let json = null;
+        try { json = JSON.parse(text); } catch { /* ignore */ }
+        resolve({ status: res.statusCode, json, text });
+      });
+    });
+    r.on('error', reject);
+    if (payload) r.write(payload);
+    r.end();
+  });
+
+  const ping = await req('GET', '/api/hub/ping');
+  assert.strictEqual(ping.status, 200);
+  assert.strictEqual(ping.json.maxConcurrent, 3);
+
+  const created = await req('POST', '/api/hub/jobs', { id: '300', title: '接口测试' });
+  assert.strictEqual(created.status, 200);
+  const jobId = created.json.jobId;
+
+  const list = await req('GET', '/api/hub/jobs');
+  assert.strictEqual(list.json.jobs.length, 1);
+  assert.strictEqual(list.json.jobs[0].title, '接口测试');
+
+  const one = await req('GET', `/api/hub/jobs/${jobId}`);
+  assert.strictEqual(one.status, 200);
+  assert.strictEqual(one.json.itemId, '300');
+
+  const cancel = await req('POST', `/api/hub/jobs/${jobId}/cancel`);
+  assert.strictEqual(cancel.status, 200);
+
+  const missing = await req('GET', '/api/hub/jobs/d999');
+  assert.strictEqual(missing.status, 404);
+
+  // 文件接口：伪造一个已完成任务
+  const fdir = tmp('hubfile');
+  fs.mkdirSync(fdir, { recursive: true });
+  const outFile = path.join(fdir, 'x.mpkg');
+  fs.writeFileSync(outFile, Buffer.from('mpkg-bytes'));
+  const j = hub.add({ id: '301' });
+  j.state = 'done';
+  j.result = { outFile, size: 10, type: 'scene' };
+  const file = await req('GET', `/api/hub/file/${j.id}`);
+  assert.strictEqual(file.status, 200);
+  assert.strictEqual(file.text, 'mpkg-bytes');
+
+  server.close();
+  hub.stop();
+});
+
+await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程）', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub8'), 'state.json'), maxConcurrent: 3 });
+  const server = dlhub.createServer({ hub, port: 0 });
+  await new Promise((r) => server.once('listening', r));
+  const port = server.address().port;
+  const info = await dlhub.pingHub(port, 2000);
+  assert.ok(info && info.ok, 'ping 应返回 ok');
+  assert.strictEqual(info.embedded, undefined);
+  server.close();
+  hub.stop();
+});
+
   await testAsync('整条流水线：工坊目录 -> mpkg（async）', async () => {    const itemDir = makeItemDir();
     const outDir = tmp('out2');
     const res = await packer.packFromItemDir(itemDir, { id: '999', title: 'Async', outDir, onLog: () => {} });
@@ -669,6 +874,24 @@ test('默认剥离音频，preserveAudio 时保留', () => {
     assert.strictEqual(packer.pickMagic('video', '0014'), pkgformat.MAGIC_MOBILE_VIDEO);
     assert.strictEqual(packer.pickMagic('video'), pkgformat.MAGIC_MOBILE);
     assert.strictEqual(packer.pickMagic('scene', '0014'), pkgformat.MAGIC_MOBILE);
+  });
+
+  await testAsync('打包各阶段会推进度事件（prepare → convert → shader → write → done）', async () => {
+    const itemDir = makeItemDir();
+    const phases = [];
+    const convertInfo = [];
+    const res = await packer.packFromItemDir(itemDir, {
+      id: '1002', title: 'Progress', outDir: tmp('out2p'),
+      onLog: () => {},
+      onProgress: (p) => {
+        if (!phases.includes(p.phase)) phases.push(p.phase);
+        if (p.phase === 'convert' && p.total) convertInfo.push([p.done, p.total]);
+      },
+    });
+    assert.ok(fs.existsSync(res.outFile));
+    assert.deepStrictEqual(phases, ['prepare', 'convert', 'shader', 'write', 'done']);
+    assert.ok(convertInfo.length >= 2, '转换阶段应收到达标/总数');
+    assert.strictEqual(convertInfo[0][0], 0, '转换从 0 开始');
   });
 
   await testAsync('未知容器输入会报错', async () => {    const f = path.join(tmp('bad'), 'x.pkg');

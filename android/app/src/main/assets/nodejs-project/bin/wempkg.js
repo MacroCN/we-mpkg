@@ -223,6 +223,16 @@ async function cmdServe(args) {
   process.stdin.resume();
 }
 
+/** 只起下载中心（独立进程，关掉网页/关掉主服务都不影响下载） */
+async function cmdDlHub(args) {
+  const dlhub = require('../src/dlhub');
+  const port = args.port ? parseInt(args.port, 10) : dlhub.DEFAULT_PORT;
+  const r = await dlhub.ensureHub({ port, logger: (m) => console.log(m) });
+  console.log(`下载中心已就绪: ${r.url}${r.embedded ? '（进程内模式）' : ''}`);
+  console.log('这个窗口可以最小化，别关；关掉页面不影响下载。Ctrl+C 会保存队列后退出。');
+  process.stdin.resume();
+}
+
 async function cmdSteamjs(args) {
   const steamjs = require('../src/steamjs');
   const sub = (args._.shift() || 'status').toLowerCase();
@@ -393,6 +403,7 @@ async function main() {
     console.log(`we-mpkg — 浏览 Wallpaper Engine 创意工坊并导出手机版 .mpkg
 
   serve    启动网页界面（默认 http://localhost:${config.PORT}）
+  dlhub    只启动下载中心（独立进程，默认 http://127.0.0.1:${require('../src/dlhub').DEFAULT_PORT}）
   browse   搜索/浏览创意工坊
   info     查看条目详情
   get      下载并打包成 .mpkg（一步到位）
@@ -417,7 +428,7 @@ async function main() {
     return;
   }
   ensureDirs();
-  const table = { serve: cmdServe, browse: cmdBrowse, info: cmdInfo, get: cmdGet, fetch: cmdFetch, pack: cmdPack, inspect: cmdInspect, steamjs: cmdSteamjs };
+  const table = { serve: cmdServe, dlhub: cmdDlHub, browse: cmdBrowse, info: cmdInfo, get: cmdGet, fetch: cmdFetch, pack: cmdPack, inspect: cmdInspect, steamjs: cmdSteamjs };
   const fn = table[cmd];
   if (!fn) throw new Error(`未知命令: ${cmd}（用 help 查看用法）`);
   await fn(args);

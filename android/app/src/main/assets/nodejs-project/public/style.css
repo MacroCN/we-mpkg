@@ -381,3 +381,57 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
   font-size: 13px;
   cursor: pointer;
 }
+
+/* 详情页进度条（2.0.1：下载中心进度） */
+.bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  overflow: hidden;
+  margin: 8px 0 4px;
+}
+.bar > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #22d3ee, #34d399);
+  transition: width 0.35s ease;
+}
+.bar.indeterminate > i {
+  width: 34% !important;
+  animation: barSlide 1.2s ease-in-out infinite;
+}
+@keyframes barSlide {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+.progress-sub {
+  font-size: 12px;
+  color: var(--dim);
+  font-variant-numeric: tabular-nums;
+  min-height: 14px;
+}
+.progress-links {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 6px 0 8px;
+}
+.progress-links .link { font-size: 12px; }
+button.ghost, a.ghost {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-decoration: none;
+  font-family: inherit;
+}
+button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+button.ghost:disabled { opacity: 0.45; cursor: default; }
