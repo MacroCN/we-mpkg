@@ -191,6 +191,70 @@ function validateProject(projectDir, project, type) {
 }
 
 /**
+ * 手机端不兼容的音频频谱层清理。
+ *
+ * 工坊里常见的做法是「纯色层（util/solidlayer）+ 音频频谱效果」，效果 shader 一编译失败，
+ * 纯色层就退化成一块不透明白色矩形（现场表现就是壁纸画面里凭空一块白板）。
+ * 打包默认会剥掉音频，这类层在手机上本来也画不出任何东西，直接移除最稳。
+ */
+function readMaybe(p) {
+  try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
+}
+
+function dropAudioReactiveSolidLayers(projectDir, opts = {}) {
+  const onLog = opts.onLog || (() => {});
+  const scenePath = path.join(projectDir, 'scene.json');
+  const raw = readMaybe(scenePath);
+  if (!raw) return { removed: [], warnings: [] };
+  let scene;
+  try { scene = JSON.parse(raw); } catch { return { removed: [], warnings: [] }; }
+  if (!Array.isArray(scene.objects)) return { removed: [], warnings: [] };
+
+  const shaderCache = new Map();
+  const isAudioReactive = (effectFile) => {
+    const effectPath = path.join(projectDir, effectFile);
+    const effectRaw = readMaybe(effectPath);
+    if (!effectRaw) return false;
+    let effect;
+    try { effect = JSON.parse(effectRaw); } catch { return false; }
+    const deps = Array.isArray(effect.dependencies) ? effect.dependencies : [];
+    for (const dep of deps) {
+      if (!/\.(frag|vert)$/i.test(dep)) continue;
+      const depPath = path.join(projectDir, dep);
+      if (!shaderCache.has(depPath)) shaderCache.set(depPath, readMaybe(depPath) || '');
+      if (/(g_AudioSpectrum\d*(?:Left|Right))/.test(shaderCache.get(depPath))) return true;
+    }
+    return false;
+  };
+
+  const kept = [];
+  const removed = [];
+  const warnings = [];
+  for (const obj of scene.objects) {
+    const image = String(obj.image || '').replace(/\\/g, '/').toLowerCase();
+    const effects = Array.isArray(obj.effects) ? obj.effects : [];
+    const isSolid = image === 'models/util/solidlayer.json';
+    // 纯色层只要挂了一条音频频谱效果，它存在的意义就是频谱可视化（perspective 之类只是变形）
+    const hasAudio = effects.some((e) => isAudioReactive(e.file));
+    if (isSolid && hasAudio) {
+      removed.push({ id: obj.id, name: obj.name || '', effects: effects.map((e) => e.file) });
+      continue;
+    }
+    kept.push(obj);
+  }
+  if (!removed.length) return { removed, warnings };
+
+  scene.objects = kept;
+  fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
+  for (const r of removed) {
+    const label = r.name || `id ${r.id}`;
+    warnings.push(`已移除手机端不兼容的音频频谱层「${label}」（效果 shader 在移动端编译失败会留下白色实心块）`);
+    onLog(`  [场景] 移除音频频谱层「${label}」`);
+  }
+  return { removed, warnings };
+}
+
+/**
  * 手机端适配：纹理转换 + 着色器兼容改写
  * @param {{onLog?:Function, preset?:object|string, maxRgbaBytes?:number, checkpoint?:object}} opts
  * @returns {{warnings:string[], tex:object, shader:object, outcomes:Array}}
@@ -223,7 +287,11 @@ function adaptForMobile(projectDir, opts = {}) {
     onLog(`  着色器兼容改写: ${shaderStats.rewritten} 个文件 / ${shaderStats.literals} 处补 .0 / ${shaderStats.structural} 处结构性修正`);
   }
   if (shaderStats.failed) warnings.push(`${shaderStats.failed} 个着色器改写失败，已保留原文件`);
-  return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes };
+
+  const dropped = dropAudioReactiveSolidLayers(projectDir, { onLog });
+  warnings.push(...dropped.warnings);
+
+  return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes, droppedLayers: dropped.removed };
 }
 
 /** 音频文件扩展名（可与 .tex/.frag/.vert 之外的所有资源共存） */
@@ -543,5 +611,5 @@ function analyze(inputPath) {
 module.exports = {
   packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
   detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
-  stripAudio, pickMagic, stableWorkDir,
+  stripAudio, pickMagic, stableWorkDir, dropAudioReactiveSolidLayers,
 };

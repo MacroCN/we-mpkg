@@ -39,17 +39,20 @@ const lz4 = require('./lz4');
 const dxt = require('./dxt');
 const { sha256Buffer } = require('./convertplan');
 
-// ---- 枚举 ----
+// ---- 枚举（数值对照 notscuffed/repkg：TexFormat / TexFlags / FreeImageFormat）----
+// header.format（TexFormat）：0=RGBA8888，4=DXT5，6=DXT3，7=DXT1，8=RG88，9=R8
+// （移动端另外见过 5=ETC2_RGBA8，按 RGBA8 之外的可读格式对待）
 const FREE_IMAGE = {
   UNKNOWN: -1, BMP: 0, ICO: 1, JPEG: 2, PNG: 13, GIF: 25, MP4: 35,
 };
 const TEX_FORMAT = { RGBA8888: 0, DXT5: 4, ETC2_RGBA8: 5, DXT3: 6, DXT1: 7, RG88: 8, R8: 9 };
+// header.flags（TexFlags）：1=NoInterpolation，2=ClampUVs，4=IsGif，32=IsVideoTexture
 const TEX_FLAGS = { NoInterpolation: 1, ClampUVs: 2, IsGif: 4, IsVideoTexture: 32 };
 const DXT_FORMATS = new Set([TEX_FORMAT.DXT1, TEX_FORMAT.DXT3, TEX_FORMAT.DXT5]);
 const RAW_FORMATS = new Set([TEX_FORMAT.RGBA8888, TEX_FORMAT.R8, TEX_FORMAT.RG88]);
 
 /** 单张纹理解码出的 RGBA 字节上限（可用 opts.maxRgbaBytes 覆盖） */
-const DEFAULT_MAX_RGBA_BYTES = 96 * 1024 * 1024;
+const DEFAULT_MAX_RGBA_BYTES = 192 * 1024 * 1024;
 /** 单个 .tex 文件读取上限，超过直接跳过（防止一个文件就把内存吃满） */
 const DEFAULT_MAX_FILE_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_DIMENSION = 4096;
@@ -372,22 +375,42 @@ function decodePng(buf) {
   return { width, height, data };
 }
 
-/** 解码 JPEG（依赖 jpeg-js；未安装时返回 null） */
-function decodeJpeg(buf) {
+/** 最近一次解码失败的原因（供上层给用户看具体原因，而不是一句“无法解码”） */
+let lastDecodeError = '';
+
+/**
+ * 解码 JPEG（依赖 jpeg-js；未安装时返回 null）。
+ * jpeg-js 默认只给 512MB 内存 / 100MP，6000×4500 的渐进式大图会被它自己拦下，
+ * 之前就是这里把整张纹理判成「无法解码」→ 原图直通 → 手机端读不出来 → 黑屏。
+ */
+function decodeJpeg(buf, opts = {}) {
   const jpeg = getJpeg();
-  if (!jpeg) return null;
+  if (!jpeg) { lastDecodeError = '缺少 jpeg-js 依赖'; return null; }
+  const maxMemoryUsageInMB = opts.maxMemoryMB || DEFAULT_MAX_RGBA_BYTES / 1048576 * 4;
   try {
-    const r = jpeg.decode(buf, { useTArray: true, formatAsRGBA: true });
+    const r = jpeg.decode(buf, {
+      useTArray: true,
+      formatAsRGBA: true,
+      maxMemoryUsageInMB: Math.max(512, Math.ceil(maxMemoryUsageInMB)),
+      maxResolutionInMP: Math.max(100, opts.maxResolutionMP || 512),
+    });
+    lastDecodeError = '';
     return { width: r.width, height: r.height, data: Buffer.from(r.data) };
-  } catch {
+  } catch (e) {
+    lastDecodeError = `JPEG 解码失败: ${e.message}`;
     return null;
   }
 }
 
 /** 按载荷首字节猜图种，兜住 imageFormat 写错的包 */
-function decodeImage(buf) {
-  if (buf.length > 8 && buf.readUInt32BE(0) === 0x89504e47) return decodePng(buf);
-  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) return decodeJpeg(buf);
+function decodeImage(buf, opts = {}) {
+  if (buf.length > 8 && buf.readUInt32BE(0) === 0x89504e47) {
+    const png = decodePng(buf);
+    if (!png) lastDecodeError = lastDecodeError || 'PNG 解码失败';
+    return png;
+  }
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) return decodeJpeg(buf, opts);
+  lastDecodeError = '既不是 PNG 也不是 JPEG';
   return null;
 }
 
@@ -554,7 +577,8 @@ function inspectTex(buf, opts = {}) {
   if (largest * 4 > maxRgbaBytes) {
     return {
       route: 'keep-budget',
-      reason: `解码需要约 ${(largest * 4 / 1048576).toFixed(1)}MB，超过 ${(maxRgbaBytes / 1048576).toFixed(0)}MB 预算`,
+      reason: `解码需要约 ${(largest * 4 / 1048576).toFixed(1)}MB，超过 ${(maxRgbaBytes / 1048576).toFixed(0)}MB 预算；`
+        + '原样保留会让手机端读不出来，建议调高 --max-texture-mb 或改用均衡/流畅档位',
       pixels: largest, width, height, animated,
     };
   }
@@ -682,7 +706,10 @@ function convertTexBuffer(buf, opts = {}) {
     return { changed: false, route: 'keep', reason: `TEX 解析失败: ${e.message}` };
   }
   const preset = typeof opts.preset === 'string' ? presetOf(opts.preset) : (opts.preset || presetOf('high'));
-  const semantic = opts.semantic || semanticOf(opts.relPath);
+  let semantic = opts.semantic || semanticOf(opts.relPath);
+  // 文件名没有语义线索（materials/1.tex 这种）但载荷是 JPEG/PNG 直通图时，基本可以按彩色图处理，
+  // 否则 6000×4500 这类超尺寸照片会原尺寸写进 mpkg，体积和显存都顶不住。
+  if (semantic === 'unknown' && tex.container.imageFormat >= 0) semantic = 'color';
   const animated = (tex.header.flags & TEX_FLAGS.IsGif) !== 0;
   const framesTail = tex.framesStart < buf.length ? buf.subarray(tex.framesStart) : null;
   // 动图不降采样：帧表里记着像素矩形，尺寸一变帧表就对不上了
@@ -707,7 +734,7 @@ function convertTexBuffer(buf, opts = {}) {
         payload = lz4.decompress(payload, mip.decompressedBytes);
       }
       const decoded = decodeImage(payload);
-      if (!decoded) throw new Error('直通图无法解码（隔行 PNG / 不支持的图种 / 缺 jpeg-js）');
+      if (!decoded) throw new Error(`直通图无法解码（${lastDecodeError || '未知原因'}）`);
       pixels = cropRgba(decoded.data, decoded.width, decoded.height, logicalW, logicalH);
       if (pixels.length !== checkedSize(logicalW, logicalH, 4)) throw new Error('解码后像素长度异常');
       if (mip.width !== want.width || mip.height !== want.height) {

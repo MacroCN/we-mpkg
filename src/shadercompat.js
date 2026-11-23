@@ -573,29 +573,38 @@ function replaceInCode(source, regex, replacement) {
 }
 
 /**
- * effects/xray 材质：桌面版靠 g_PointerState 把「鼠标位置」换算成 UV 缩放，
- * 手机端没有这个 uniform，UV 会整体偏移（表现为画面错位/糊）。
- * 结构对不上就不动。
+ * effects/xray：桌面端引擎在着色器头部已经注入 `g_PointerState`（作者直接用不声明），
+ * 以前这里又自己补了一份 `uniform vec4 g_PointerState;`，移动端编译器报 uniform 重定义，
+ * 整个 effect 编译失败 → 壁纸黑屏。现在一律不改，保持作者原样。
  */
 function rewriteXray(source) {
-  if (!source.includes('v_PointerUV') || !source.includes('v_PointerScale')) return { text: source, count: 0 };
-  if (source.includes('uniform vec4 g_PointerState;')) return { text: source, count: 0 };
-  let out = source;
+  return { text: source, count: 0 };
+}
+
+/**
+ * 预处理指令里多写的分号（`#elif AUDIOSAMPLES == 32;`）会让移动端 GLSL 编译器
+ * 在求值条件时报语法错误，整个 shader 编译失败（表现为该层变白块 / 消失）。
+ */
+const PREPROC_COND = /^(#\s*(?:if|elif|ifdef|ifndef)\b[^\r\n]*?);[ \t]*$/gm;
+function rewritePreprocessorCondition(source) {
+  const r = replaceInCode(source, PREPROC_COND, (match, head) => head);
+  return { text: r.text, count: r.count };
+}
+
+/**
+ * 音频频谱的整数组拷贝：`float left[N] = g_AudioSpectrum32Left;`
+ * 用 uniform 数组直接初始化本地数组在移动端 GLSL 上不可靠，
+ * 展开成「先声明、再逐个元素拷贝」的循环（语义完全一致）。
+ */
+const SPECTRUM_ARRAY_COPY = /^([ \t]*)float[ \t]+([A-Za-z_]\w*)[ \t]*\[([^\]]*)\][ \t]*=[ \t]*(g_AudioSpectrum\d+(?:Left|Right))[ \t]*;[ \t]*$/gm;
+let spectrumLoopId = 0;
+function rewriteAudioSpectrumArray(source) {
   let count = 0;
-  const marker = 'varying float v_PointerScale;';
-  if (out.includes(marker)) {
-    out = out.replace(marker, `${marker}\nuniform vec4 g_PointerState;`);
+  const out = source.replace(SPECTRUM_ARRAY_COPY, (match, indent, name, size, uniformName) => {
     count++;
-  } else {
-    return { text: source, count: 0 };
-  }
-  if (out.includes('unprojectedUVs += 0.5;') && !out.includes('g_PointerState.y')) {
-    out = out.replace(
-      'unprojectedUVs += 0.5;',
-      'unprojectedUVs *= CAST2(1.0 / max(0.00001, g_PointerState.y));\nunprojectedUVs += 0.5;',
-    );
-    count++;
-  }
+    const k = `_s${spectrumLoopId++}`;
+    return `${indent}float ${name}[${size}];\n${indent}for (int ${k} = 0; ${k} < AUDIOSAMPLES; ${k}++) ${name}[${k}] = ${uniformName}[${k}];`;
+  });
   return { text: out, count };
 }
 
@@ -673,7 +682,7 @@ function rewriteAll(source, opts = {}) {
     const r = rewriteXray(text);
     text = r.text; structural += r.count;
   }
-  for (const fn of [rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword]) {
+  for (const fn of [rewritePreprocessorCondition, rewriteAudioSpectrumArray, rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword]) {
     const r = fn(text);
     text = r.text;
     structural += r.count;
@@ -729,4 +738,4 @@ function patchDir(dir, opts = {}) {
   return stats;
 }
 
-module.exports = { patch, patchDir, isShaderPath, rewriteAll, maskNonCode, rewriteXray, rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword };
+module.exports = { patch, patchDir, isShaderPath, rewriteAll, maskNonCode, rewriteXray, rewritePreprocessorCondition, rewriteAudioSpectrumArray, rewritePackedAudioSpectrum, rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword };

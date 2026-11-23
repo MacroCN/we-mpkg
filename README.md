@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.0.1**（下载中心 + 并发下载，见 [2.0.1 改进](#201-改进)）
+- 当前版本：**2.0.2**（纹理解码与着色器兼容修复，见 [2.0.2 改进](#202-改进)）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.1.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
-| `we-mpkg-android-2.0.1.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
-| `we-mpkg-src-2.0.1.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.0.2.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
+| `we-mpkg-android-2.0.2.apk` | 安卓安装包（arm64-v8a，约 70 MB） |
+| `we-mpkg-src-2.0.2.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.0.1.zip
+解压 we-mpkg-portable-2.0.2.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -81,6 +81,22 @@ node bin\wempkg.js serve --port 3090
 | `scene` | 可用（DXT/直通图解码成 RGBA8 并按 LZ4 压缩、着色器做移动端改写） |
 | `web` | 可用（渲染成视频封装，含音频轨与音频响应频谱） |
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
+
+---
+
+## 2.0.2 改进
+
+这版只修真机上真实翻车的两处：一是纹理读不出来（灰屏/黑屏），二是渲染出一块白块。纹理编码部分按 [notscuffed/repkg](https://github.com/notscuffed/repkg) 重新梳理了一遍（对照笔记：[docs/TEX编码转换与repkg对照.md](docs/TEX编码转换与repkg对照.md)）。
+
+| # | 问题 | 根因 | 落地方式 |
+|---|---|---|---|
+| 1 | 部分壁纸手机端灰屏/黑屏 | 纹理是**渐进式 JPEG**（`TEXB0004` + `imageFormat=2`，6000×4500，解码约 103MB） | `src/tex.js` 的 `decodeJpeg` 不再用 jpeg-js 默认的 512MB/100MP 上限，改为按解码预算推导 `maxMemoryUsageInMB` / `maxResolutionInMP`；解码失败的真实原因现在会写进告警文案，不再只说"直通图无法解码" |
+| 2 | 大图整体被"超预算"放过原图 | 96MB 解码预算太小，超了就直接保留原文件 → 手机读不出 | 默认预算 96MB → **192MB**；无文件名语义的直通图按 `color` 处理，让 6000×4500 正常降到 4096×3072 |
+| 3 | X-ray 等效果整块不画（只剩清屏色） | 之前给 `xray` 着色器补了一行 `uniform vec4 g_PointerState;`，而引擎头部已经全局注入过 → 移动端 uniform 重定义编译失败 | `rewriteXray` 改成**完全不改写**（真机 `libscenejni.so` 字符串表可证 `g_PointerState` 由引擎提供） |
+| 4 | 频谱类效果编译失败 | `#elif AUDIOSAMPLES == 32;` 这类预处理行尾多余分号；`float left[N] = g_AudioSpectrum32Left;` 整数组初始化在 GLSL ES 不合法 | 新增 `rewritePreprocessorCondition`（去掉 `#if/#elif` 行尾分号）与 `rewriteAudioSpectrumArray`（拆成声明 + `for` 循环逐元素拷贝） |
+| 5 | 画面出现一块**白色实心矩形** | 纯色层（`models/util/solidlayer.json`）挂音频频谱效果，shader 在移动端编译失败后露出未上色的白色实心层 | 新增 `dropAudioReactiveSolidLayers`：打包时自动移除「纯色层 + 音频频谱效果」的对象（默认已剥离音频，这层留着也没数据可画），日志与告警里写明移除了哪一层；主图、文字层、普通纯色层不动 |
+
+删除范围有单测保护（`test/run-tests.js`，54 项）：普通纯色层保留、主图挂同一效果不删、被删对象的 `scene.json` 能正确重写。
 
 ---
 

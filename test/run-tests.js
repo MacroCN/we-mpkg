@@ -598,18 +598,59 @@ test('vec3 颜色累加器只在结构吻合时改写', () => {
   assert.strictEqual(shader.rewriteVec3ColorAccumulator(other).count, 0);
 });
 
-test('xray 只在结构吻合的 effects/xray 上注入 g_PointerState', () => {
+test('xray 不再注入 g_PointerState（引擎自带，重复声明会编译失败）', () => {
   const src = 'varying vec2 v_PointerUV;\nvarying float v_PointerScale;\nvoid main(){ unprojectedUVs += 0.5; }';
   const r = shader.rewriteXray(src);
-  assert.strictEqual(r.count, 2);
-  assert.ok(r.text.includes('uniform vec4 g_PointerState;'));
-  assert.ok(r.text.includes('g_PointerState.y'));
-  // 缺 v_PointerUV 的普通 shader 不会被注入
-  const plain = 'varying float v_PointerScale;\nvoid main(){ unprojectedUVs += 0.5; }';
-  assert.strictEqual(shader.rewriteXray(plain).count, 0);
+  assert.strictEqual(r.count, 0);
+  assert.strictEqual(r.text, src);
 });
 
-console.log('\n[15] 音频剥离');
+test('预处理条件里的多余分号被去掉', () => {
+  const src = '#if AUDIOSAMPLES == 16\nfloat a = 1;\n#elif AUDIOSAMPLES == 32;\nfloat a = 2;\n#endif\n';
+  const r = shader.rewritePreprocessorCondition(src);
+  assert.strictEqual(r.count, 1);
+  assert.ok(r.text.includes('#elif AUDIOSAMPLES == 32\n'), r.text);
+});
+
+test('频谱 uniform 整数组拷贝展开成逐元素循环', () => {
+  const src = '\tfloat left[AUDIOSAMPLES] = g_AudioSpectrum32Left;\n\tfloat l = left[i];\n';
+  const r = shader.rewriteAudioSpectrumArray(src);
+  assert.strictEqual(r.count, 1);
+  assert.ok(!r.text.includes('float left[AUDIOSAMPLES] = g_AudioSpectrum32Left'), r.text);
+  assert.ok(r.text.includes('float left[AUDIOSAMPLES];'), r.text);
+  assert.ok(r.text.includes('float l = left[i];'), '使用处保持不动');
+});
+
+console.log('\n[15] 音频剥离（含音频频谱层清理）');
+
+test('纯色音频频谱层会被移除，普通纯色层保留', () => {
+  const dir = tmp('audioLayer');
+  fs.mkdirSync(path.join(dir, 'effects', 'bar'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'shaders', 'effects'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'effects', 'plain'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'shaders', 'effects', 'bar.frag'),
+    'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
+  fs.writeFileSync(path.join(dir, 'shaders', 'effects', 'plain.frag'), 'void main(){}\n');
+  fs.writeFileSync(path.join(dir, 'effects', 'bar', 'effect.json'), JSON.stringify({
+    dependencies: ['shaders/effects/bar.frag'],
+  }));
+  fs.writeFileSync(path.join(dir, 'effects', 'plain', 'effect.json'), JSON.stringify({
+    dependencies: ['shaders/effects/plain.frag'],
+  }));
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 1, name: '频谱', image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] },
+      { id: 2, name: '普通纯色', image: 'models/util/solidlayer.json', effects: [{ file: 'effects/plain/effect.json' }] },
+      { id: 3, name: '主图', image: 'models/1.json', effects: [{ file: 'effects/bar/effect.json' }] },
+    ],
+  }));
+  const r = packer.dropAudioReactiveSolidLayers(dir, {});
+  assert.strictEqual(r.removed.length, 1);
+  assert.strictEqual(r.removed[0].id, 1);
+  assert.strictEqual(r.warnings.length, 1);
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.deepStrictEqual(scene.objects.map((o) => o.id), [2, 3]);
+});
 
 test('默认剥离音频，preserveAudio 时保留', () => {
   const dir = tmp('audio');
