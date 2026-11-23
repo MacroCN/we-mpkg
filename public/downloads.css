@@ -146,3 +146,19 @@ a.download.small {
   color: #34d399;
   text-decoration: none;
 }
+
+/* 清空历史的页内二次确认（WebView 里 confirm 不可用） */
+.dl-confirm {
+  display: none;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(239, 95, 107, 0.55);
+  background: rgba(239, 95, 107, 0.08);
+  font-size: 12px;
+}
+.dl-confirm.on { display: flex; }
+.dl-confirm span { flex: 1; }
+.dl-confirm button.danger { color: var(--err); border-color: rgba(239, 95, 107, 0.75); }

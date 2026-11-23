@@ -818,6 +818,13 @@ await testAsync('HTTP 接口：创建 / 列表 / 取消 / 文件', async () => {
   assert.strictEqual(file.status, 200);
   assert.strictEqual(file.text, 'mpkg-bytes');
 
+  // 安卓端「导入壁纸引擎」要靠绝对路径：列表接口必须带 outPath
+  const jobsList = await req('GET', '/api/hub/jobs');
+  const listed = (JSON.parse(jobsList.text).jobs || []).find((x) => x.id === j.id);
+  assert.ok(listed, '列表里应能看到该任务');
+  assert.strictEqual(listed.outPath, outFile, '列表必须返回成品绝对路径 outPath');
+  assert.strictEqual(listed.outFile, 'x.mpkg', 'outFile 仍只给文件名');
+
   server.close();
   hub.stop();
 });

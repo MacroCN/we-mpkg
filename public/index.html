@@ -6,6 +6,7 @@
 <meta name="theme-color" content="#0f1720" />
 <title>WE 创意工坊 → MPKG</title>
 <link rel="stylesheet" href="/style.css" />
+<link rel="stylesheet" href="/dlcenter.css" />
 </head>
 <body>
 
@@ -18,7 +19,7 @@
     </div>
   </div>
   <div class="top-actions">
-    <a id="hubBtn" class="ghost" href="/downloads" target="_blank" rel="noreferrer" data-i18n="hub">下载中心</a>
+    <button id="hubBtn" class="ghost" type="button" data-i18n="hub">下载中心</button>
     <button id="langBtn" class="ghost" title="Language">EN</button>
     <button id="settingsBtn" class="ghost" title="Settings">⚙</button>
   </div>
@@ -116,7 +117,7 @@
       <div class="bar"><i id="p-bar"></i></div>
       <div id="p-sub" class="progress-sub"></div>
       <div class="progress-links">
-        <a id="p-hub" class="link" href="/downloads" target="_blank" rel="noreferrer" data-i18n="openHub">在下载中心查看（独立进程，关页面也不中断）</a>
+        <button id="p-hub" class="link" type="button" data-i18n="openHub">在下载中心查看（独立进程，关页面也不中断）</button>
         <button id="p-cancel" class="ghost hidden" data-i18n="cancelTask">取消任务</button>
       </div>
       <pre id="p-log" class="log"></pre>
@@ -182,5 +183,6 @@
 </div>
 
 <script src="/app.js"></script>
+<script src="/dlcenter.js" defer></script>
 </body>
 </html>

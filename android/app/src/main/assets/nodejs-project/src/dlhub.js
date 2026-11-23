@@ -331,6 +331,8 @@ function createHub(opts = {}) {
       progress: j.progress, error: j.error, createdAt: j.createdAt,
       finishedAt: j.finishedAt, hasResult: !!j.result,
       outFile: j.result && j.result.outFile ? path.basename(j.result.outFile) : null,
+      // 绝对路径只给本机网页/安卓外壳用：安卓要靠它拉起壁纸引擎导入，绕开 WebView 下载
+      outPath: j.result && j.result.outFile ? j.result.outFile : null,
       size: j.result ? j.result.size : null,
       type: j.result ? j.result.type : null,
       rawDir: j.result && j.result.raw ? j.result.rawDir : null,

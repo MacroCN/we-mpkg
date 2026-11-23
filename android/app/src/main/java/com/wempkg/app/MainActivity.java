@@ -30,6 +30,11 @@ public class MainActivity extends Activity {
     private TextView txtStatus;
     private EditText editRemote;
 
+    /** 下载中心浮层是否展开（返回键先收浮层，不跳页、不重载） */
+    private boolean downloadsOpen = false;
+    /** 只有用户明确点「退出」才关掉本地 Node；返回/退到后台都保留 */
+    private boolean quitRequested = false;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -94,6 +99,12 @@ public class MainActivity extends Activity {
             public String openMpkg(String path) {
                 return sendToWallpaperEngine(path);
             }
+
+            /** 下载中心浮层开关：返回键据此决定「先收浮层」还是「退到后台」 */
+            @android.webkit.JavascriptInterface
+            public void setDownloadsOpen(boolean open) {
+                downloadsOpen = open;
+            }
         }, "Android");
 
         editRemote.setText(getPreferences(MODE_PRIVATE).getString("remote", ""));
@@ -131,8 +142,24 @@ public class MainActivity extends Activity {
         }
 
         // 默认直接进本地模式（首次启动也自动起 Node），上次选过远程就恢复远程
+        // 但如果是系统重建（旋屏/被系统回收后回来），先恢复 WebView 现场，绝不重新加载
+        if (savedInstanceState != null && restoreWebState(savedInstanceState)) {
+            if (!portOpen()) startLocal();     // 进程被杀过：页面是旧的，重新起服务
+            return;
+        }
         String mode = getPreferences(MODE_PRIVATE).getString("mode", "");
         if (!"remote".equals(mode)) startLocal();
+    }
+
+    private static final String WEB_STATE_KEY = "webViewState";
+
+    private boolean restoreWebState(Bundle saved) {
+        Bundle ws = saved.getBundle(WEB_STATE_KEY);
+        if (ws == null) return false;
+        if (web.restoreState(ws) == null) return false;
+        setupPanel.setVisibility(View.GONE);
+        web.setVisibility(View.VISIBLE);
+        return true;
     }
 
     private void startLocal() {
@@ -414,30 +441,53 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        if (web != null) {
+            Bundle ws = new Bundle();
+            web.saveState(ws);
+            outState.putBundle(WEB_STATE_KEY, ws);
+        }
+    }
+
+    /**
+     * 返回键走安卓习惯：浮层 → 抽屉/弹窗（由网页自己消费）→ 退到后台。
+     * 不再「隐藏网页回到启动页」、也不再顺手杀进程；页面状态原样保留，不会重新加载。
+     */
+    @Override
     public void onBackPressed() {
-        if (web != null && web.getVisibility() == View.VISIBLE) {
-            if (web.canGoBack()) {
-                web.goBack();
-                return;
-            }
-            setupPanel.setVisibility(View.VISIBLE);
-            web.setVisibility(View.GONE);
+        if (downloadsOpen) {
+            web.evaluateJavascript("window.WE_DLC && window.WE_DLC.close()", null);
+            downloadsOpen = false;
             return;
         }
-        // 在启动页按返回 = 退出应用（连带关掉后台的 Node 服务）
-        quitApp();
+        if (web != null && web.getVisibility() == View.VISIBLE) {
+            web.evaluateJavascript(
+                "(function(){try{return !!(window.__androidBack && window.__androidBack());}catch(e){return false;}})()",
+                new android.webkit.ValueCallback<String>() {
+                    @Override public void onReceiveValue(String consumed) {
+                        if ("true".equals(consumed)) return;   // 网页自己关掉了抽屉/弹窗
+                        if (web.canGoBack()) web.goBack();
+                        else moveTaskToBack(true);            // 退到后台，保活 Node，不退出
+                    }
+                });
+            return;
+        }
+        moveTaskToBack(true);
     }
 
     /** 退出应用：关掉本地 Node 服务并结束进程，避免后台残留占内存/占端口 */
     private void quitApp() {
+        quitRequested = true;
         status("正在退出，关闭本地服务…");
         NodeRunner.shutdownAndExit(getApplicationContext(), PORT);
     }
 
     @Override
     protected void onDestroy() {
-        // 用户主动退出/划掉任务时也要把 Node 带走；仅配置变化（如旋屏）时不杀
-        if (isFinishing()) {
+        // 只有用户明确点「退出」才把 Node 带走；
+        // 返回键/退到后台/系统回收都保留进程，下载与打包继续跑
+        if (quitRequested && isFinishing()) {
             NodeRunner.shutdownAndExit(getApplicationContext(), PORT);
         }
         super.onDestroy();

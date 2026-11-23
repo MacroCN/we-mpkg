@@ -422,6 +422,22 @@ function closeDetail() {
   if (state.poll) clearTimeout(state.poll);
 }
 
+/** 安卓返回键：先关抽屉/弹窗，返回 true 表示已在页面内消费掉这次返回 */
+window.__androidBack = function () {
+  const modal = $('modal');
+  if (modal && !modal.classList.contains('hidden')) {
+    modal.classList.add('hidden');
+    if (state.loginPoll) clearTimeout(state.loginPoll);
+    return true;
+  }
+  const drawer = $('drawer');
+  if (drawer && !drawer.classList.contains('hidden')) {
+    closeDetail();
+    return true;
+  }
+  return false;
+};
+
 async function startDownload() {
   const cur = state.current;
   if (!cur) return;
@@ -453,8 +469,9 @@ async function startDownload() {
         preserveAudio: !!($('d-audio') && $('d-audio').checked),
       }),
     });
-    // 任务跑在独立进程（下载中心）里：网页关掉也会继续下，进度页可单独打开
+    // 任务跑在独立进程（下载中心）里：网页关掉也会继续下，进度在浮层里看
     $('p-log').textContent = `已加入下载中心（${tr('hubHint')}）`;
+    if (window.WE_DLC) window.WE_DLC.notifyJobAdded();
     pollJob(jobId);
   } catch (e) {
     $('p-state').textContent = '✘ ' + e.message;
@@ -769,6 +786,10 @@ function wire() {
   $('close').onclick = closeDetail;
   $('d-download').onclick = startDownload;
   if ($('p-cancel')) $('p-cancel').onclick = cancelCurrentJob;
+  // 下载中心改成页内浮层：不跳页、不重载主界面
+  const openDlCenter = () => { if (window.WE_DLC) window.WE_DLC.open(); };
+  if ($('hubBtn')) $('hubBtn').onclick = openDlCenter;
+  if ($('p-hub')) $('p-hub').onclick = openDlCenter;
   $('filterToggle').onclick = () => {
     state.filtersOpen = !state.filtersOpen;
     applyFiltersOpen();

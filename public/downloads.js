@@ -33,6 +33,11 @@ function esc(s) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
+/** 安卓外壳的原生桥：有它才能直接拉起壁纸引擎导入 */
+function hasBridge() {
+  return !!(window.Android && typeof window.Android.openMpkg === 'function');
+}
+
 function human(n) {
   n = Number(n) || 0;
   if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
@@ -84,7 +89,8 @@ function renderJob(j) {
   const actions = [];
   if (isRun) actions.push(`<button class="ghost" data-act="cancel" data-id="${esc(j.id)}">取消</button>`);
   if (j.state === 'failed' || j.state === 'cancelled') actions.push(`<button class="ghost" data-act="retry" data-id="${esc(j.id)}">重试</button>`);
-  if (j.state === 'done' && j.outFile) actions.push(`<a class="download small" href="api/hub/file/${encodeURIComponent(j.id)}">保存 .mpkg</a>`);
+  if (j.state === 'done' && hasBridge() && j.outPath) actions.push(`<button class="ghost small" data-act="import" data-id="${esc(j.id)}">导入壁纸引擎</button>`);
+  else if (j.state === 'done' && j.outFile) actions.push(`<a class="download small" href="api/hub/file/${encodeURIComponent(j.id)}">保存 .mpkg</a>`);
   if (j.state === 'done' && j.rawDir) actions.push(`<span class="dl-path" title="${esc(j.rawDir)}">已下载：${esc(j.rawDir)}</span>`);
 
   const tex = j.result && j.result.tex;
@@ -119,6 +125,7 @@ function renderJob(j) {
 }
 
 let lastFingerprint = '';
+let lastJobs = [];
 
 function fingerprint(jobs) {
   return JSON.stringify(jobs.map((j) => [j.id, j.state, j.progress && j.progress.percent, j.progress && j.progress.bytes, j.error, j.log && j.log.length]));
@@ -130,6 +137,7 @@ async function tick() {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const data = await r.json();
     const jobs = data.jobs || [];
+    lastJobs = jobs;
     const fp = fingerprint(jobs);
     $('dl-stat').textContent = `${data.running}/${data.maxConcurrent} 并发 · 共 ${jobs.length} 条`;
     $('dl-empty').classList.toggle('hidden', jobs.length > 0);
@@ -165,15 +173,27 @@ $('dl-list').addEventListener('click', async (ev) => {
   const btn = ev.target.closest('button[data-act]');
   if (!btn) return;
   const { act, id } = btn.dataset;
+  if (act === 'import') {
+    // 安卓外壳里：直接把成品绝对路径交给原生，用 content:// 拉起壁纸引擎
+    const job = (lastJobs || []).find((x) => x.id === id);
+    if (!job || !job.outPath) return;
+    try {
+      const msg = window.Android.openMpkg(job.outPath);
+      $('dl-stat').textContent = msg || '正在打开壁纸引擎…';
+    } catch (e) {
+      $('dl-stat').textContent = '拉起壁纸引擎失败：' + e.message;
+    }
+    return;
+  }
   btn.disabled = true;
   try {
     const r = await fetch(`api/hub/jobs/${encodeURIComponent(id)}/${act}`, { method: 'POST' });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
-      alert(j.error || ('操作失败：HTTP ' + r.status));
+      $('dl-stat').textContent = j.error || ('操作失败：HTTP ' + r.status);
     }
   } catch (e) {
-    alert('操作失败：' + e.message);
+    $('dl-stat').textContent = '操作失败：' + e.message;
   } finally {
     btn.disabled = false;
     tick();
@@ -182,14 +202,28 @@ $('dl-list').addEventListener('click', async (ev) => {
 
 $('dl-clear').addEventListener('click', async () => {
   const done = [...document.querySelectorAll('.dl-card.st-done, .dl-card.st-failed, .dl-card.st-cancelled')];
-  if (!done.length) return;
-  if (!confirm(`清空 ${done.length} 条已完成/失败记录？（不影响成品文件）`)) return;
-  for (const card of done) {
+  if (!done.length) {
+    $('dl-stat').textContent = '没有可清空的记录';
+    return;
+  }
+  // WebView 里 window.confirm 是空操作（没有 WebChromeClient），所以用页内二次确认
+  if (!$('dl-confirm').classList.contains('on')) {
+    $('dl-confirm-text').textContent = `清空 ${done.length} 条已完成/失败记录？（不影响成品文件）`;
+    $('dl-confirm').classList.add('on');
+    return;
+  }
+});
+
+$('dl-confirm-yes').addEventListener('click', async () => {
+  $('dl-confirm').classList.remove('on');
+  const cards = [...document.querySelectorAll('.dl-card.st-done, .dl-card.st-failed, .dl-card.st-cancelled')];
+  for (const card of cards) {
     try { await fetch(`api/hub/jobs/${encodeURIComponent(card.dataset.id)}/forget`, { method: 'POST' }); } catch { /* ignore */ }
   }
   lastFingerprint = '';
   tick();
 });
+$('dl-confirm-no').addEventListener('click', () => $('dl-confirm').classList.remove('on'));
 
 tick();
 loadOutputs();
