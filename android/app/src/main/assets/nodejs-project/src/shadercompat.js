@@ -160,7 +160,15 @@ function classify(beforeRaw, afterRaw, tables) {
 
   const enc = findEnclosing(beforeRaw);
   if (enc.bracket) return null;
-  if (CONSTRUCTORS.has(enc.owner)) return null;
+  if (CONSTRUCTORS.has(enc.owner)) {
+    // 构造器里的混合运算还是要补点（`vec4(pointer * 2 - 1, ...)`），
+    // 纯整数实参（`vec4(0,0,0,0)`）保持原样
+    const span = beforeRaw.slice(enc.openAt + 1) + afterRaw;
+    const close = span.indexOf(')');
+    const args = splitTop(close < 0 ? span : span.slice(0, close));
+    const cur = args.length ? args[Math.min(enc.argIndex, args.length - 1)] : '';
+    return mentionsFloat(cur, tables) ? '构造器实参混型' : null;
+  }
   if (containsForIntInit(beforeRaw)) return null;
 
   const owner = enc.owner;
@@ -269,10 +277,15 @@ function trailingIdentifier(s) {
 function lastOperand(t) {
   let end = t.length;
   while (end > 0 && /\s/.test(t[end - 1])) end--;
+  // 以浮点字面量结尾（`... * 2.0 -`）时整段就是那个字面量
+  const lit = /(\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)$/.exec(t.slice(0, end));
+  if (lit && lit[1].includes('.')) return lit[1];
   for (;;) {
     let k = end;
     while (k > 0 && isWordChar(t[k - 1])) k--;
     if (k > 0 && t[k - 1] === '.' && k < end) {
+      // `2.0` 这种浮点字面量别当成成员访问拆开
+      if (/^\d+$/.test(t.slice(k, end))) break;
       end = k - 1;
       while (end > 0 && /\s/.test(t[end - 1])) end--;
       continue;
@@ -443,7 +456,7 @@ function tryMatchDeclarationInit(beforeRaw) {
 function tryAssignmentTarget(b) {
   if (!b || b[b.length - 1] !== '=') return null;
   if (b.length >= 2 && '!=<>'.includes(b[b.length - 2])) return null;
-  let left = b.slice(0, b.length - 1).replace(/\s+$/, '');
+  let left = b.slice(0, b.length - 1).replace(/\s+$/, '').replace(/^[ \t]+/, '');
   if (left.length > 0 && left[left.length - 1] === ']') {
     let k = left.length - 1;
     let depth = 0;
@@ -454,6 +467,9 @@ function tryAssignmentTarget(b) {
     if (k < 0) return null;
     left = left.slice(0, k).replace(/\s+$/, '');
   }
+  // `albedo.a = ...` 这种成员赋值，类型看的是基变量（vec4 的 .a 是 float）
+  const member = left.match(/^([A-Za-z_]\w*)[ \t]*\.[ \t]*[A-Za-z_]\w*$/);
+  if (member) return member[1];
   const end = left.length;
   let start = end;
   while (start > 0 && isWordChar(left[start - 1])) start--;
@@ -829,17 +845,89 @@ function rewriteEngineUniformDecl(source) {
 }
 
 /**
+ * 整数宏（combo）混进 float 运算：`u_gap / (100 * AUDIOSAMPLES)`、`float len = AUDIOSAMPLES;`
+ *
+ * GLSL ES 3.00 / 1.00 都不做 int→float 隐式转换（桌面 GLSL 允许，所以作者这么写没事），
+ * 这类写法在手机上直接编译失败。这里把「纯整数子表达式」包一层 float(...)，语义不变。
+ */
+const INT_MACRO = '[A-Z_][A-Z0-9_]*';
+const INT_ATOM = `(?:\\d+|${INT_MACRO})`;
+const INT_ONLY_PAREN = new RegExp(`\\(\\s*${INT_ATOM}(?:\\s*[*/+-]\\s*${INT_ATOM})+\\s*\\)`, 'g');
+const FLOAT_FROM_INT_MACRO = new RegExp(`(float[ \\t]+[A-Za-z_]\\w*[ \\t]*=[ \\t]*)(${INT_MACRO})([ \\t]*;)`, 'g');
+
+function rewriteComboArithmetic(source) {
+  let count = 0;
+  // 修掉历史版本重复改写留下的 `floatfloat(...)`（本身不是合法 GLSL）
+  let text = source.replace(/floatfloat\(/g, () => { count++; return 'float('; });
+  text = text.replace(FLOAT_FROM_INT_MACRO, (m, head, name, tail) => {
+    if (/=\s*float\($/.test(head)) return m; // 已经包过 float(...)，别套两层
+    count++;
+    return `${head}float(${name})${tail}`;
+  });
+  text = text.replace(INT_ONLY_PAREN, (m, off, whole) => {
+    if (/\./.test(m)) return m; // 含小数就不是纯整数表达式
+    // 幂等：已经写成 float(...) 的不再包一层（否则重复改写会得到 floatfloat(...)）
+    if (whole.slice(Math.max(0, off - 5), off).endsWith('float')) return m;
+    count++;
+    return `float${m}`;
+  });
+  return { text, count };
+}
+
+/**
+ * 整数表达式塞进 float 变量、以及 `int / float` 这类混型运算。
+ *
+ * 桌面 GLSL 允许 int→float 隐式转换，GLSL ES 3.00 不允许；WE 的内置效果
+ * （godrays_cast 的 `const float sampleDrop = sampleCount - 1;`）在手机上
+ * 一旦被严格驱动编译就会整个效果失效，所以这里显式包一层。
+ * 只认「简单标识符」和「纯整型右值」，认不出就原样保留。
+ */
+function rewriteIntFloatMix(source) {
+  let count = 0;
+  const intNames = new Set();
+  for (const m of source.matchAll(/\b(?:const\s+)?int\s+([A-Za-z_]\w*)/g)) intNames.add(m[1]);
+
+  const hasDot = (e) => /\d\.\d/.test(e) || /\bfloat\s*\(/.test(e);
+  const mentionsInt = (e) => {
+    for (const m of e.matchAll(/[A-Za-z_]\w*/g)) if (intNames.has(m[0])) return m[0];
+    return null;
+  };
+
+  // 1) const float x = <纯整型表达式>;
+  let text = source.replace(/((?:const\s+)?float\s+[A-Za-z_]\w*\s*=\s*)([^;=]+?)(\s*;)/g, (m, head, rhs, tail) => {
+    if (hasDot(rhs)) return m;
+    if (!mentionsInt(rhs)) return m;
+    if (/^\s*float\s*\(/.test(rhs)) return m;
+    count++;
+    return `${head}float(${rhs.trim()})${tail}`;
+  });
+
+  // 2) (a / b) 里一侧是 int、另一侧不是 → 给 int 那侧套 float()
+  text = text.replace(/\(\s*([A-Za-z_]\w*)\s*([*/+-])\s*([A-Za-z_]\w*)\s*\)/g, (m, a, op, b) => {
+    const ai = intNames.has(a), bi = intNames.has(b);
+    if (ai === bi) return m; // 两边同型，交给驱动
+    count++;
+    if (ai) return `(float(${a}) ${op} ${b})`;
+    return `(${a} ${op} float(${b}))`;
+  });
+  return { text, count };
+}
+
+/**
  * 完整改写：字面量补点 + 结构性补丁。
+ * 入口先把 CRLF 归一成 LF —— 之前 CRLF 文件里的 `#elif ...;`、`float a[N] = ...;`
+ * 因为行尾带 \r 匹配不上锚点，改写静默失效（真机上照样白块）。
  * @param {string} source
  * @param {{relPath?:string}} [opts]
  */
 function rewriteAll(source, opts = {}) {
-  const base = patch(source);
+  const crlf = /\r\n/.test(source);
+  const normalized = crlf ? source.replace(/\r\n/g, '\n') : source;
+  const base = patch(normalized);
   let text = base.text;
   let structural = 0;
   const rel = String(opts.relPath || '').replace(/\\/g, '/').toLowerCase();
 
-  // xray 只对 effects/xray 生效，别把通用 shader 的 UV 也改了
   if (rel.endsWith('effects/xray.vert') || rel.endsWith('effects/xray.frag')) {
     const r = rewriteXray(text);
     text = r.text; structural += r.count;
@@ -850,6 +938,8 @@ function rewriteAll(source, opts = {}) {
     rewritePackedAudioSpectrum,
     rewriteEngineUniformDecl,
     rewriteDynamicArrayIndex,
+    rewriteComboArithmetic,
+    rewriteIntFloatMix,
     rewriteVec3ColorAccumulator,
     rewriteCommonBlurInclude,
     rewriteSampleKeyword,
@@ -859,6 +949,7 @@ function rewriteAll(source, opts = {}) {
     text = r.text;
     structural += r.count;
   }
+  if (crlf) text = text.replace(/\n/g, '\r\n');
   return {
     text,
     linesChanged: base.linesChanged,
@@ -914,5 +1005,5 @@ module.exports = {
   patch, patchDir, isShaderPath, rewriteAll, maskNonCode, rewriteXray,
   rewritePreprocessorCondition, rewriteAudioSpectrumArray, rewritePackedAudioSpectrum,
   rewriteVec3ColorAccumulator, rewriteCommonBlurInclude, rewriteSampleKeyword,
-  rewriteDynamicArrayIndex, hasResidualDynamicArrayIndex, rewriteEngineUniformDecl,
+  rewriteDynamicArrayIndex, hasResidualDynamicArrayIndex, rewriteEngineUniformDecl, rewriteComboArithmetic, rewriteIntFloatMix,
 };

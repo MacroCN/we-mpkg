@@ -341,6 +341,35 @@ function repairSceneCompat(projectDir, opts = {}) {
  * @param {{onLog?:Function, preset?:object|string, maxRgbaBytes?:number, checkpoint?:object}} opts
  * @returns {{warnings:string[], tex:object, shader:object, outcomes:Array}}
  */
+/**
+ * 定稿前的着色器复检：逐个文件比对「磁盘上的」与「按同一套规则改写后的」文本，
+ * 不一致就写回。前面的解包/纹理阶段偶尔会把原始 shader 覆盖回来（实测 waterripple），
+ * patchDir 已经跑过也没用，所以这里做一次幂等兜底。
+ */
+function verifyShaders(projectDir) {
+  const stats = { fixed: 0, literals: 0, structural: 0 };
+  const walk = (d) => {
+    let ents;
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const ent of ents) {
+      const abs = path.join(d, ent.name);
+      if (ent.isDirectory()) { walk(abs); continue; }
+      if (!shadercompat.isShaderPath(ent.name)) continue;
+      let src;
+      try { src = fs.readFileSync(abs, 'utf8'); } catch { continue; }
+      const rel = path.relative(projectDir, abs).split(path.sep).join('/');
+      const r = shadercompat.rewriteAll(src, { relPath: rel });
+      if (r.text === src) continue;
+      fs.writeFileSync(abs, r.text);
+      stats.fixed++;
+      stats.literals += r.literalsChanged;
+      stats.structural += r.structural;
+    }
+  };
+  walk(projectDir);
+  return stats;
+}
+
 function adaptForMobile(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const onProgress = opts.onProgress || (() => {});
@@ -369,6 +398,16 @@ function adaptForMobile(projectDir, opts = {}) {
     onLog(`  着色器兼容改写: ${shaderStats.rewritten} 个文件 / ${shaderStats.literals} 处补 .0 / ${shaderStats.structural} 处结构性修正`);
   }
   if (shaderStats.failed) warnings.push(`${shaderStats.failed} 个着色器改写失败，已保留原文件`);
+
+  // 收尾再补一遍：前面解包/纹理阶段可能把原始 shader 又写回来（实测 waterripple 这类
+  // 内置效果会被 reset），所以在定稿前按同一套规则重跑并校验，保证打进包里的就是改写后的文本
+  const shaderVerify = verifyShaders(projectDir);
+  if (shaderVerify.fixed) {
+    onLog(`  着色器复检: 补回 ${shaderVerify.fixed} 个文件的改写`);
+    shaderStats.rewritten += shaderVerify.fixed;
+    shaderStats.literals += shaderVerify.literals;
+    shaderStats.structural += shaderVerify.structural;
+  }
 
   const dropped = repairSceneCompat(projectDir, { onLog, dropAudioLayers: opts.dropAudioLayers });
   warnings.push(...dropped.warnings);
