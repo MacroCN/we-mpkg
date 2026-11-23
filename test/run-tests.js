@@ -824,6 +824,8 @@ await testAsync('HTTP 接口：创建 / 列表 / 取消 / 文件', async () => {
   assert.ok(listed, '列表里应能看到该任务');
   assert.strictEqual(listed.outPath, outFile, '列表必须返回成品绝对路径 outPath');
   assert.strictEqual(listed.outFile, 'x.mpkg', 'outFile 仍只给文件名');
+  // 详情抽屉读的是 result.outPath（不是顶层），两个地方都要给
+  assert.strictEqual(listed.result && listed.result.outPath, outFile, 'result 里也要带绝对路径');
 
   server.close();
   hub.stop();

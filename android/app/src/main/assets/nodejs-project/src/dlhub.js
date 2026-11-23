@@ -340,6 +340,9 @@ function createHub(opts = {}) {
         type: j.result.type, size: j.result.size, magic: j.result.magic,
         preset: j.result.preset, tex: j.result.tex, shader: j.result.shader, audio: j.result.audio,
         warnings: j.result.warnings, entryCount: j.result.entryCount,
+        // 详情抽屉直接读 result.outPath 决定「保存 .mpkg」还是「导入壁纸引擎」
+        outPath: j.result.outFile || null,
+        outFile: j.result.outFile ? path.basename(j.result.outFile) : null,
       }) : null,
     };
     if (logs) base.log = j.log.slice(-120);

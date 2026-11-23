@@ -486,9 +486,10 @@ function androidBridge() {
   return null;
 }
 
-function showResultAction(jobId, result) {
+function showResultAction(jobId, result, job) {
   const el = $('p-file');
-  const wepath = result && result.outPath;
+  // 优先用任务顶层的 outPath，再退回 result 里的（两个接口字段都要能认）
+  const wepath = (job && job.outPath) || (result && result.outPath);
   if (androidBridge() && wepath) {
     // 原生直接拿绝对路径，用 content:// 授权给壁纸引擎，不需要走网页下载
     el.removeAttribute('href');
@@ -563,7 +564,7 @@ function pollJob(jobId) {
           $('p-note').textContent = r.rawDir || '';
           $('p-log').textContent += '\n\n原始文件已保存在上面的目录里（未打包）。';
         } else {
-          showResultAction(jobId, r);
+          showResultAction(jobId, r, job);
         }
         setDownloadLabel();
         $('p-cancel').classList.add('hidden');
