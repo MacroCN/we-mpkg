@@ -1475,6 +1475,8 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(js.includes('function renderCompat'));
     assert.ok(js.includes('function detectDevice'));
     assert.ok(js.includes('async function checkUpdate'));
+    assert.ok(js.includes("d.release.assets.apk"), '安卓应使用 APK 资产直链');
+    assert.ok(js.includes('openExternal(link.href)'), 'APK 直链应交给系统浏览器打开');
   });
   test('GitHub Actions 打 tag 自动构建 portable/APK 并发布', () => {
     const wf = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');

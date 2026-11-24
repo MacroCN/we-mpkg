@@ -23,7 +23,7 @@ const I18N = {
     compatTitle: '打包前兼容性', compatOk: '兼容性良好', compatWarn: '需注意', compatBad: '大概率黑屏',
     compatMeta: '{t} · 纹理 {n} 张（视频 {v}）· 预计显存 {m} MB · 体积 {s}',
     compatNone: '暂无预检结果（任务开始打包后会显示）',
-    updateTitle: '版本更新', updateCheck: '检查更新', updateDownload: '打开下载页',
+    updateTitle: '版本更新', updateCheck: '检查更新', updateDownload: '打开下载页', updateDownloadApk: '直接下载 APK',
     updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
     updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
     keepAudio: '保留壁纸自带音频',
@@ -83,7 +83,7 @@ const I18N = {
     compatTitle: 'Pre-pack compatibility', compatOk: 'Looks good', compatWarn: 'Needs attention', compatBad: 'Likely black screen',
     compatMeta: '{t} · {n} textures ({v} video) · ~{m} MB VRAM · {s}',
     compatNone: 'No report yet (appears when packing starts)',
-    updateTitle: 'Updates', updateCheck: 'Check for updates', updateDownload: 'Open download page',
+    updateTitle: 'Updates', updateCheck: 'Check for updates', updateDownload: 'Open download page', updateDownloadApk: 'Download APK',
     updateChecking: 'Checking the latest GitHub release…', updateLatest: 'You are up to date ({v})',
     updateFound: 'New version {v} available (current {c})', updateFail: 'Check failed: ',
     keepAudio: 'Keep wallpaper audio',
@@ -535,7 +535,12 @@ async function checkUpdate() {
     if (d.hasUpdate) {
       hint.textContent = tr('updateFound', { v: d.latest, c: d.current });
       if (d.release && d.release.url) {
-        link.href = d.release.url;
+        // 安卓端直接给 APK 资产地址：点击后交给系统浏览器下载，不再先落到 Release 页面
+        const canExternal = !!(window.Android && typeof window.Android.openExternal === 'function');
+        const apk = canExternal && d.release.assets && d.release.assets.apk;
+        link.href = apk ? apk.url : d.release.url;
+        link.dataset.direct = apk ? '1' : '';
+        link.textContent = apk ? tr('updateDownloadApk') : tr('updateDownload');
         link.classList.remove('hidden');
       }
     } else {
@@ -1189,6 +1194,16 @@ function wire() {
   if ($('testProxy')) $('testProxy').onclick = testProxyConn;
   if ($('resetProxy')) $('resetProxy').onclick = resetProxy;
   if ($('checkUpdate')) $('checkUpdate').onclick = checkUpdate;
+  // APK 直链在 WebView 里点会停在下载页或被拦；显式交给系统浏览器打开
+  if ($('updateLink')) {
+    $('updateLink').addEventListener('click', (e) => {
+      const link = $('updateLink');
+      if (link.dataset.direct === '1' && window.Android && typeof window.Android.openExternal === 'function') {
+        e.preventDefault();
+        openExternal(link.href);
+      }
+    });
+  }
   if ($('cdnTest')) $('cdnTest').onclick = testCdnNodes;
   if ($('pickDir')) $('pickDir').onclick = pickFolder;
   $('rawOnly').checked = state.rawOnly;
