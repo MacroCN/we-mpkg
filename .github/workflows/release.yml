@@ -155,7 +155,6 @@ jobs:
           rm -rf "$ASSETS"
           mkdir -p "$ASSETS"
           cp -R bin src public package.json "$ASSETS"/
-          cp -R node_modules "$ASSETS/node_modules"
           du -sh "$ASSETS"
 
       - name: Write local.properties
