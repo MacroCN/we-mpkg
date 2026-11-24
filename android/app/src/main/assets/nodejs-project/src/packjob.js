@@ -7,7 +7,6 @@ const fs = require('fs');
 const path = require('path');
 const configMod = require('./config');
 const { config } = configMod;
-const steamcmd = require('./steamcmd');
 const packer = require('./pack');
 
 /** 取消信号：由调用方在阶段边界检查 */
@@ -19,19 +18,8 @@ class CancelledError extends Error {
   }
 }
 
-/** 当前平台能用的下载引擎：steamcmd（x86）→ steamjs（纯 JS，需登录凭据） */
+/** 下载引擎：只剩纯 JS 一条路径（steamjs），保留函数名给 server/dlhub 复用 */
 function activeEngine() {
-  const forced = String(process.env.WE_MPKG_ENGINE || '').toLowerCase();
-  const hasToken = () => {
-    try {
-      const t = require('./steamjs').readToken();
-      return !!(t && t.refreshToken);
-    } catch { return false; }
-  };
-  if (forced === 'steamcmd') return steamcmd.platformSupported() ? 'steamcmd' : 'steamjs';
-  if (forced === 'steamjs') return 'steamjs';
-  if (hasToken()) return 'steamjs';
-  if (steamcmd.platformSupported()) return 'steamcmd';
   return 'steamjs';
 }
 
@@ -75,28 +63,23 @@ async function getSharedClient(onLog) {
 async function downloadWithEngine(itemId, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const onProgress = opts.onProgress || (() => {});
-  const engine = activeEngine();
-  if (!engine) throw new Error(noLoginMessage());
-  onLog(`[engine] ${engine}`);
-  if (engine === 'steamjs') {
-    const steamjs = require('./steamjs');
-    const cdn = require('./cdn');
-    const token = steamjs.readToken();
-    if (!token || !token.refreshToken) throw new Error(noLoginMessage());
-    const outDir = path.join(config.DOWNLOAD_DIR, `js-${itemId}`);
-    const client = await getSharedClient(onLog);
-    try {
-      const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress, isCancelled: opts.isCancelled, isPaused: opts.isPaused });
-      return { ok: true, dir: r.dir };
-    } catch (e) {
-      // 连接被 Steam 踢掉/过期/超时类故障时，下次重试用新连接
-      if (/403|HTTP error|Not Logged On|not logged on|disconnected|timed out|ETIMEDOUT|timeout/i.test(e.message || '')) resetSharedClient();
-      throw e;
-    } finally {
-      cdn.releaseIdleSockets();
-    }
+  onLog('[engine] steamjs');
+  const steamjs = require('./steamjs');
+  const cdn = require('./cdn');
+  const token = steamjs.readToken();
+  if (!token || !token.refreshToken) throw new Error(noLoginMessage());
+  const outDir = path.join(config.DOWNLOAD_DIR, `js-${itemId}`);
+  const client = await getSharedClient(onLog);
+  try {
+    const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress, isCancelled: opts.isCancelled, isPaused: opts.isPaused });
+    return { ok: true, dir: r.dir };
+  } catch (e) {
+    // 连接被 Steam 踢掉/过期/超时类故障时，下次重试用新连接
+    if (/403|HTTP error|Not Logged On|not logged on|disconnected|timed out|ETIMEDOUT|timeout/i.test(e.message || '')) resetSharedClient();
+    throw e;
+  } finally {
+    cdn.releaseIdleSockets();
   }
-  return steamcmd.downloadWorkshopItem({ id: itemId, onLog });
 }
 
 /**
@@ -186,6 +169,11 @@ async function runJob(job, hooks = {}) {
     onLog,
     onProgress: (p) => onProgress(Object.assign({ phase: p.phase }, p)),
   });
+  // 打包中途被「移除」：成品已经落盘了，删掉它，别留下没人认领的 mpkg（缓存保留可续传）
+  if (cancelled()) {
+    try { if (res.outFile) fs.rmSync(res.outFile, { force: true }); } catch { /* ignore */ }
+    throw new CancelledError('任务已取消（本次生成的成品已删除）');
+  }
   checkpoint();
   onLog('全部完成');
   purgeDownloadDir(dlDir, onLog);

@@ -16,7 +16,7 @@
 |---|---|
 | 创意工坊检索 | 浏览 / 搜索 / 标签筛选（Type、Age Rating、Genre、Resolution、Category、Asset Type…），筛选语义与官方客户端一致：**同一组内多选为「或」，不同组之间为「与」，某组不选即该组不过滤**；一次连续取 1/3/5 页，热门支持 7/30/90/365 天时间窗 |
 | 内容范围 | 有 Steam 登录凭据时自动带上账号登录态，抓到的条目范围与桌面客户端一致（含成人分级内容）；未登录则退回匿名范围，界面会标注 |
-| 下载 | 两种引擎：`steamjs`（纯 JS，默认，全平台含安卓）、`steamcmd`（Windows 可选用）；支持分块级断点续传、坏 CDN 节点自动剔除 |
+| 下载 | 纯 JS 引擎 `steamjs`：内置 Steam 登录 / manifest / depot 密钥 / CDN 分块下载，全平台（Windows / Linux / 安卓）；支持分块级断点续传、暂停继续、坏 CDN 节点自动剔除 |
 | 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理按 DXT1/3/5/R8/RG88/直通图解码为 RGBA8 并 LZ4 压缩、着色器 GLSL ES 兼容改写（含结构性补丁）、`project.json`/`preview.gif` 补齐；支持画质档位、断点续转、默认剥离音频 |
 | 网页类壁纸 | 安卓客户端没有 Web 引擎，本工具把网页渲染成视频并按 `video` 类型封装；同时注入音频响应 API，音频可视化壁纸的频谱不再为 0 |
 | 下载中心 | 下载/打包在独立进程里跑，网页关掉也不中断；最多 3 条同时下载，带字节级进度条、速度与 ETA；队列落盘，重启后自动续跑 |
@@ -259,15 +259,13 @@ run.bat steamjs login|status|logout|token|webcookie
 | 变量 | 作用 | 默认 |
 |---|---|---|
 | `WE_MPKG_PROXY` / `HTTPS_PROXY` | HTTP 代理，创意工坊页面直连不通时必填 | 自动读 Windows 系统代理 |
-| `WE_MPKG_ENGINE` | `steamjs`（纯 JS）或 `steamcmd` | `steamjs` |
 | `WE_MPKG_OUTPUT_DIR` | 成品输出目录（也可在网页里改） | 程序目录 `output/` |
 | `WE_MPKG_DLHUB_PORT` | 下载中心端口 | `3091` |
 | `WE_MPKG_DOWNLOAD_DIR` | 下载缓存目录 | 程序目录 `downloads/` |
 | `WE_MPKG_KEEP_DOWNLOAD` | `1` = 打包后保留缓存 | 打包后清理 |
-| `WE_MPKG_TIMEOUT_MS` | 单条下载超时 | `900000`（15 分钟） |
 | `WE_MPKG_CDN_COUNTRY` | 强制指定测速的地域优先级（`CN` / `HK` / `US` …），IP 归属接口不可用时用 | 按出口 IP 自动判断 |
 | `STEAM_API_KEY` | 走 `IPublishedFileService/QueryFiles`（每页 100 条，上限更高） | 空 |
-| `STEAM_USERNAME` / `STEAM_PASSWORD` | SteamCMD 引擎的账号 | 空 |
+| `STEAM_PASSWORD` | CLI `get` / `fetch` 配合 `--user` 做账号密码登录 | 空 |
 | `PORT` | 网页端口 | `3090` |
 | `WE_MPKG_HOST` | 网页服务监听地址；设为 `0.0.0.0` 可允许局域网访问（API 无身份验证，请勿暴露到不可信网络） | `127.0.0.1`（仅本机） |
 | `STEAM_LANG` / `STEAM_COUNTRY` | 社区页语言 / 地区 | `schinese` / 空 |
@@ -316,7 +314,6 @@ Copyright (c) 2026 MacroCN
 | [nxdyy/pkg2mpkg](https://github.com/nxdyy/pkg2mpkg) | `.pkg` 与 `.mpkg` 容器结构差异（魔数、纹理载荷、`project.json`/`preview.gif`） |
 | [ReZe20/repkg-Re](https://github.com/ReZe20/repkg-Re) | PC 包转手机包的口径：直通编码纹理必须物化为 RGBA8、DXT 块格式可直通、着色器 GLSL ES 改写 |
 | [jiangdengke/repkg-gui-wallpaper-extractor](https://github.com/jiangdengke/repkg-gui-wallpaper-extractor) | RePKG 的解包/纹理转换思路与其目录约定 |
-| [ValveSoftware/steamcmd](https://developer.valvesoftware.com/wiki/SteamCMD) | `workshop_download_item` 的用法与产物路径 |
 | [DoctorMcKay/node-steam-user](https://github.com/DoctorMcKay/node-steam-user) · [node-steam-session](https://github.com/DoctorMcKay/node-steam-session) | 纯 JS 登录、CM 连接与 web 会话 cookie 换取 |
 | [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) | 安卓端内嵌 Node 运行时 |
 | Chromium（Edge headless）· FFmpeg | 网页类壁纸渲染与视频/音频封装 |

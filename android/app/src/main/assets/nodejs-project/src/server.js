@@ -306,7 +306,6 @@ const server = http.createServer(async (req, res) => {
         outputDir: config.OUTPUT_DIR,
         downloadDir: config.DOWNLOAD_DIR,
         hasApiKey: !!config.API_KEY,
-        hasAccount: !!(config.ACCOUNT_USER && config.ACCOUNT_PASS),
         proxy: redactProxy(config.PROXY),
         platform: `${process.platform}/${process.arch}`,
         engine: engine || 'none',
@@ -315,10 +314,9 @@ const server = http.createServer(async (req, res) => {
         webLogin: (() => {
           try { return require('./webcookie').cachedStatus(); } catch { return { loggedIn: false, fresh: false }; }
         })(),
-        canDownload: !!engine,
-        canDownloadReason: engine
-          ? ''
-          : '还没有登录 Steam：请点右上角 ⚙ 填账号密码登录，或导入 Steam 凭据（get-token.bat 得到的那段 Base64）。',
+        // 引擎恒定可用（纯 JS）；没登录时仍允许点下载按钮，由前端引导去登录
+        canDownload: true,
+        canDownloadReason: '',
       });
     }
     if (pn === '/api/cdn/nodes') {
@@ -398,6 +396,8 @@ const server = http.createServer(async (req, res) => {
           preset: body.preset,
           preserveAudio: body.preserveAudio,
           videoMagic: body.videoMagic,
+          // 让「暂停」按钮能按引擎区分：历史记录里的 steamcmd 任务（旧版本）不支持暂停
+          engine: packjob.activeEngine(),
         });
         if (r.status !== 200 || !r.body.jobId) {
           return json(res, 502, { error: (r.body && r.body.error) || '下载中心拒绝了这条任务' });

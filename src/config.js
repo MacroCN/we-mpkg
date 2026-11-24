@@ -75,7 +75,6 @@ const config = {
   MAGIC_MOBILE,
   ROOT,
   CACHE_DIR: path.join(ROOT, '.cache'),
-  STEAMCMD_DIR: path.join(ROOT, 'steamcmd'),
   // 下载缓存目录。安卓端由外壳（NodeRunner）在启动前写进 settings.json，
   // 指到外置储存的应用专属目录，避免把几 GB 的原始素材堆在应用私有空间里。
   DOWNLOAD_DIR: env('WE_MPKG_DOWNLOAD_DIR') || path.join(ROOT, 'downloads'),
@@ -85,14 +84,9 @@ const config = {
   PROXY,
   /** 可选：Steam Web API key，用于 IPublishedFileService/QueryFiles 检索 */
   API_KEY: env('STEAM_API_KEY'),
-  /** 可选：登录账号（匿名下载失败时使用） */
-  ACCOUNT_USER: env('STEAM_USERNAME', 'WE_STEAM_USER'),
-  ACCOUNT_PASS: env('STEAM_PASSWORD', 'WE_STEAM_PASS'),
   /** 语言/地区 Cookie 偏好，影响 steamcommunity 返回的语言 */
   LANG: env('STEAM_LANG') || 'schinese',
   COUNTRY: env('STEAM_COUNTRY') || '',
-  /** 下载超时（毫秒） */
-  STEAMCMD_TIMEOUT_MS: parseInt(env('WE_MPKG_TIMEOUT_MS') || '900000', 10),
   PORT: parseInt(env('PORT') || '3090', 10),
   /** 网页服务默认只允许本机访问；需要局域网访问时可显式设置 WE_MPKG_HOST */
   LISTEN_HOST: env('WE_MPKG_HOST') || '127.0.0.1',
@@ -178,7 +172,7 @@ config.KEEP_DOWNLOAD = env('WE_MPKG_KEEP_DOWNLOAD') === '1';
 
 /** 确保运行期目录存在 */
 function ensureDirs() {
-  for (const d of [config.CACHE_DIR, config.DOWNLOAD_DIR, config.OUTPUT_DIR, config.LOG_DIR, config.STEAMCMD_DIR]) {
+  for (const d of [config.CACHE_DIR, config.DOWNLOAD_DIR, config.OUTPUT_DIR, config.LOG_DIR]) {
     try { fs.mkdirSync(d, { recursive: true }); } catch { /* ignore */ }
   }
 }

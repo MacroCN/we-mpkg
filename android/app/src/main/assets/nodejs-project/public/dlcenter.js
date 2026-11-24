@@ -100,7 +100,7 @@
     if (j.rawDir) meta.push(t('原始文件', 'raw files'));
 
     const acts = [];
-    if (run && j.state === 'downloading' && (!p.phase || p.phase === 'download')) {
+    if (run && j.state === 'downloading' && (!p.phase || p.phase === 'download') && (!j.engine || j.engine === 'steamjs')) {
       acts.push(j.paused
         ? `<button class="primary-act" data-act="resume" data-id="${esc(j.id)}">${t('继续', 'Resume')}</button>`
         : `<button data-act="pause" data-id="${esc(j.id)}">${t('暂停', 'Pause')}</button>`);

@@ -83,7 +83,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   gap: 8px;
   padding: 10px 14px;
   position: sticky;
-  top: 57px;
+  top: var(--topbar-h, 57px);
   z-index: 11;
   background: var(--bg);
   border-bottom: 1px solid var(--line);
@@ -154,7 +154,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 
 /* ---------- 列表 ---------- */
 main { padding: 10px 14px 24px; }
-.status { font-size: 13px; color: var(--dim); padding: 6px 2px 10px; }
+.status { font-size: 13px; color: var(--dim); padding: 6px 2px 10px; overflow-wrap: anywhere; }
 .status.err { color: var(--warn); }
 .status .hint { color: var(--dim); }
 
@@ -199,7 +199,7 @@ main { padding: 10px 14px 24px; }
   flex-wrap: wrap;
   padding: 0 14px 10px;
   position: sticky;
-  top: 105px;
+  top: calc(var(--topbar-h, 57px) + var(--search-h, 46px));
   z-index: 10;
   background: var(--bg);
 }
@@ -212,6 +212,10 @@ main { padding: 10px 14px 24px; }
   border-radius: 8px;
   padding: 5px 6px;
   font-size: 13px;
+}
+@media (max-width: 899px) {
+  /* 中等宽度下搜索栏可能换行，选项行固定偏移会压住搜索框，改为普通流 */
+  .opts { position: static; }
 }
 @media (max-width: 640px) {
   .opts { position: static; gap: 8px; }
@@ -338,7 +342,7 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 /* ---------- 手机竖屏：两列、更紧凑 ---------- */
 @media (max-width: 640px) {
   .brand-text .sub { display: none; }
-  .searchbar { top: 54px; }
+  .searchbar { top: var(--topbar-h, 54px); }
   .grid { grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .card-title { font-size: 13px; }
   .card-meta { font-size: 11px; }
@@ -360,7 +364,7 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
 
 /* ---------- 桌面：右侧固定详情 ---------- */
 @media (min-width: 900px) {
-  .topbar, .searchbar, .filters, main, .foot { max-width: 1240px; margin: 0 auto; }
+  .topbar, .searchbar, .opts, .filters, main, .foot { max-width: 1240px; margin: 0 auto; }
   .drawer {
     inset: 0 0 0 auto;
     width: 420px;

@@ -88,7 +88,7 @@ function renderJob(j) {
   if (j.result && j.result.type) meta.push(j.result.type);
 
   const actions = [];
-  if (isRun && j.state === 'downloading' && (!p.phase || p.phase === 'download')) {
+  if (isRun && j.state === 'downloading' && (!p.phase || p.phase === 'download') && (!j.engine || j.engine === 'steamjs')) {
     actions.push(j.paused
       ? `<button class="ghost" data-act="resume" data-id="${esc(j.id)}">继续</button>`
       : `<button class="ghost" data-act="pause" data-id="${esc(j.id)}">暂停</button>`);

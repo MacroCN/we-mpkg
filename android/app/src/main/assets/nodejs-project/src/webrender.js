@@ -37,6 +37,8 @@ const BROWSER_CANDIDATES = [
 const FFMPEG_CANDIDATES = [
   process.env.WEM_FFMPEG,
   process.env.FFMPEG,
+  path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
+  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
   path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
   path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
 ];

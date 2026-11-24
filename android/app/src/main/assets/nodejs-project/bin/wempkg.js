@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 const { config, ensureDirs } = require('../src/config');
 const workshop = require('../src/workshop');
-const steamcmd = require('../src/steamcmd');
+const steamjs = require('../src/steamjs');
 const packer = require('../src/pack');
 
 function parseArgs(argv) {
@@ -55,18 +55,51 @@ function dateStr(ts) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-function accountFromArgs(args) {
-  if (!args.user) return null;
-  return { user: String(args.user), pass: args.pass ? String(args.pass) : '' };
+/**
+ * 下载前的登录：--user/--pass 走账号密码登录，--interactive 走扫码登录，
+ * 都没有就复用 .cache/steam-token.json 里已有的凭据。
+ */
+async function ensureLogin(args) {
+  if (args.user) {
+    const pass = args.pass || process.env.STEAM_PASSWORD;
+    if (!pass) throw new Error('密码登录需要 --pass 或 STEAM_PASSWORD 环境变量；也可以改用 --interactive 扫码登录');
+    console.log(`\n账号密码登录: ${args.user}`);
+    await steamjs.passwordLogin({
+      user: String(args.user),
+      pass: String(pass),
+      onLog: (l) => console.log(`[steam] ${l}`),
+      onPrompt: (m) => console.log(`[steam] ${m}`),
+      getCode: () => ask('请输入 Steam Guard 验证码: '),
+    });
+    return steamjs.readToken();
+  }
+  if (args.interactive) {
+    console.log('\n=== 扫码登录（用手机 Steam App 扫下面二维码）===');
+    await steamjs.qrLogin({
+      onLog: (l) => console.log(`[steam] ${l}`),
+      onQr: (url) => steamjs.printQr(url),
+    });
+    return steamjs.readToken();
+  }
+  const saved = steamjs.readToken();
+  if (saved && saved.refreshToken) return saved;
+  throw new Error('还没有登录 Steam：先运行 run.bat steamjs login，或给命令加 --user 账号 --pass 密码 / --interactive 扫码');
 }
 
-function entitlementHint(reason) {
-  if (!reason) return '';
-  if (!/授权|解密密钥|depot|订阅|Access Denied/.test(reason)) return '';
-  return `\n提示：公开条目必须用「拥有 Wallpaper Engine 的账号」下载。两种方式：
-  1) 设置环境变量 STEAM_USERNAME / STEAM_PASSWORD 后重试；
-  2) 交互登录：node bin/wempkg.js ${process.argv[2] === 'fetch' ? 'fetch' : 'get'} <id> --interactive --user 你的账号
-     程序会打开 SteamCMD 窗口让你输入密码 / Steam Guard 验证码。`;
+/** 用纯 JS 引擎把一个条目下载到指定目录 */
+async function downloadToDir(id, args, outDir, onLog) {
+  const token = await ensureLogin(args);
+  const res = await steamjs.downloadItem({
+    id,
+    outDir,
+    refreshToken: token.refreshToken,
+    onLog,
+    onProgress: ({ file, done, total }) => {
+      if (total) process.stdout.write(`\r  ${file || '下载'}: ${Math.round((done / total) * 100)}%   `);
+    },
+  });
+  process.stdout.write('\n');
+  return res;
 }
 
 async function cmdBrowse(args) {
@@ -114,17 +147,7 @@ async function cmdInfo(args) {
 async function cmdFetch(args) {
   const id = args._[0];
   if (!id) throw new Error('用法: fetch <id> [--user 账号 --pass 密码 | --interactive]');
-  const res = await steamcmd.downloadWorkshopItem({
-    id,
-    onLog: (l) => console.log(`[steamcmd] ${l}`),
-    account: accountFromArgs(args),
-    interactive: !!args.interactive,
-  });
-  if (!res.ok) {
-    console.error(`\n下载失败: ${res.reason || '未知原因'}${entitlementHint(res.reason)}`);
-    process.exitCode = 2;
-    return;
-  }
+  const res = await downloadToDir(id, args, path.join(config.DOWNLOAD_DIR, `js-${id}`), (l) => console.log(`[js] ${l}`));
   ensureDirs();
   const dest = path.join(config.DOWNLOAD_DIR, String(id));
   fs.mkdirSync(dest, { recursive: true });
@@ -135,7 +158,7 @@ async function cmdFetch(args) {
     else fs.copyFileSync(from, to);
   }
   console.log(`\n已保存原始文件: ${dest}`);
-  if (!args.keep) steamcmd.cleanupRoot(res.root);
+  if (!args.keep) require('../src/packjob').purgeDownloadDir(res.dir);
 }
 
 async function cmdGet(args) {
@@ -143,19 +166,9 @@ async function cmdGet(args) {
   if (!id) throw new Error('用法: get <id> [--title 名称] [--ref 参考.mpkg] [--user 账号 --pass 密码 | --interactive]');
   const detail = await workshop.getItemDetail(id).catch(() => ({ title: `wallpaper_${id}` }));
   console.log(`\n条目: ${detail.title || id}`);
-  const dl = await steamcmd.downloadWorkshopItem({
-    id,
-    onLog: (l) => console.log(`[steamcmd] ${l}`),
-    account: accountFromArgs(args),
-    interactive: !!args.interactive,
-  });
-  if (!dl.ok) {
-    console.error(`\n下载失败: ${dl.reason || '未知原因'}${entitlementHint(dl.reason)}`);
-    process.exitCode = 2;
-    return;
-  }
+  const res = await downloadToDir(id, args, path.join(config.DOWNLOAD_DIR, `js-${id}`), (l) => console.log(`[js] ${l}`));
   const ref = args.ref || (fs.existsSync(path.join(config.ROOT, 'refs', `${id}.mpkg`)) ? path.join(config.ROOT, 'refs', `${id}.mpkg`) : null);
-  const out = await packer.packFromItemDir(dl.dir, {
+  const out = await packer.packFromItemDir(res.dir, {
     id,
     title: args.title || detail.title || `wallpaper_${id}`,
     reference: ref,
@@ -163,7 +176,7 @@ async function cmdGet(args) {
     ...webOptions(args),
     onLog: (l) => console.log(`[pack] ${l}`),
   });
-  steamcmd.cleanupRoot(dl.root);
+  if (!args.keep) require('../src/packjob').purgeDownloadDir(res.dir);
   console.log(`\n✔ 完成: ${out.outFile}`);
   printSummary(out);
 }
@@ -452,15 +465,17 @@ async function main() {
             --max-texture-mb N  单张纹理解码内存预算（默认 192）
   inspect  查看目录或容器的内部结构
   cdn      CDN 节点测速（--test 立即重测，否则显示上次结果）
-  steamjs  纯 JS 下载引擎（不依赖 SteamCMD，安卓可用）
+  steamjs  纯 JS 下载引擎（默认，全平台含安卓）
            steamjs login            扫码登录，凭据存 .cache/steam-token.json
            steamjs status / logout  查看 / 清除登录态
            steamjs webcookie       查看创意工坊的「账号范围」登录态（--refresh 重新获取）
            steamjs get <id>         下载并打包
 
+  get / fetch 支持 --user 账号 --pass 密码（账号密码登录），或 --interactive（扫码登录）
+
 环境变量:
   WE_MPKG_PROXY / HTTPS_PROXY   代理
-  STEAM_USERNAME / STEAM_PASSWORD  需要账号才能下载时使用
+  STEAM_PASSWORD               配合 --user 使用（密码登录）
   STEAM_API_KEY                可选，走 QueryFiles 检索
 `);
     return;

@@ -281,6 +281,19 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
   
     let next = 0;
     let failure = null;
+
+    // Valve CDN 的 keep-alive 连接空闲几秒后会被对端直接关掉，复用旧 socket 就会
+    // "socket hang up"。这类错误不代表节点坏了：清掉闲置连接、原地重试即可，
+    // 不能像真失败那样把节点判死（否则最快的节点一被误判，后面全走慢节点）。
+    const staleSocketError = (err) => {
+      const msg = String((err && err.message) || err || '');
+      return /socket hang up|ECONNRESET|EPIPE|ECONNABORTED/i.test(msg);
+    };
+    let lastChunkAt = Date.now();
+    let staleNotices = 0;
+    const dropIdleIfStale = () => {
+      if (Date.now() - lastChunkAt > 2500) cdn.releaseIdleSockets();
+    };
   
     // 取消 / 暂停探针：队列侧传同步函数，分块循环在每个分块开始前检查。
     const cancelledProbe = () => !!(opts.isCancelled && opts.isCancelled());
@@ -303,11 +316,16 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
     const oneChunk = async (c) => {
       let lastErr = null;
       for (let attempt = 0; attempt < 8; attempt++) {
+        // 每个重试回合前也响应暂停/取消：否则网络差时一个分块要重试 8 次，
+        // 点取消/暂停要等半分钟以上才生效
+        await gate();
         const server = picker.next();
         if (!server) break;
+        dropIdleIfStale();
         const res = await new Promise((resolve) => {
           client.downloadChunk(APP_ID, DEPOT_ID, c.sha, server, (err, data) => resolve({ err, data }));
         });
+        lastChunkAt = Date.now();
         if (!res.err && res.data) {
           await writeChunk(c, res.data);
           doneShas.add(String(c.sha).toLowerCase());
@@ -317,6 +335,15 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
           return;
         }
         lastErr = res.err;
+        if (staleSocketError(res.err)) {
+          // 连接被对端回收：节点本身没问题，清掉闲置连接后原地再试一次
+          cdn.releaseIdleSockets();
+          lastChunkAt = Date.now();
+          if (staleNotices++ < 3) {
+            onLog(`分块重连：${server.Host || '?'} 连接已失效（${res.err.message}），重建连接重试`);
+          }
+          continue;
+        }
         // 任何失败（含 Request timed out）都算这台节点这一轮不行：换排序里的下一台，
         // 而不是对着同一个节点重试到整份文件失败。
         onLog(`分块重试：${server.Host || '?'} 失败（${(res.err && res.err.message) || '无数据'}），换下一台节点`);

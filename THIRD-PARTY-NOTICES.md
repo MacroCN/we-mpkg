@@ -18,7 +18,6 @@
 |---|---|---|
 | [jiangdengke/repkg-gui-wallpaper-extractor](https://github.com/jiangdengke/repkg-gui-wallpaper-extractor) | RePKG 的层级解包与纹理转换流程、目录约定 | MIT |
 | [Yuqi-Github/wallpaper-engine-download-web](https://github.com/Yuqi-Github/wallpaper-engine-download-web) | 创意工坊页面抓取流程与 `GetPublishedFileDetails` 补全信息的做法 | 该仓库未声明许可证；本项目仅参考流程描述，自行实现，未沿用其代码 |
-| [ValveSoftware SteamCMD 文档](https://developer.valvesoftware.com/wiki/SteamCMD) | `workshop_download_item` 的用法与产物路径 | Valve 文档，按其使用条款引用 |
 
 ## 运行时依赖与随附程序
 
@@ -27,7 +26,8 @@
 | [node-steam-user](https://github.com/DoctorMcKay/node-steam-user) · [node-steam-session](https://github.com/DoctorMcKay/node-steam-session) · [steam-appticket](https://github.com/DoctorMcKay/node-steam-appticket) 等 | MIT | `node_modules/<包>/LICENSE` |
 | 其余 npm 依赖（protobufjs、pngjs、qrcode、adm-zip…） | MIT / BSD / Apache-2.0 | 各包目录内的 `LICENSE` / `NOTICE` |
 | [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile)（Node.js 运行时） | MIT（含内置 OpenSSL / ICU / V8 等声明） | 绿色版 `nodejs/LICENSE`；安卓端为 `libnode.so` |
-| Chromium（Edge headless）、FFmpeg | BSD / LGPL 等 | **不随本项目分发**，仅在用户本机作为外部程序调用，用于网页类壁纸的渲染与封装 |
+| Chromium（Edge headless） | BSD 等 | **不随本项目分发**，仅在用户本机作为外部程序调用，用于网页类壁纸的渲染与封装 |
+| [FFmpeg](https://ffmpeg.org/)（绿色版内置 `tools/ffmpeg/ffmpeg.exe`） | GPL v3（该构建含 libx264，因此整体按 GPL 分发） | 仅 Windows 绿色版随附，用于 4K / 竖屏视频纹理转码；源码见 <https://ffmpeg.org/download.html> 与 <https://github.com/FFmpeg/FFmpeg>。不需要它时可直接删除 `tools/ffmpeg/`，改用环境变量 `WEM_FFMPEG` 指向自己的 ffmpeg。安卓包不含此二进制 |
 
 ## 再分发要求
 

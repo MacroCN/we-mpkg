@@ -979,6 +979,62 @@ await testAsync('暂停 / 继续：只在下载中生效，暂停可被取消打
   hub.stop();
 });
 
+await testAsync('暂停成功后结束：不能把「已暂停」留在 done 卡片上', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6c'), 'state.json'), maxConcurrent: 3 });
+  const job = hub.add({ id: 'p2' });
+  await sleepMs(10);
+  hub.pause(job.id);
+  assert.strictEqual(job.paused, true);
+  // 暂停在最后几个分块时，任务仍可能跑完
+  d.calls[0].resolve({ result: { outFile: '/tmp/p2.mpkg', size: 1, type: 'scene' } });
+  await sleepMs(20);
+  assert.strictEqual(job.state, 'done');
+  assert.strictEqual(job.paused, false, '完成的任务必须清掉暂停标记');
+  assert.strictEqual(hub.view(job).paused, false);
+  hub.stop();
+});
+
+await testAsync('暂停中失败 → 重试不应继承暂停（否则一进下载就卡住）', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6d'), 'state.json'), maxConcurrent: 3 });
+  const job = hub.add({ id: 'p3' });
+  await sleepMs(10);
+  hub.pause(job.id);
+  d.calls[0].reject(new Error('网络断了'));
+  await sleepMs(20);
+  assert.strictEqual(job.state, 'failed');
+  assert.strictEqual(job.paused, false, '失败时也要清掉暂停标记');
+  const again = hub.retry(job.id);
+  assert.strictEqual(again.paused, false, '重试必须从非暂停状态开始');
+  await sleepMs(20);
+  assert.strictEqual(d.calls.length, 2);
+  d.calls[1].resolve({ result: {} });
+  await sleepMs(20);
+  assert.strictEqual(job.state, 'done');
+  hub.stop();
+});
+
+await testAsync('移除运行中任务：立刻从列表消失，但记录等停下来才删；同条目重下会被拒', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6e'), 'state.json'), maxConcurrent: 3 });
+  const job = hub.add({ id: 'same-item' });
+  await sleepMs(10);
+  assert.strictEqual(job.state, 'downloading');
+  assert.strictEqual(hub.forget(job.id), true);
+  assert.strictEqual(hub.list().some((j) => j.id === job.id), false, '列表里应立刻看不到');
+  assert.ok(hub.get(job.id), '记录要留到 runner 真正退出');
+  assert.strictEqual(job.cancelRequested, true);
+  assert.throws(() => hub.add({ id: 'same-item' }), /已有任务在跑/, '同条目不能并发写同一个下载目录');
+  d.calls[0].reject(new (require('../src/packjob').CancelledError)());
+  await sleepMs(30);
+  assert.strictEqual(hub.get(job.id), null, '停止后记录应自动删掉');
+  // 现在可以重新下了
+  const again = hub.add({ id: 'same-item' });
+  assert.ok(again.id);
+  hub.stop();
+});
+
 await testAsync('HTTP 接口：创建 / 列表 / 取消 / 文件', async () => {
   const http = require('http');
   const d = deferredRunner();
@@ -1194,6 +1250,20 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     const again = picker.next();
     assert.ok(again === a || again === b, '全部判死后要能重置再试');
     assert.strictEqual(picker.rounds, 1);
+  });
+
+  console.log('\n[17b] 下载引擎：只剩纯 JS（SteamCMD 已移除）');
+  test('activeEngine 固定 steamjs，旧的 WE_MPKG_ENGINE=steamcmd 不再生效', () => {
+    const packjob = require('../src/packjob');
+    const had = Object.prototype.hasOwnProperty.call(process.env, 'WE_MPKG_ENGINE');
+    const old = process.env.WE_MPKG_ENGINE;
+    process.env.WE_MPKG_ENGINE = 'steamcmd';
+    try {
+      assert.strictEqual(packjob.activeEngine(), 'steamjs');
+    } finally {
+      if (had) process.env.WE_MPKG_ENGINE = old;
+      else delete process.env.WE_MPKG_ENGINE;
+    }
   });
 
   console.log('\n[18] 视频纹理识别 / 重封装');

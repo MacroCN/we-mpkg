@@ -188,6 +188,28 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 
+// 顶栏、搜索栏都是 sticky，后面吸顶层的 top 偏移必须跟着它们的真实高度走，
+// 写死 57/105 在不同字号、换行、安全区下会互相遮盖。
+function syncStickyLayout() {
+  const root = document.documentElement;
+  const topbar = document.querySelector('.topbar');
+  const searchbar = document.querySelector('.searchbar');
+  if (topbar) root.style.setProperty('--topbar-h', `${Math.round(topbar.getBoundingClientRect().height)}px`);
+  if (searchbar) root.style.setProperty('--search-h', `${Math.round(searchbar.getBoundingClientRect().height)}px`);
+}
+
+function watchStickyLayout() {
+  syncStickyLayout();
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => syncStickyLayout());
+    for (const el of [document.querySelector('.topbar'), document.querySelector('.searchbar')]) {
+      if (el) ro.observe(el);
+    }
+  }
+  window.addEventListener('resize', syncStickyLayout);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(syncStickyLayout).catch(() => {});
+}
+
 function human(bytes) {
   if (!bytes) return '—';
   if (bytes > 1024 ** 3) return (bytes / 1024 ** 3).toFixed(2) + ' GB';
@@ -957,6 +979,7 @@ async function init() {
   state.filtersOpen = window.innerWidth > 640;
   wire();
   applyLang();
+  watchStickyLayout();
   // 恢复上次的抓取深度与时间窗
   state.pages = Math.max(1, Math.min(5, parseInt(localStorage.getItem('depth') || '1', 10) || 1));
   state.days = parseInt(localStorage.getItem('days') || '7', 10) || 7;

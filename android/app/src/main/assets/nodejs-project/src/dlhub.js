@@ -73,7 +73,7 @@ function createHub(opts = {}) {
     return {
       id: j.id, itemId: j.itemId, title: j.title,
       raw: !!j.raw, preset: j.preset, preserveAudio: !!j.preserveAudio,
-      videoMagic: j.videoMagic, reference: j.reference || null,
+      videoMagic: j.videoMagic, engine: j.engine || null, reference: j.reference || null,
       state: j.state, progress: j.progress, error: j.error,
       result: j.result ? {
         outFile: j.result.outFile, size: j.result.size, type: j.result.type,
@@ -90,7 +90,7 @@ function createHub(opts = {}) {
 
   function persistNow() {
     try {
-      writeJsonAtomic(file, { version: 2, savedAt: new Date().toISOString(), maxConcurrent, jobs: [...jobs.values()].map(serializeJob) });
+      writeJsonAtomic(file, { version: 2, savedAt: new Date().toISOString(), maxConcurrent, jobs: [...jobs.values()].filter((j) => !j.hidden).map(serializeJob) });
     } catch (e) {
       logger(`⚠ 队列写盘失败: ${e.message}`);
     }
@@ -114,12 +114,12 @@ function createHub(opts = {}) {
       const job = {
         id: raw.id, itemId: String(raw.itemId), title: raw.title || `wallpaper_${raw.itemId}`,
         raw: !!raw.raw, preset: raw.preset || 'high', preserveAudio: !!raw.preserveAudio,
-        videoMagic: raw.videoMagic || '0020', reference: raw.reference || null,
+        videoMagic: raw.videoMagic || '0020', engine: raw.engine || null, reference: raw.reference || null,
         state: raw.state === 'downloading' || raw.state === 'packing' ? 'queued' : (raw.state || 'queued'),
         progress: defaultProgress(), error: raw.error || null, result: raw.result || null,
         log: Array.isArray(raw.log) ? raw.log.slice(-400) : [],
         createdAt: raw.createdAt || Date.now(), startedAt: raw.startedAt || null,
-        finishedAt: raw.finishedAt || null, cancelRequested: false, paused: false,
+        finishedAt: raw.finishedAt || null, cancelRequested: false, paused: false, hidden: false,
       };
       if (raw.state === 'downloading' || raw.state === 'packing') {
         job.log.push('上次进程中断，已重新排队（下载支持按块续传）');
@@ -135,7 +135,8 @@ function createHub(opts = {}) {
   }
 
   function pruneHistory() {
-    const finished = [...jobs.values()].filter((j) => j.state === 'done' || j.state === 'failed' || j.state === 'cancelled');
+    const finished = [...jobs.values()].filter((j) => !j.hidden
+      && (j.state === 'done' || j.state === 'failed' || j.state === 'cancelled'));
     if (finished.length <= KEEP_HISTORY) return;
     finished.sort((a, b) => (b.finishedAt || 0) - (a.finishedAt || 0));
     for (const j of finished.slice(KEEP_HISTORY)) jobs.delete(j.id);
@@ -223,8 +224,12 @@ function createHub(opts = {}) {
       job.state = e && e.cancelled ? 'cancelled' : 'failed';
       pushLog(job, `✘ ${job.error}${noLoginHint({ message: job.error })}`);
     } finally {
+      job.paused = false; // 无论完成/失败/取消都不该再把「已暂停」留在卡片上
       job.finishedAt = Date.now();
       running--;
+      // 「移除」运行中任务时记录先隐藏，等这里真的停下来再从队列里彻底删掉，
+      // 避免下载器还在写目录、记录却已经没了（同条目立刻重下会互相踩文件）
+      if (job.hidden) jobs.delete(job.id);
       pruneHistory();
       persist();
       setImmediate(tick);
@@ -254,6 +259,7 @@ function createHub(opts = {}) {
       preset: typeof req.preset === 'string' && req.preset ? req.preset : 'high',
       preserveAudio: !!req.preserveAudio,
       videoMagic: typeof req.videoMagic === 'string' ? req.videoMagic : '0020',
+      engine: req.engine || null,
       reference: req.reference || null,
       state: 'queued',
       progress: defaultProgress(),
@@ -265,8 +271,18 @@ function createHub(opts = {}) {
       finishedAt: null,
       cancelRequested: false,
       paused: false,
+      hidden: false,
     };
     for (const k of JOB_PARAMS) if (job[k] === undefined) job[k] = req[k];
+    // 同一个条目同时只允许一条任务：两条同时写 downloads/js-<id> 会互相截断文件、
+    // 互相删目录（尤其是「移除运行中任务后马上重新下载」这种操作）
+    const busy = [...jobs.values()].find((j) => j.itemId === itemId
+      && (j.hidden || j.state === 'queued' || j.state === 'downloading'));
+    if (busy) {
+      const err = new Error(`该条目已有任务在跑（${busy.id}，${busy.hidden ? '正在停止' : busy.state}），请等它结束再下`);
+      err.code = 'ITEM_BUSY';
+      throw err;
+    }
     jobs.set(job.id, job);
     persistNow();
     setImmediate(tick);
@@ -278,7 +294,8 @@ function createHub(opts = {}) {
   }
 
   function list() {
-    return [...jobs.values()].sort((a, b) => b.createdAt - a.createdAt);
+    // 被「移除」的运行中任务是 hidden：立刻从界面/列表里消失，等它真停下来再从 Map 删
+    return [...jobs.values()].filter((j) => !j.hidden).sort((a, b) => b.createdAt - a.createdAt);
   }
 
   function cancel(id) {
@@ -308,6 +325,7 @@ function createHub(opts = {}) {
     job.error = null;
     job.result = null;
     job.cancelRequested = false;
+    job.paused = false; // 暂停中失败的任务重试时不能带着暂停标记，否则一进下载就卡住等「继续」
     job.startedAt = null;
     job.finishedAt = null;
     job.progress = defaultProgress();
@@ -321,7 +339,9 @@ function createHub(opts = {}) {
   function pause(id) {
     const job = get(id);
     if (!job) return false;
-    if (job.state !== 'downloading' || job.cancelRequested) return false;
+    if (job.state !== 'downloading' || job.cancelRequested || job.hidden) return false;
+    // 暂停只对 steamjs 生效；历史记录里可能还有旧版 steamcmd 引擎的任务，那些不支持暂停
+    if (job.engine && job.engine !== 'steamjs') return false;
     // 打包阶段是 CPU 活儿，没有可暂停的下载循环，按钮不该在这个阶段出现
     if (job.progress && job.progress.phase && job.progress.phase !== 'download') return false;
     if (job.paused) return true;
@@ -344,19 +364,26 @@ function createHub(opts = {}) {
   /**
    * 从列表移除。
    * 已完成/失败/取消 → 直接删记录；
-   * 排队中/下载中/打包中 → 先发取消信号再立刻删掉记录（下载器在下一个分块边界退出），
-   * 让「移除」在下载中点了就生效，不用等任务自己结束。
+   * 排队中/下载中/打包中 → 发取消信号 + 标 hidden（立刻从列表消失），
+   * 等 runner 真正退出后由 run() 的 finally 删掉记录。
+   * 这样「移除」点一下卡片就没了，同时不会出现「记录已删、下载还在写目录」的竞态。
    */
   function forget(id) {
     const job = get(id);
     if (!job) return false;
+    const running = job.state === 'downloading' || job.state === 'packing';
     if (!['done', 'failed', 'cancelled'].includes(job.state)) {
       job.cancelRequested = true;
       job.paused = false;
       job.state = 'cancelled';
       job.finishedAt = Date.now();
+      if (running) {
+        // 只有真正在跑的任务才需要 runner 退出后再删；排队中的没有 runner，直接删
+        job.hidden = true;
+        job.log.push('已移除：任务正在停止，停止后自动清理记录');
+      }
     }
-    jobs.delete(job.id);
+    if (!job.hidden) jobs.delete(job.id);
     persistNow();
     return true;
   }
@@ -491,8 +518,12 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
       }
       if (pn === '/api/hub/jobs' && req.method === 'POST') {
         const body = JSON.parse((await readBody(req)) || '{}');
-        const job = hub.add(body);
-        return json(res, 200, { jobId: job.id });
+        try {
+          const job = hub.add(body);
+          return json(res, 200, { jobId: job.id });
+        } catch (e) {
+          return json(res, e && e.code === 'ITEM_BUSY' ? 409 : 400, { error: e.message });
+        }
       }
       if (pn.startsWith('/api/hub/jobs/')) {
         const parts = pn.split('/').filter(Boolean); // api hub jobs <id> [action]
@@ -516,7 +547,7 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
         }
         if (action === 'forget' && req.method === 'POST') {
           const ok = hub.forget(id);
-          return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: '只能移除已结束的任务' });
+          return json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '任务不存在（可能已被清除）' });
         }
         const job = hub.get(id);
         if (!job) return json(res, 404, { error: '任务不存在' });

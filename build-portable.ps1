@@ -47,6 +47,18 @@ if (Test-Path (Join-Path $root 'tools\test-resume.js')) {
   }
 }
 
+# 精简版 ffmpeg：4K / 竖屏视频纹理转码要用（源码树里在 .cache，不进 git；构建时拷进便携版）
+$ffSrc = Join-Path $root '.cache\toolchain\ffmpeg-lite\ffmpeg.exe'
+if (-not (Test-Path $ffSrc)) { $ffSrc = Join-Path $root '.cache\toolchain\ffmpeg\bin\ffmpeg.exe' }
+if (Test-Path $ffSrc) {
+  $ffDst = Join-Path $dst 'tools\ffmpeg'
+  New-Item -ItemType Directory -Path $ffDst -Force | Out-Null
+  Copy-Item $ffSrc (Join-Path $ffDst 'ffmpeg.exe') -Force
+  Write-Host ("==> 内置 ffmpeg: {0:N1} MB" -f ((Get-Item (Join-Path $ffDst 'ffmpeg.exe')).Length / 1MB))
+} else {
+  Write-Host '⚠ 未找到 ffmpeg（4K/竖屏视频纹理将无法自动转码）'
+}
+
 Write-Host '==> 复制启动脚本与说明'
 Copy-Tree (Join-Path $root 'packaging') $dst
 
