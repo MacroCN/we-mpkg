@@ -178,11 +178,17 @@ const server = http.createServer(async (req, res) => {
     if (pn === '/api/settings') {
       if (req.method === 'POST') {
         const body = JSON.parse((await readBody(req)) || '{}');
+        const out = {};
         try {
-          const dir = configMod.setOutputDir(body.outputDir);
-          return json(res, 200, { ok: true, outputDir: dir });
+          if (body.outputDir !== undefined) out.outputDir = configMod.setOutputDir(body.outputDir);
+          if (body.proxy !== undefined) {
+            out.proxy = configMod.setProxy(body.proxy);
+            // 已连接的 Steam 客户端还带着旧代理，下次下载前重建
+            try { packjob.resetSharedClient(); } catch { /* ignore */ }
+          }
+          return json(res, 200, Object.assign({ ok: true }, out));
         } catch (e) {
-          return json(res, 400, { ok: false, error: `目录不可写：${e.message}` });
+          return json(res, 400, { ok: false, error: e.message });
         }
       }
       const steamjs = require('./steamjs');
@@ -190,11 +196,23 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         outputDir: config.OUTPUT_DIR,
         defaultOutputDir: configMod.DEFAULT_OUTPUT_DIR,
+        proxy: config.PROXY,
+        defaultProxy: config.PROXY_DEFAULT,
         accountName: token ? token.accountName || null : null,
         hasToken: !!token,
         platform: `${process.platform}/${process.arch}`,
         engine: packjob.activeEngine() || 'none',
       });
+    }
+    // 只走指定代理做一次连通性测试（不等同于“下载时先直连再回退”）
+    if (pn === '/api/proxy/test' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      try {
+        const r = await require('./net').testProxy(body.proxy || config.PROXY, undefined, 10000);
+        return json(res, 200, { ok: true, status: r.status, ms: r.ms });
+      } catch (e) {
+        return json(res, 200, { ok: false, error: e.message });
+      }
     }
     // 手机端免扫码登录：把 Steam 扫码地址交给手机上的 Steam App 确认
     if (pn === '/api/login/start' && req.method === 'POST') {
@@ -206,11 +224,11 @@ const server = http.createServer(async (req, res) => {
           pendingLogin = { state: 'done', url, error: null, accountName: r.accountName };
           refreshWebLogin();
         }).catch((e) => {
-          pendingLogin = { state: 'failed', url, error: e.message, accountName: null };
+          pendingLogin = { state: 'failed', url, error: require('./errors').humanizeMessage(e), accountName: null };
         });
         return json(res, 200, { ok: true, url });
       } catch (e) {
-        return json(res, 500, { ok: false, error: e.message });
+        return json(res, 500, { ok: false, error: require('./errors').humanizeMessage(e) });
       }
     }
     // 账号密码登录（手机上没有第二块屏幕可扫二维码时的备选）
@@ -236,12 +254,12 @@ const server = http.createServer(async (req, res) => {
             pendingLogin = { state: 'done', error: null, accountName: r.accountName, codeType: null };
             refreshWebLogin();
           } catch (e) {
-            pendingLogin = { state: 'failed', error: e.message, accountName: null, codeType: null };
+            pendingLogin = { state: 'failed', error: require('./errors').humanizeMessage(e), accountName: null, codeType: null };
           }
           pendingSession = null;
         });
         session.on('error', (e) => {
-          pendingLogin = { state: 'failed', error: (e && e.message) || String(e), accountName: null, codeType: null };
+          pendingLogin = { state: 'failed', error: require('./errors').humanizeMessage(e), accountName: null, codeType: null };
           pendingSession = null;
         });
         session.on('timeout', () => {
@@ -250,8 +268,8 @@ const server = http.createServer(async (req, res) => {
         });
         return json(res, 200, { ok: true, state: pendingLogin.state, codeType: codeType || null });
       } catch (e) {
-        pendingLogin = { state: 'failed', error: e.message, accountName: null, codeType: null };
-        return json(res, 200, { ok: false, error: e.message });
+        pendingLogin = { state: 'failed', error: require('./errors').humanizeMessage(e), accountName: null, codeType: null };
+        return json(res, 200, { ok: false, error: require('./errors').humanizeMessage(e) });
       }
     }
     if (pn === '/api/login/code' && req.method === 'POST') {
@@ -263,7 +281,7 @@ const server = http.createServer(async (req, res) => {
         pendingLogin = { state: 'pending', error: null, accountName: pendingLogin && pendingLogin.accountName, codeType: null };
         return json(res, 200, { ok: true });
       } catch (e) {
-        return json(res, 200, { ok: false, error: e.message });
+        return json(res, 200, { ok: false, error: require('./errors').humanizeMessage(e) });
       }
     }
     if (pn === '/api/login/status') {

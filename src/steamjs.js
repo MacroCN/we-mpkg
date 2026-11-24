@@ -16,6 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { config, ensureDirs } = require('./config');
 const netagent = require('./netagent');
+const securestore = require('./securestore');
 const cdn = require('./cdn');
 
 const APP_ID = 431960;
@@ -26,12 +27,8 @@ const TOKEN_FILE = path.join(config.CACHE_DIR, 'steam-token.json');
 netagent.installDirectFirstAgents();
 
 function readToken() {
-  try {
-    const j = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
-    return j && j.refreshToken ? j : null;
-  } catch {
-    return null;
-  }
+  const j = securestore.readJson(TOKEN_FILE);
+  return j && j.refreshToken ? j : null;
 }
 
 function saveToken(data) {
@@ -40,7 +37,7 @@ function saveToken(data) {
   // Steam 有些登录流程不回报账号名，别把已有的名字丢掉（否则界面会显示"未登录"）
   const merged = Object.assign({}, data);
   if (!merged.accountName && prev.accountName) merged.accountName = prev.accountName;
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify(Object.assign({ savedAt: new Date().toISOString() }, merged), null, 2));
+  securestore.writeJson(TOKEN_FILE, Object.assign({ savedAt: new Date().toISOString() }, merged));
   try { fs.chmodSync(TOKEN_FILE, 0o600); } catch { /* Windows 上忽略 */ }
 }
 

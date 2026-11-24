@@ -38,7 +38,10 @@ function parseProxy(raw) {
   }
 }
 
-const PROXY = parseProxy(config.PROXY);
+/** 每次请求时读取当前代理，设置页改完立即生效 */
+function currentProxy() {
+  return parseProxy(config.PROXY);
+}
 
 /**
  * 登录态 cookie（steamLoginSecure 等），由 src/webcookie.js 在拿到 Steam 登录凭据后注入。
@@ -175,7 +178,8 @@ function requestOnce(urlStr, opts, proxy) {
 
 /** curl.exe 兜底：先按配置里的代理走，失败再交给 curl 自己去读系统代理（Windows 注册表） */
 function curlOnce(urlStr, opts) {
-  const tries = PROXY ? [PROXY.raw, null] : [null];
+  const p = currentProxy();
+  const tries = p ? [p.raw, null] : [null];
   const base = [];
   for (const [k, v] of Object.entries(opts.headers || {})) {
     if (v === undefined || v === null || v === '') continue;
@@ -226,11 +230,12 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
  */
 async function request(urlStr, opts = {}) {
   const retries = opts.retries === undefined ? 1 : opts.retries;
+  const proxy = currentProxy();
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res;
     try {
-      res = await requestOnce(urlStr, opts, PROXY);
+      res = await requestOnce(urlStr, opts, proxy);
     } catch (e) {
       lastErr = e;
       if (config.USE_CURL_FALLBACK) {
@@ -253,7 +258,7 @@ async function request(urlStr, opts = {}) {
       const loc = cur.headers.location;
       const next = /^https?:/.test(loc) ? loc : new URL(loc, urlStr).toString();
       const method = cur.status === 303 ? 'GET' : (opts.method || 'GET');
-      cur = await requestOnce(next, { ...opts, method, body: method === 'GET' ? null : opts.body }, PROXY);
+      cur = await requestOnce(next, { ...opts, method, body: method === 'GET' ? null : opts.body }, proxy);
       redirects++;
     }
     if (cur.status >= 200 && cur.status < 300) return cur;
@@ -297,4 +302,17 @@ async function postForm(url, fields, opts = {}) {
   return res.body.toString('utf8');
 }
 
-module.exports = { request, getText, getBuffer, postForm, formEncode, parseProxy, steamCookie, setLoginCookie, hasLoginCookie, UA, PROXY, sleep };
+/** 只走指定代理做一次连通性测试（不自动回退直连） */
+async function testProxy(raw, url = 'https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/', timeout = 10000) {
+  const p = parseProxy(raw);
+  if (!p) throw new Error('代理地址为空或格式不对，示例：http://127.0.0.1:7890');
+  const t0 = Date.now();
+  try {
+    const res = await requestOnce(url, { timeout }, p);
+    return { status: res.status, ms: Date.now() - t0 };
+  } catch (e) {
+    throw new Error(`代理不通或不是 HTTP 代理（${e.message}）：确认端口是 HTTP 代理，而不是 SOCKS`);
+  }
+}
+
+module.exports = { request, getText, getBuffer, postForm, formEncode, parseProxy, testProxy, currentProxy, steamCookie, setLoginCookie, hasLoginCookie, UA, sleep };

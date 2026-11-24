@@ -4,6 +4,10 @@
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- 后台下载/打包保活：前台服务 + 通知（Android 13+ 通知需运行时授权，拒绝也能跑，只是看不到通知） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- 自定义下载目录（写到 /storage/emulated/0/Download/... ）需要「所有文件访问」；
          这是自己侧载的工具，不走 Play，所以直接用 MANAGE_EXTERNAL_STORAGE。 -->
     <uses-permission
@@ -37,9 +41,14 @@
             </intent-filter>
         </activity>
 
+        <!-- 后台保活：下载/打包期间挂一条前台通知，降低被系统回收的概率 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <!-- 把成品 mpkg 以 content:// 授权给壁纸引擎（不依赖 androidx FileProvider） -->
-        <provider
-            android:name=".MpkgProvider"
+        <provider            android:name=".MpkgProvider"
             android:authorities="com.wempkg.app.mpkg"
             android:exported="false"
             android:grantUriPermissions="true" />

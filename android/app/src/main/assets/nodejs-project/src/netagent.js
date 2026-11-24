@@ -40,15 +40,20 @@ function parseProxy(raw) {
   }
 }
 
-const PROXY = parseProxy(config.PROXY);
+/** 设置页随时可能改代理，所以每个新连接都重新读一次 */
+function currentProxy() {
+  return parseProxy(config.PROXY);
+}
 
 /** 通过 HTTP 代理 CONNECT 出一条到 host:port 的原始 TCP 连接 */
 function tunnelViaProxy(host, port, cb) {
+  const p = currentProxy();
+  if (!p) return cb(new Error('没有配置代理'));
   const headers = { Host: `${host}:${port}` };
-  if (PROXY.auth) headers['Proxy-Authorization'] = PROXY.auth;
+  if (p.auth) headers['Proxy-Authorization'] = p.auth;
   const req = http.request({
-    hostname: PROXY.hostname,
-    port: PROXY.port,
+    hostname: p.hostname,
+    port: p.port,
     method: 'CONNECT',
     path: `${host}:${port}`,
     headers,
@@ -81,7 +86,7 @@ class DirectFirstHttpsAgent extends https.Agent {
     const fallback = () => {
       if (settled) return;
       direct.destroy();
-      if (!PROXY) return finish(new Error(`直连 ${host}:${port} 失败`));
+      if (!currentProxy()) return finish(new Error(`直连 ${host}:${port} 失败，且未配置代理`));
       tunnelViaProxy(host, port, (err, socket) => {
         if (err) return finish(err);
         const secure = tls.connect({ socket, servername: options.servername || host });
@@ -110,11 +115,11 @@ class DirectFirstHttpAgent extends http.Agent {
       if (timer) clearTimeout(timer);
       cb(err, socket);
     };
-    const direct = net.connect({ host, port });
+    const direct = net.connect({ ...options, host, port });
     const fallback = () => {
       if (settled) return;
       direct.destroy();
-      if (!PROXY) return finish(new Error(`直连 ${host}:${port} 失败`));
+      if (!currentProxy()) return finish(new Error(`直连 ${host}:${port} 失败，且未配置代理`));
       tunnelViaProxy(host, port, finish);
     };
     timer = setTimeout(() => {
@@ -128,13 +133,13 @@ class DirectFirstHttpAgent extends http.Agent {
 
 let installed = false;
 
-/** 有代理配置时才接管全局 Agent；没有代理则保持 Node 默认行为 */
+/** 接管全局 Agent：直连优先，连不上再用“当前设置里的代理”（没代理时就只直连） */
 function installDirectFirstAgents() {
-  if (installed || !PROXY) return false;
+  if (installed) return false;
   http.globalAgent = new DirectFirstHttpAgent({ keepAlive: true });
   https.globalAgent = new DirectFirstHttpsAgent({ keepAlive: true });
   installed = true;
   return true;
 }
 
-module.exports = { installDirectFirstAgents, parseProxy, PROXY, DIRECT_TIMEOUT };
+module.exports = { installDirectFirstAgents, parseProxy, currentProxy, DIRECT_TIMEOUT };

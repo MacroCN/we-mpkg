@@ -1327,6 +1327,50 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(!s.includes('href="api/hub/file/'), '不能再用下载中心端口上的相对路径（在主页面会 404）');
   });
 
+  console.log('\n[20] 代理设置 / 错误人话');
+  test('代理字符串规范化：补 scheme、拒绝 socks', () => {
+    const config = require('../src/config');
+    assert.strictEqual(config.normalizeProxy('127.0.0.1:7890'), 'http://127.0.0.1:7890');
+    assert.strictEqual(config.normalizeProxy(''), '');
+    assert.throws(() => config.normalizeProxy('socks5://127.0.0.1:1080'), /只支持 http/);
+  });
+  test('net.js 导出 testProxy，且不再导出写死的 PROXY', () => {
+    const net = require('../src/net');
+    assert.strictEqual(typeof net.testProxy, 'function');
+    assert.strictEqual(typeof net.currentProxy, 'function');
+    assert.strictEqual(net.PROXY, undefined);
+  });
+  test('EResult 15/85/88 映射成人话', () => {
+    const errors = require('../src/errors');
+    assert.match(errors.humanizeMessage('EResult 15'), /没有访问权限/);
+    assert.match(errors.humanizeMessage('EResult 85'), /账号或密码错误/);
+    assert.match(errors.humanizeMessage('EResult 88'), /Steam Guard 验证码错误/);
+    assert.match(errors.humanizeMessage('ECONNREFUSED 127.0.0.1:7890'), /测试连通性/);
+    assert.strictEqual(errors.eresultOf('eresult: 84'), 84);
+  });
+  test('设置页必须有代理输入 / 测试按钮，后端有 /api/proxy/test', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    assert.ok(html.includes('id="proxyInput"'));
+    assert.ok(html.includes('id="testProxy"'));
+    const srv = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+    assert.ok(srv.includes("'/api/proxy/test'"));
+    assert.ok(srv.includes('configMod.setProxy'));
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.ok(js.includes('async function testProxyConn'));
+  });
+
+  console.log('\n[21] 凭据加密');
+  test('securestore 写入后文件不含明文，读回来一致', () => {
+    const securestore = require('../src/securestore');
+    const f = path.join(os.tmpdir(), `we-mpkg-secret-${Date.now()}.json`);
+    securestore.writeJson(f, { refreshToken: 'SECRET-TOKEN-XYZ', accountName: '测试账号' });
+    const raw = fs.readFileSync(f, 'utf8');
+    assert.ok(raw.includes('__we_mpkg_enc'), '应该是加密信封');
+    assert.ok(!raw.includes('SECRET-TOKEN-XYZ'), '不能以明文出现');
+    assert.deepStrictEqual(securestore.readJson(f), { refreshToken: 'SECRET-TOKEN-XYZ', accountName: '测试账号' });
+    fs.unlinkSync(f);
+  });
+
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);
   if (failed) {
     for (const f of failures) console.error(`\n失败: ${f.name}\n${f.error.stack}`);

@@ -47,7 +47,7 @@ function readWindowsSystemProxy() {
   }
 }
 
-const PROXY = env('WE_MPKG_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy')
+const DEFAULT_PROXY = env('WE_MPKG_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy')
   || readWindowsSystemProxy()
   || '';
 
@@ -81,7 +81,8 @@ const config = {
   OUTPUT_DIR: DEFAULT_OUTPUT_DIR,
   LOG_DIR: path.join(ROOT, 'logs'),
   PUBLIC_DIR: path.join(ROOT, 'public'),
-  PROXY,
+  PROXY: DEFAULT_PROXY,
+  PROXY_DEFAULT: DEFAULT_PROXY,
   /** 可选：Steam Web API key，用于 IPublishedFileService/QueryFiles 检索 */
   API_KEY: env('STEAM_API_KEY'),
   /** 语言/地区 Cookie 偏好，影响 steamcommunity 返回的语言 */
@@ -144,7 +145,27 @@ function setOutputDir(dir) {
   return abs;
 }
 
-// 启动时应用已保存的目录（失效就忽略，回退默认）
+/** 规范化代理字符串；空串表示“跟随系统/环境变量”，非法抛错 */
+function normalizeProxy(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  const withScheme = /^\w+:\/\//.test(v) ? v : `http://${v}`;
+  let u;
+  try { u = new URL(withScheme); } catch { throw new Error('代理格式不对，示例：http://127.0.0.1:7890'); }
+  if (!u.hostname) throw new Error('代理格式不对，示例：http://127.0.0.1:7890');
+  if (!/^http:\/\//.test(withScheme)) throw new Error('只支持 http:// 代理，例如 http://127.0.0.1:7890');
+  return withScheme;
+}
+
+/** 保存并立即生效；传空串则回退到系统/环境变量里的代理 */
+function setProxy(raw) {
+  const v = normalizeProxy(raw);
+  config.PROXY = v || config.PROXY_DEFAULT;
+  writeSettings({ proxy: v });
+  return config.PROXY;
+}
+
+/** 启动时应用已保存的目录与代理（失效就忽略，回退默认） */
 try {
   const saved = readSettings();
   if (saved.outputDir) {
@@ -152,7 +173,8 @@ try {
     fs.accessSync(abs, fs.constants.W_OK);
     config.OUTPUT_DIR = abs;
   }
-} catch { /* 目录已不存在/不可写 → 用默认 */ }
+  if (saved.proxy) config.PROXY = normalizeProxy(saved.proxy);
+} catch { /* 目录已不存在/不可写、代理失效 → 用默认 */ }
 
 // 下载缓存目录同样可以由 settings.json 指定（安卓外壳用它把缓存放到外置储存）
 if (!env('WE_MPKG_DOWNLOAD_DIR')) {
@@ -185,4 +207,4 @@ function tempDir(prefix = 'run') {
   return dir;
 }
 
-module.exports = { config, ensureDirs, tempDir, env, os, setOutputDir, readSettings, writeSettings, SETTINGS_FILE, DEFAULT_OUTPUT_DIR };
+module.exports = { config, ensureDirs, tempDir, env, os, setOutputDir, setProxy, normalizeProxy, readSettings, writeSettings, SETTINGS_FILE, DEFAULT_OUTPUT_DIR, DEFAULT_PROXY };

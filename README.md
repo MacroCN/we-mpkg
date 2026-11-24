@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.0.6**（视频纹理壁纸不再黑屏；下载中心支持暂停/继续，移除对下载中的任务立即生效，见 [2.0.6 改进](#206-改进)）
+- 当前版本：**2.1.2**（P0 收尾：设置页可填代理并测试连通性；凭据落盘加密；Steam 报错翻成人话；安卓前台服务保活；README/下载表版本对齐）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.6.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
-| `we-mpkg-android-2.0.6.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
-| `we-mpkg-src-2.0.6.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.1.2.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 60 MB） |
+| `we-mpkg-android-2.1.2.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
+| `we-mpkg-src-2.1.2.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.0.6.zip
+解压 we-mpkg-portable-2.1.2.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -83,6 +83,24 @@ node bin\wempkg.js serve --port 3090
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
 
 ---
+
+## 2.1.2 改进（P0：代理 / 凭据 / 错误 / 保活）
+
+| # | 改动 | 说明 |
+|---|---|---|
+| 1 | **设置页可填代理并测试** | 新增「设置 → 代理」输入框 + 「测试连通性」按钮（`POST /api/proxy/test`，只走指定代理请求 Steam WebAPI）；保存写入 `.cache/settings.json`，所有请求与后续 Steam 连接立即生效，留空则跟随系统/环境变量 |
+| 2 | **凭据加密** | 新增 `src/securestore.js`：Windows 用 DPAPI（CurrentUser）加密 `.cache/steam-token.json` 与 `webcookies.json`；其它平台/安卓退回 AES-256-GCM + 本机密钥（App 私有目录）。旧明文文件仍能读，下次保存自动迁移 |
+| 3 | **Steam 报错翻人话** | 新增 `src/errors.js`：EResult 15/21/24/50/63/84/85/88… 与 `ECONNREFUSED`/超时统一映射成可操作提示（例如「没买 Wallpaper Engine」「账号密码错误」「请求太频繁」「连不上 Steam，去设置页测代理」），下载与登录共用 |
+| 4 | **安卓后台保活** | 新增 `KeepAliveService` 前台服务 + 常驻通知（类型 `dataSync`），下载/打包期间降低被系统回收概率；通知上「停止」等同退出（先 POST `/api/shutdown` 再结束进程）。Android 13+ 首次启动请求通知权限，拒绝也能跑 |
+| 5 | **版本对齐** | README 当前版本、下载表、解压说明统一到 2.1.2；新增本节与 2.1.x 变更记录 |
+
+## 2.1.x 改进（去掉 SteamCMD + 网络自愈）
+
+| # | 改动 | 说明 |
+|---|---|---|
+| 1 | **彻底剥离 SteamCMD**（2.1.0） | 删除 `src/steamcmd.js`、`STEAMCMD_DIR` 与相关环境变量；命令行 `get/fetch` 改走内置 `steamjs`，支持 `--user/--pass`、`--interactive`（终端二维码）或复用 `.cache/steam-token.json` |
+| 2 | **CDN 直连优先**（2.1.1） | 新增 `src/netagent.js`：每个新连接先直连，5 秒连不上再用代理 CONNECT 隧道；代理没配置或不通时不再把整个下载拖死 |
+| 3 | **保存 .mpkg 链接修正**（2.1.1） | 桌面下载中心浮层改为 `/api/file/<任务ID>`，不再落到静态兜底变 `d1.txt` / 404 |
 
 ## 2.0.6 改进（视频纹理 + 下载中心暂停）
 
@@ -258,7 +276,7 @@ run.bat steamjs login|status|logout|token|webcookie
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
-| `WE_MPKG_PROXY` / `HTTPS_PROXY` | HTTP 代理，创意工坊页面直连不通时必填 | 自动读 Windows 系统代理 |
+| `WE_MPKG_PROXY` / `HTTPS_PROXY` | HTTP 代理；也可在网页「设置 → 代理」里填并点「测试连通性」，保存后立即生效 | 自动读 Windows 系统代理 |
 | `WE_MPKG_OUTPUT_DIR` | 成品输出目录（也可在网页里改） | 程序目录 `output/` |
 | `WE_MPKG_DLHUB_PORT` | 下载中心端口 | `3091` |
 | `WE_MPKG_DOWNLOAD_DIR` | 下载缓存目录 | 程序目录 `downloads/` |

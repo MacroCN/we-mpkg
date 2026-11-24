@@ -39,14 +39,14 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+        requestNotifPermission();
 
         web = findViewById(R.id.web);
         setupPanel = findViewById(R.id.setupPanel);
         txtStatus = findViewById(R.id.txtStatus);
         editRemote = findViewById(R.id.editRemote);
 
-        WebSettings s = web.getSettings();
-        s.setJavaScriptEnabled(true);
+        WebSettings s = web.getSettings();        s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
@@ -188,6 +188,7 @@ public class MainActivity extends Activity {
             return;
         }
         status("正在启动本地 Node…首次启动要解包资源，约 5-10 秒");
+        KeepAliveService.start(getApplicationContext());
         NodeRunner.start(getApplicationContext());
         new Thread(new Runnable() {
             @Override
@@ -501,6 +502,17 @@ public class MainActivity extends Activity {
             return;
         }
         moveTaskToBack(true);
+    }
+
+    /** Android 13+ 前台服务通知需要运行时授权；拒绝也不影响下载，只是通知不显示 */
+    private void requestNotifPermission() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return;
+        try {
+            if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, 1001);
+            }
+        } catch (Throwable ignored) { }
     }
 
     /** 退出应用：关掉本地 Node 服务并结束进程，避免后台残留占内存/占端口 */

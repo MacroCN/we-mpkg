@@ -21,6 +21,7 @@
 const fs = require('fs');
 const path = require('path');
 const { config } = require('./config');
+const securestore = require('./securestore');
 
 const COOKIE_FILE = path.join(config.CACHE_DIR, 'webcookies.json');
 const TOKEN_FILE = path.join(config.CACHE_DIR, 'steam-token.json');
@@ -43,22 +44,14 @@ function proxyOptions() {
 }
 
 function readToken() {
-  try {
-    const j = JSON.parse(fs.readFileSync(TOKEN_FILE, 'utf8'));
-    return j && j.refreshToken ? j : null;
-  } catch {
-    return null;
-  }
+  const j = securestore.readJson(TOKEN_FILE);
+  return j && j.refreshToken ? j : null;
 }
 
 function readCache() {
-  try {
-    const j = JSON.parse(fs.readFileSync(COOKIE_FILE, 'utf8'));
-    if (!j || !j.cookie || !j.at) return null;
-    return j;
-  } catch {
-    return null;
-  }
+  const j = securestore.readJson(COOKIE_FILE);
+  if (!j || !j.cookie || !j.at) return null;
+  return j;
 }
 
 function freshCache() {
@@ -70,8 +63,7 @@ function freshCache() {
 
 function writeCache(data) {
   try {
-    fs.mkdirSync(path.dirname(COOKIE_FILE), { recursive: true });
-    fs.writeFileSync(COOKIE_FILE, JSON.stringify(data, null, 2));
+    securestore.writeJson(COOKIE_FILE, data);
     try { fs.chmodSync(COOKIE_FILE, 0o600); } catch { /* Windows 忽略 */ }
   } catch { /* 缓存写不进去不影响功能 */ }
 }

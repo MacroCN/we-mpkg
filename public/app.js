@@ -38,6 +38,9 @@ const I18N = {
     pageN: '第 {p} 页', failed: '加载失败：', noDownload: '当前平台不能下载',
     vpnHint: '一直加载不出来？先打开加速器（VPN / 游戏加速器）再点搜索。',
     dirSaved: '已保存：{d}', dirFail: '保存失败：', dirDefault: '默认目录：{d}',
+    proxyField: '代理（留空 = 跟随系统；下载时先直连，连不上才走它）',
+    proxyTest: '测试连通性', proxySaved: '已保存：{p}', proxyDefault: '跟随系统：{p}', proxyNone: '当前直连，没有配置代理',
+    proxyTesting: '测试中…', proxyOk: '代理可用：HTTP {s}，{m} ms', proxyFail: '代理不可用：', proxyCleared: '已恢复为跟随系统',
     loginWaiting: '已打开 Steam，请在 Steam App 里确认登录…',
     loginDone: '已登录：{a}', loginFailed: '登录失败：', loginIdle: '未登录（可先用电脑导入凭据）',
     groupMisc: '其他特性', groupType: '类型', groupAge: '年龄分级', groupGenre: '题材',
@@ -84,6 +87,9 @@ const I18N = {
     pageN: 'Page {p}', failed: 'Failed: ', noDownload: 'Download not available on this platform',
     vpnHint: 'Still empty? Turn on a VPN / game accelerator, then search again.',
     dirSaved: 'Saved: {d}', dirFail: 'Failed: ', dirDefault: 'Default: {d}',
+    proxyField: 'Proxy (blank = follow system; downloads try direct first, then fall back to it)',
+    proxyTest: 'Test connection', proxySaved: 'Saved: {p}', proxyDefault: 'System proxy: {p}', proxyNone: 'Direct, no proxy configured',
+    proxyTesting: 'Testing…', proxyOk: 'Proxy OK: HTTP {s}, {m} ms', proxyFail: 'Proxy failed: ', proxyCleared: 'Reset to follow system',
     loginWaiting: 'Waiting for confirmation in the Steam app…',
     loginDone: 'Signed in: {a}', loginFailed: 'Login failed: ', loginIdle: 'Not signed in', logout: 'Sign out',    groupMisc: 'Miscellaneous', groupType: 'Type', groupAge: 'Age Rating', groupGenre: 'Genre',
     groupRes: 'Resolution', groupCategory: 'Category', groupAssetType: 'Asset Type',
@@ -646,6 +652,13 @@ async function openSettings() {
     $('loginAccount').value = s.accountName || '';
     $('dirHint').textContent = tr('dirDefault', { d: s.defaultOutputDir });
     $('loginHint').textContent = s.accountName ? tr('loginDone', { a: s.accountName }) : tr('loginIdle');
+    if ($('proxyInput')) {
+      $('proxyInput').value = s.proxy || '';
+      $('proxyInput').placeholder = s.defaultProxy || 'http://127.0.0.1:7890';
+      $('proxyHint').textContent = s.proxy
+        ? tr('proxySaved', { p: s.proxy })
+        : (s.defaultProxy ? tr('proxyDefault', { p: s.defaultProxy }) : tr('proxyNone'));
+    }
   } catch (e) {
     $('dirHint').textContent = e.message;
   }
@@ -688,6 +701,42 @@ async function saveDir() {  try {
   } catch (e) {
     $('dirHint').textContent = tr('dirFail') + e.message;
   }
+}
+
+async function saveProxy() {
+  const v = $('proxyInput').value.trim();
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy: v }),
+    });
+    $('proxyInput').value = r.proxy || '';
+    $('proxyHint').textContent = r.proxy ? tr('proxySaved', { p: r.proxy }) : tr('proxyCleared');
+  } catch (e) {
+    $('proxyHint').textContent = tr('proxyFail') + e.message;
+  }
+}
+
+async function testProxyConn() {
+  $('proxyHint').textContent = tr('proxyTesting');
+  try {
+    const r = await api('/api/proxy/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ proxy: $('proxyInput').value.trim() }),
+    });
+    $('proxyHint').textContent = r.ok
+      ? tr('proxyOk', { s: r.status, m: r.ms })
+      : tr('proxyFail') + (r.error || '');
+  } catch (e) {
+    $('proxyHint').textContent = tr('proxyFail') + e.message;
+  }
+}
+
+async function resetProxy() {
+  $('proxyInput').value = '';
+  await saveProxy();
 }
 
 // ---------------- CDN 节点测速 ----------------
@@ -930,6 +979,9 @@ function wire() {
     if (state.loginPoll) clearTimeout(state.loginPoll);
   };
   $('saveDir').onclick = saveDir;
+  if ($('saveProxy')) $('saveProxy').onclick = saveProxy;
+  if ($('testProxy')) $('testProxy').onclick = testProxyConn;
+  if ($('resetProxy')) $('resetProxy').onclick = resetProxy;
   if ($('cdnTest')) $('cdnTest').onclick = testCdnNodes;
   if ($('pickDir')) $('pickDir').onclick = pickFolder;
   $('rawOnly').checked = state.rawOnly;

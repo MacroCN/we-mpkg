@@ -74,9 +74,10 @@ async function downloadWithEngine(itemId, opts = {}) {
     const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress, isCancelled: opts.isCancelled, isPaused: opts.isPaused });
     return { ok: true, dir: r.dir };
   } catch (e) {
+    if (e instanceof CancelledError || e.name === 'CancelledError') throw e;
     // 连接被 Steam 踢掉/过期/超时类故障时，下次重试用新连接
     if (/403|HTTP error|Not Logged On|not logged on|disconnected|timed out|ETIMEDOUT|timeout/i.test(e.message || '')) resetSharedClient();
-    throw e;
+    throw require('./errors').humanize(e);
   } finally {
     cdn.releaseIdleSockets();
   }
