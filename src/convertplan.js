@@ -103,7 +103,7 @@ function buildPlan(opts) {
 
   return {
     version: PLAN_VERSION,
-    policy: 'mobile-rgba-lz4-v2',
+    policy: 'mobile-rgba-lz4-v3-uniform-scale',
     createdAt: new Date().toISOString(),
     preset: { id: preset.id, reduction: preset.reduction, maxDimension: preset.maxDimension },
     preserveAudio: !!opts.preserveAudio,

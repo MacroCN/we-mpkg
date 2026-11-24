@@ -10,6 +10,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const assert = require('assert');
+const zlib = require('zlib');
 
 const pkgformat = require('../src/pkgformat');
 const packer = require('../src/pack');
@@ -443,6 +444,46 @@ function buildTex(opts) {
   return Buffer.concat(parts);
 }
 
+/** CRC32（PNG 分块用） */
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (const byte of buf) {
+    c ^= byte;
+    for (let k = 0; k < 8; k++) c = (c >>> 1) ^ (0xedb88320 & -(c & 1));
+  }
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data) {
+  const typeBuf = Buffer.from(type, 'latin1');
+  const body = Buffer.concat([typeBuf, data]);
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body), 0);
+  return Buffer.concat([len, body, crc]);
+}
+
+/** 生成一张纯色 RGBA PNG，用来模拟直通图纹理 */
+function tinyPng(w, h, rgba = [0x30, 0x60, 0x90, 0xff]) {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  const rows = [];
+  for (let y = 0; y < h; y++) {
+    const row = Buffer.alloc(1 + w * 4);
+    for (let x = 0; x < w; x++) Buffer.from(rgba).copy(row, 1 + x * 4);
+    rows.push(row);
+  }
+  return Buffer.concat([
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(Buffer.concat(rows))),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
 test('DXT1 纹理会被转成移动端形态（RGBA8 + 单 mip）', () => {
   const block = Buffer.alloc(8);
   block.writeUInt16LE(0xf800, 0);
@@ -502,6 +543,40 @@ test('画质档位只对彩色图降采样，数据图保持原尺寸', () => {
   });
   assert.strictEqual(data.width, 8);
   assert.strictEqual(data.downsampled, false);
+});
+
+test('直通图逻辑尺寸大于载荷时按载荷缩放，不再报“裁剪尺寸大于原图”', () => {
+  const src = buildTex({
+    format: texlib.TEX_FORMAT.RGBA8888,
+    texW: 8, texH: 8, imgW: 8, imgH: 8,
+    imageFormat: texlib.FREE_IMAGE.PNG,
+    images: [{ mips: [{ w: 4, h: 4, bytes: tinyPng(4, 4) }] }],
+  });
+  const r = texlib.convertTexBuffer(src, {
+    relPath: 'materials/2k_earth_daymap.tex', preset: texlib.presetOf('balanced'), semantic: 'color', scale: 0.5,
+  });
+  assert.ok(r.changed, '应正常转换，而不是保留原文件');
+  assert.strictEqual(r.width, 2, '4x4 载荷按 0.5 缩到 2x2');
+  assert.strictEqual(r.height, 2);
+});
+
+test('同一目录里的纹理按整包统一倍率缩放（不会各缩各的）', () => {
+  const dir = tmp('texscale');
+  fs.mkdirSync(path.join(dir, 'materials'), { recursive: true });
+  const raw = (w, h) => buildTex({
+    format: texlib.TEX_FORMAT.RGBA8888,
+    container: 'TEXB0001',
+    texW: w, texH: h, imgW: w, imgH: h,
+    images: [{ mips: [{ w, h, bytes: Buffer.alloc(w * h * 4, 0x40) }] }],
+  });
+  fs.writeFileSync(path.join(dir, 'materials', 'background.tex'), raw(16, 16));
+  fs.writeFileSync(path.join(dir, 'materials', '1.tex'), raw(8, 8));
+  fs.writeFileSync(path.join(dir, 'materials', 'normal_map.tex'), raw(8, 8));
+  const res = texlib.convertTexDir(dir, { preset: 'balanced' });
+  const w = (name) => texlib.parseTex(fs.readFileSync(path.join(dir, 'materials', name))).header.imageWidth;
+  assert.strictEqual(w('background.tex'), 8, '16->8，倍率 0.5');
+  assert.strictEqual(w('1.tex'), 4, '无名贴图也必须跟主图一起缩到 0.5');
+  assert.strictEqual(w('normal_map.tex'), 8, '数据图不做有损缩放');
 });
 
 test('semanticOf 识别数据图 / 彩色图 / 未知', () => {

@@ -569,7 +569,7 @@ async function packFromItemDir(itemDir, opts = {}) {
   });
   convertplan.writePlan(planFile, plan);
   const checkpoint = new convertplan.Checkpoint(checkpointFile);
-  checkpoint.bind(`${preset.id}|v2|audio=${opts.preserveAudio ? 1 : 0}`);
+  checkpoint.bind(`${preset.id}|v3|audio=${opts.preserveAudio ? 1 : 0}`);
   if (checkpoint.loadedFromDisk && checkpoint.resolvedCount) {
     onLog(`  发现上次的转换断点：已有 ${checkpoint.resolvedCount} 个资源完成，继续转换`);
   }
@@ -689,7 +689,7 @@ async function packFromPath(inputPath, opts = {}) {
   });
   convertplan.writePlan(planFile, plan);
   const checkpoint = new convertplan.Checkpoint(checkpointFile);
-  checkpoint.bind(`${preset.id}|v2|audio=${opts.preserveAudio ? 1 : 0}`);
+  checkpoint.bind(`${preset.id}|v3|audio=${opts.preserveAudio ? 1 : 0}`);
   onLog('纹理/着色器适配（手机端）...');
   const adapted = adaptForMobile(projectDir, { onLog, preset, maxRgbaBytes: opts.maxRgbaBytes, checkpoint });
   warnings.push(...adapted.warnings);
@@ -755,3 +755,4 @@ module.exports = {
   detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
   stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum,
 };
+

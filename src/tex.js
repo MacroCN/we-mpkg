@@ -20,7 +20,9 @@
  *   2) 不能读的按类型分流：直通图解码、DXT 解码、原始像素重封装，统一输出
  *      RGBA8888 + 单 mip + LZ4（压不动就退回未压缩，见 writeMobileTex）
  *   3) 解码前先算像素预算，超预算就保留原文件并明确告警，绝不把内存打爆
- *   4) 只有确认是「彩色图」的纹理才允许降采样；法线/遮罩/LUT 这类数据图一律不做有损处理
+ *   4) 降采样按「整包统一倍率」：同一张壁纸里所有可缩放的静态纹理用同一个比例，
+ *      不能各自按自己的尺寸算，否则 8K 背景压到 2K、512 贴图仍原尺寸，图层缩放就对不上；
+ *      法线/遮罩/LUT 这类数据图仍不做有损处理
  *   5) 写完后重新解析自己的输出做断言，通过才算转换成功
  *
  * 容器格式：
@@ -691,28 +693,27 @@ function inspectTex(buf, opts = {}) {
   };
 }
 
-/** 目标尺寸：按画质档位缩放，只对彩色静态图生效 */
-function targetSize(width, height, preset, semantic) {
-  let w = width;
-  let h = height;
-  if (semantic === 'color' && preset && preset.reduction > 1) {
-    w = Math.max(1, Math.floor(w / preset.reduction));
-    h = Math.max(1, Math.floor(h / preset.reduction));
+/**
+ * 整包统一缩放倍率：先按 reduction 取 1/2、1/4，再用 maxDimension 约束最大的一条纹理。
+ * 关键是这个倍率由「整包最大的纹理」算出来，之后所有纹理都乘同一个倍率，
+ * 这样 8K 背景和 512 的小贴图会一起等比缩小，不会出现各自缩、图层错位。
+ */
+function uniformScale(maxSourceDim, preset) {
+  if (!preset || maxSourceDim <= 0) return 1;
+  let scale = preset.reduction > 1 ? 1 / preset.reduction : 1;
+  if (preset.maxDimension && maxSourceDim * scale > preset.maxDimension) {
+    scale = preset.maxDimension / maxSourceDim;
   }
-  const maxDim = preset && preset.maxDimension ? preset.maxDimension : 0;
-  if (maxDim && semantic === 'color' && Math.max(w, h) > maxDim) {
-    if (w >= h) { h = Math.max(1, Math.round(h * maxDim / w)); w = maxDim; }
-    else { w = Math.max(1, Math.round(w * maxDim / h)); h = maxDim; }
-  }
-  return { width: w, height: h };
+  return scale > 1 ? 1 : scale;
 }
 
-/** 选一个可直接用的 mip：尺寸正好等于目标尺寸时省掉重采样 */
-function pickMip(tex, imageIndex, wantW, wantH) {
-  const img = tex.images[imageIndex];
-  if (!img || !img.mips.length) return null;
-  const exact = img.mips.find((m, i) => i > 0 && m.width === wantW && m.height === wantH);
-  return exact || img.mips[0];
+/** 目标尺寸：source 尺寸 × 统一倍率（只缩不放） */
+function targetSize(width, height, scale) {
+  const s = scale > 0 && scale < 1 ? scale : 1;
+  return {
+    width: Math.max(1, Math.floor(width * s)),
+    height: Math.max(1, Math.floor(height * s)),
+  };
 }
 
 /**
@@ -890,7 +891,7 @@ function shrinkVideoTex(buf, info, opts = {}) {
  * 单个纹理转换（不写盘）。
  * @param {Buffer} buf
  * @param {{relPath?:string, preset?:object|string, maxRgbaBytes?:number, semantic?:string, force?:boolean,
- *          videoMaxWidth?:number}} opts
+ *          videoMaxWidth?:number, scale?:number}} opts
  * @returns {{changed:boolean, bytes?:Buffer, reason:string, route:string, width?:number, height?:number, downsampled?:boolean}}
  */
 function convertTexBuffer(buf, opts = {}) {
@@ -922,21 +923,26 @@ function convertTexBuffer(buf, opts = {}) {
   }
   const animated = (tex.header.flags & TEX_FLAGS.IsGif) !== 0;
   const framesTail = tex.framesStart < buf.length ? buf.subarray(tex.framesStart) : null;
-  // 动图不降采样：帧表里记着像素矩形，尺寸一变帧表就对不上了
-  const effectivePreset = animated ? Object.assign({}, preset, { reduction: 1, maxDimension: 0 }) : preset;
 
   const logicalW = tex.header.imageWidth;
   const logicalH = tex.header.imageHeight;
-  const want = targetSize(logicalW, logicalH, effectivePreset, semantic);
+  // 数据图不做有损缩放；动图尺寸一变帧表就对不上，也保持原尺寸
+  const scale = (!animated && semantic !== 'data')
+    ? (typeof opts.scale === 'number' ? opts.scale : uniformScale(Math.max(logicalW, logicalH), preset))
+    : 1;
 
   const images = [];
   let downsampled = false;
+  let outW = 0;
+  let outH = 0;
   for (let i = 0; i < tex.images.length; i++) {
     const img = tex.images[i];
     if (!img.mips.length) throw new Error(`第 ${i} 帧没有 mip`);
-    const mip = pickMip(tex, i, want.width, want.height);
+    const mip = img.mips[0];
 
     let pixels;
+    let effW;
+    let effH;
     if (tex.container.imageFormat >= 0) {
       let payload = mip.bytes;
       if (mip.lz4 === 1) {
@@ -945,19 +951,31 @@ function convertTexBuffer(buf, opts = {}) {
       }
       const decoded = decodeImage(payload);
       if (!decoded) throw new Error(`直通图无法解码（${lastDecodeError || '未知原因'}）`);
-      pixels = cropRgba(decoded.data, decoded.width, decoded.height, logicalW, logicalH);
-      if (pixels.length !== checkedSize(logicalW, logicalH, 4)) throw new Error('解码后像素长度异常');
-      if (mip.width !== want.width || mip.height !== want.height) {
-        pixels = resizeAreaAverage(pixels, logicalW, logicalH, want.width, want.height);
-      }
+      pixels = decoded.data;
+      effW = decoded.width;
+      effH = decoded.height;
     } else {
       pixels = decodeMip(mip, tex.header.format, mip.width, mip.height);
       if (pixels.length !== checkedSize(mip.width, mip.height, 4)) throw new Error('解码后像素长度异常');
-      if (mip.width !== want.width || mip.height !== want.height) {
-        pixels = resizeAreaAverage(pixels, mip.width, mip.height, want.width, want.height);
-      }
+      effW = mip.width;
+      effH = mip.height;
     }
-    if (want.width !== logicalW || want.height !== logicalH) downsampled = true;
+
+    // 头部声明的逻辑尺寸一般等于贴图尺寸，只有「逻辑比实际小」时才裁左上角；
+    // 反过来（逻辑比载荷大，常见于直通 JPEG）不能裁，也不该报错 —— 按实际载荷尺寸缩放。
+    if (logicalW <= effW && logicalH <= effH && (logicalW !== effW || logicalH !== effH)) {
+      pixels = cropRgba(pixels, effW, effH, logicalW, logicalH);
+      effW = logicalW;
+      effH = logicalH;
+    }
+    if (pixels.length !== checkedSize(effW, effH, 4)) throw new Error('解码后像素长度异常');
+
+    const want = targetSize(effW, effH, scale);
+    if (want.width !== effW || want.height !== effH) {
+      pixels = resizeAreaAverage(pixels, effW, effH, want.width, want.height);
+      downsampled = true;
+    }
+    if (!outW) { outW = want.width; outH = want.height; }
     images.push({ width: want.width, height: want.height, pixels });
   }
 
@@ -988,6 +1006,46 @@ function convertTexBuffer(buf, opts = {}) {
  *        checkpoint 是 convertplan.Checkpoint 实例；给了就支持断点续转
  * @returns {{stats:object, warnings:string[], outcomes:Array}}
  */
+/**
+ * 扫一遍目录，用「整包最大的可缩放静态纹理」算出统一倍率。
+ * 只看 mip0 的实际尺寸，不看 header 的逻辑尺寸：逻辑尺寸偶尔比载荷大（直通 JPEG），
+ * 用它算倍率会让实际载荷被裁/被放大；按实际像素算，所有图层才能保持原始相对比例。
+ */
+function measureUniformScale(dir, preset, semanticFn, skip, maxFileBytes) {
+  if (!preset || (preset.reduction <= 1 && !preset.maxDimension)) return 1;
+  let maxDim = 0;
+  const walk = (d) => {
+    for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
+      const abs = path.join(d, ent.name);
+      if (ent.isDirectory()) { walk(abs); continue; }
+      if (!/\.tex$/i.test(ent.name)) continue;
+      const rel = path.relative(dir, abs).split(path.sep).join('/');
+      if (skip.has(rel)) continue;
+      try {
+        if (maxFileBytes && fs.statSync(abs).size > maxFileBytes) continue;
+        const buf = fs.readFileSync(abs);
+        const tex = parseTex(buf);
+        if (videoPayload(tex)) continue;
+        if (tex.header.flags & TEX_FLAGS.IsGif) continue;
+        const kind = classify(tex);
+        if (kind === 'mobile' || kind === 'noimages') continue;
+        let semantic = semanticFn(rel);
+        // 和 convertTexBuffer 的兜底保持一致：无名 PNG 当数据图、无名 JPEG 当彩图
+        if (semantic === 'unknown' && tex.container.imageFormat >= 0) {
+          semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
+        }
+        if (semantic === 'data') continue;
+        for (const img of tex.images) {
+          if (!img.mips.length) continue;
+          maxDim = Math.max(maxDim, img.mips[0].width, img.mips[0].height);
+        }
+      } catch { /* 坏文件留给正式转换阶段报错 */ }
+    }
+  };
+  walk(dir);
+  return uniformScale(maxDim, preset);
+}
+
 function convertTexDir(dir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const preset = typeof opts.preset === 'string' ? presetOf(opts.preset) : (opts.preset || presetOf('high'));
@@ -996,6 +1054,9 @@ function convertTexDir(dir, opts = {}) {
   const semanticFn = opts.semanticOf || semanticOf;
   const skip = opts.skipRelPaths || new Set();
   const checkpoint = opts.checkpoint || null;
+  // 先算整包统一倍率：所有静态图层必须乘同一个比例，否则背景和小贴图各缩各的，画面会错位
+  const scale = measureUniformScale(dir, preset, semanticFn, skip, maxFileBytes);
+  if (scale < 1) onLog(`  统一缩放: ${(scale * 100).toFixed(1)}%（整包所有静态纹理按同一比例缩小）`);
 
   const stats = {
     total: 0, converted: 0, kept: 0, failed: 0, video: 0, budget: 0, resumed: 0,
@@ -1034,7 +1095,7 @@ function convertTexDir(dir, opts = {}) {
 
       let r;
       try {
-        r = convertTexBuffer(buf, { relPath: rel, preset, maxRgbaBytes, semantic: semanticFn(rel) });
+        r = convertTexBuffer(buf, { relPath: rel, preset, maxRgbaBytes, semantic: semanticFn(rel), scale });
       } catch (e) {
         stats.failed++;
         warnings.push(`${rel}: 转换失败，已保留原文件（${e.message}）`);
