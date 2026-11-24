@@ -1320,6 +1320,13 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(out.header.flags & tex.TEX_FLAGS.ClampUVs, 2, 'ClampUVs 等无关标志要保留');
   });
 
+  console.log('\n[19] 桌面下载中心：保存 .mpkg 的链接');
+  test('主页面浮层的保存链接必须走主服务 /api/file/<id>', () => {
+    const s = fs.readFileSync(path.join(__dirname, '..', 'public', 'dlcenter.js'), 'utf8');
+    assert.ok(s.includes('href="/api/file/'), '应该指向主服务转发接口');
+    assert.ok(!s.includes('href="api/hub/file/'), '不能再用下载中心端口上的相对路径（在主页面会 404）');
+  });
+
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);
   if (failed) {
     for (const f of failures) console.error(`\n失败: ${f.name}\n${f.error.stack}`);

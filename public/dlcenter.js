@@ -114,7 +114,7 @@
       if (b && j.outPath) {
         acts.push(`<button class="primary-act" data-act="import" data-id="${esc(j.id)}">${t('导入壁纸引擎', 'Import to WE')}</button>`);
       } else if (j.outFile) {
-        acts.push(`<a class="primary-act" href="api/hub/file/${encodeURIComponent(j.id)}" download>${t('保存 .mpkg', 'Save .mpkg')}</a>`);
+        acts.push(`<a class="primary-act" href="/api/file/${encodeURIComponent(j.id)}" download>${t('保存 .mpkg', 'Save .mpkg')}</a>`);
       }
       if (j.outFile && !j.rawDir) acts.push(`<span class="tag">${esc(j.outFile)}</span>`);
     }

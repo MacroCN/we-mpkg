@@ -15,11 +15,15 @@
 const fs = require('fs');
 const path = require('path');
 const { config, ensureDirs } = require('./config');
+const netagent = require('./netagent');
 const cdn = require('./cdn');
 
 const APP_ID = 431960;
 const DEPOT_ID = 431960;
 const TOKEN_FILE = path.join(config.CACHE_DIR, 'steam-token.json');
+
+// CDN 分块下载：先直连，直连不上再走代理（配置了代理时才会接管全局 Agent）
+netagent.installDirectFirstAgents();
 
 function readToken() {
   try {
