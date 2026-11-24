@@ -10,7 +10,6 @@ dist/
 output/
 downloads/
 logs/
-packaging/
 android/app/build/
 android/.gradle/
 android/app/src/main/jniLibs/
