@@ -4,7 +4,6 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.2.0**（P1 落地：批量下载、设备画质推荐、打包前兼容性报告；P2 落地：自动更新检查、GitHub Actions 打 tag 自动构建发布）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -28,9 +27,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.2.0.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 60 MB） |
-| `we-mpkg-android-2.2.0.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
-| `we-mpkg-src-2.2.0.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-*.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 60 MB） |
+| `we-mpkg-android-*.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
+| `we-mpkg-src-*.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +40,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.2.0.zip
+解压 we-mpkg-portable-*.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -83,6 +82,11 @@ node bin\wempkg.js serve --port 3090
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
 
 ---
+
+
+## 更新记录
+
+各版本的改动与已知问题见 [GitHub Releases](https://github.com/MacroCN/we-mpkg/releases)，正文只描述当前功能。
 
 ## 命令行
 
