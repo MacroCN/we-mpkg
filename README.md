@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.1.2**（P0 收尾：设置页可填代理并测试连通性；凭据落盘加密；Steam 报错翻成人话；安卓前台服务保活；README/下载表版本对齐）
+- 当前版本：**2.2.0**（P1 落地：批量下载、设备画质推荐、打包前兼容性报告；P2 落地：自动更新检查、GitHub Actions 打 tag 自动构建发布）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.1.2.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 60 MB） |
-| `we-mpkg-android-2.1.2.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
-| `we-mpkg-src-2.1.2.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.2.0.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 60 MB） |
+| `we-mpkg-android-2.2.0.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
+| `we-mpkg-src-2.2.0.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.1.2.zip
+解压 we-mpkg-portable-2.2.0.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -83,6 +83,22 @@ node bin\wempkg.js serve --port 3090
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
 
 ---
+
+## 2.2.0 改进（P1 + 自动更新 + CI）
+
+| # | 改动 | 说明 |
+|---|---|---|
+| 1 | **批量下载** | 列表卡片左上角可勾选，底部浮条显示「已选 N 项」，一次把多条加入下载中心（队列最多 3 条并发），可选择批量用的画质 |
+| 2 | **设备画质推荐** | 用 `navigator.deviceMemory`、核心数与 WebGL renderer 估设备档位：老 GPU/低内存默认「流畅」，中端「均衡」，8 GB 以上「高画质」；详情页显示推荐依据，用户改过画质后记住选择 |
+| 3 | **打包前兼容性报告** | 新增 `src/compat.js`：解包后先扫描 project.json / .tex / 视频 / 音频，输出「良好 / 需注意 / 大概率黑屏」、纹理数量、视频纹理、预计显存、体积，以及本机是否具备 ffmpeg/浏览器；打包开始时推进度事件，界面直接展示 |
+| 4 | **自动更新检查** | 新增 `src/update.js` + `GET /api/update/check`（6 小时缓存、`?force=1` 强制刷新）：对比 GitHub 最新 Release，设置页「检查更新」显示是否有新版本并给下载页链接；不做静默覆盖（绿色版文件占用、安卓需系统安装器） |
+| 5 | **GitHub Actions 自动发布** | `.github/workflows/release.yml`：推 `v*` tag 后自动在 windows-latest 构建 portable/source zip、在 ubuntu-latest 用 NDK 编译 JNI + Gradle 打包 APK（16 KB 对齐 + debug 签名），三件套直接发布到 Release。APK 依赖预编译 libnode 与头文件，放在 `android-node-toolchain-v1` 工具链 Release |
+| 6 | **版本号** | 2.2.0（versionCode 17 / versionName 2.2.0）；自检 90 通过 / 0 失败 |
+
+### 这轮没做的两项（P1 里评估后暂缓）
+
+- **安卓内置 ffmpeg / MediaCodec**：安卓 10+ 禁止执行 App 私有目录里的可执行文件，要么把 ffmpeg 伪装成 `lib*.so` 走 jniLibs（需要一个可信的 arm64 静态二进制），要么写 MediaCodec JNI 转码；两者都需要额外工具链与真机验证，这轮没有可靠来源，先不塞进 APK。兼容性报告会明确提示「安卓缺 ffmpeg，4K 视频纹理 / 网页类可能黑屏」。
+- **ETC2 / ASTC 纹理编码**：需要 etc2comp / astcenc 编码器（同样是原生二进制），当前是 RGBA8 + LZ4；没有编码器时硬改格式只会产出坏纹理，因此仍按显存预算 + 降分辨率（画质档位）来控制。
 
 ## 2.1.2 改进（P0：代理 / 凭据 / 错误 / 保活）
 

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0f1720" />
 <title>WE 创意工坊 → MPKG</title>
-<link rel="stylesheet" href="/style.css?v=2.1.2" />
-<link rel="stylesheet" href="/dlcenter.css?v=2.1.2" />
+<link rel="stylesheet" href="/style.css?v=2.2.0" />
+<link rel="stylesheet" href="/dlcenter.css?v=2.2.0" />
 </head>
 <body>
 
@@ -82,6 +82,18 @@
   <span id="cfg">…</span>
 </footer>
 
+<!-- 多选批量下载 -->
+<div id="batchBar" class="batchbar hidden">
+  <span id="batchCount">已选 0 项</span>
+  <select id="batchQuality" aria-label="quality">
+    <option value="high" data-i18n="qHigh">高画质（原尺寸）</option>
+    <option value="balanced" data-i18n="qBalanced">均衡（1/2 尺寸）</option>
+    <option value="smooth" data-i18n="qSmooth">流畅（1/4 尺寸）</option>
+  </select>
+  <button id="batchStart" class="primary" data-i18n="batchStart">打包下载</button>
+  <button id="batchClear" class="ghost" data-i18n="batchClear">清空</button>
+</div>
+
 <!-- 详情：桌面是右侧面板，手机是底部抽屉 -->
 <aside id="drawer" class="drawer hidden">
   <div class="drawer-grab"></div>
@@ -108,6 +120,8 @@
         <span data-i18n="keepAudio">保留壁纸自带音频</span>
       </label>
     </div>
+    <p id="d-device" class="hint"></p>
+    <div id="d-compat" class="compat hidden"></div>
     <div class="actions">
       <button id="d-download" class="primary big" data-i18n="downloadPack">下载并打包为 MPKG</button>
       <a id="d-open" class="link" target="_blank" rel="noreferrer" data-i18n="steamPage">Steam 页面</a>
@@ -200,6 +214,15 @@
 
       <hr />
 
+      <hr />
+
+      <div class="row cdn-head">
+        <strong data-i18n="updateTitle">版本更新</strong>
+        <button id="checkUpdate" class="ghost" data-i18n="updateCheck">检查更新</button>
+      </div>
+      <p id="updateHint" class="hint"></p>
+      <a id="updateLink" class="link hidden" target="_blank" rel="noreferrer" data-i18n="updateDownload">打开下载页</a>
+
       <div class="row">
         <button id="exitApp" class="ghost" data-i18n="exitApp">退出程序（关闭后台服务）</button>
       </div>
@@ -208,7 +231,7 @@
   </div>
 </div>
 
-<script src="/app.js?v=2.1.2"></script>
-<script src="/dlcenter.js?v=2.1.2" defer></script>
+<script src="/app.js?v=2.2.0"></script>
+<script src="/dlcenter.js?v=2.2.0" defer></script>
 </body>
 </html>

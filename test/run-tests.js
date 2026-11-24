@@ -1165,7 +1165,7 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(packer.pickMagic('scene', '0014'), pkgformat.MAGIC_MOBILE);
   });
 
-  await testAsync('打包各阶段会推进度事件（prepare → convert → shader → write → done）', async () => {
+  await testAsync('打包各阶段会推进度事件（prepare → inspect → convert → shader → write → done）', async () => {
     const itemDir = makeItemDir();
     const phases = [];
     const convertInfo = [];
@@ -1178,7 +1178,7 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
       },
     });
     assert.ok(fs.existsSync(res.outFile));
-    assert.deepStrictEqual(phases, ['prepare', 'convert', 'shader', 'write', 'done']);
+    assert.deepStrictEqual(phases, ['prepare', 'inspect', 'convert', 'shader', 'write', 'done']);
     assert.ok(convertInfo.length >= 2, '转换阶段应收到达标/总数');
     assert.strictEqual(convertInfo[0][0], 0, '转换从 0 开始');
   });
@@ -1369,6 +1369,45 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(!raw.includes('SECRET-TOKEN-XYZ'), '不能以明文出现');
     assert.deepStrictEqual(securestore.readJson(f), { refreshToken: 'SECRET-TOKEN-XYZ', accountName: '测试账号' });
     fs.unlinkSync(f);
+  });
+
+  console.log('\n[22] P1：批量下载 / 兼容性报告 / 设备推荐 / 自动更新 / CI');
+  test('兼容性报告：application 判 bad，空 scene 判 warn', () => {
+    const compat = require('../src/compat');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-compat-'));
+    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({ type: 'application', title: 'x' }));
+    const a = compat.inspect(dir, { type: 'application' });
+    assert.strictEqual(a.level, 'bad');
+    assert.ok(a.warnings.some((w) => /application/.test(w)));
+    const b = compat.inspect(dir, { type: 'scene' });
+    assert.strictEqual(b.level, 'warn');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  test('版本比较与更新检查（离线只验比较逻辑）', () => {
+    const u = require('../src/update');
+    assert.strictEqual(u.compare('2.2.0', '2.1.2'), 1);
+    assert.strictEqual(u.compare('v2.1.2', '2.1.2'), 0);
+    assert.strictEqual(u.compare('2.0.9', '2.1.0'), -1);
+    assert.match(u.currentVersion(), /^\d+\.\d+\.\d+$/);
+  });
+  test('前端有批量下载、兼容性块、设备推荐与更新入口', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    for (const id of ['batchBar', 'batchStart', 'd-compat', 'd-device', 'checkUpdate']) {
+      assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
+    }
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.ok(js.includes('async function startBatch'));
+    assert.ok(js.includes('function renderCompat'));
+    assert.ok(js.includes('function detectDevice'));
+    assert.ok(js.includes('async function checkUpdate'));
+  });
+  test('GitHub Actions 打 tag 自动构建 portable/APK 并发布', () => {
+    const wf = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
+    assert.match(wf, /tags:\s*\n\s*- 'v\*'/);
+    assert.ok(wf.includes('build-portable.ps1'));
+    assert.ok(wf.includes('assembleRelease'));
+    assert.ok(wf.includes('softprops/action-gh-release'));
+    assert.ok(!wf.includes('pwpwsh'), 'shell 拼写错误会让任务直接失败');
   });
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);

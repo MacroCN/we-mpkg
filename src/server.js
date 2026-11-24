@@ -335,7 +335,17 @@ const server = http.createServer(async (req, res) => {
         // 引擎恒定可用（纯 JS）；没登录时仍允许点下载按钮，由前端引导去登录
         canDownload: true,
         canDownloadReason: '',
+        version: require('./update').currentVersion(),
       });
+    }
+    // 自动更新：查 GitHub 最新 Release（默认 6 小时缓存，?force=1 强制刷新）
+    if (pn === '/api/update/check') {
+      try {
+        const data = await require('./update').check({ force: u.searchParams.get('force') === '1' });
+        return json(res, 200, data);
+      } catch (e) {
+        return json(res, 500, { error: e.message });
+      }
     }
     if (pn === '/api/cdn/nodes') {
       const rank = currentRanking();

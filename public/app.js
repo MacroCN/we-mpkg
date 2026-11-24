@@ -16,6 +16,16 @@ const I18N = {
     hubHint: '独立进程运行，关掉本页面任务也会继续',
     openSetup: '启动页：本地 / 远程 / 导入凭据', setupHint: '想切换本地 / 远程服务，或粘贴电脑上的凭据导入，点这个按钮回启动页（页面状态不会丢）。',
     quality: '画质', qHigh: '高画质（原尺寸）', qBalanced: '均衡（1/2 尺寸）', qSmooth: '流畅（1/4 尺寸）',
+    pickedN: '已选 {n} 项', batchStart: '打包下载', batchClear: '清空', batchConfirm: '把选中的 {n} 条加入下载中心？',
+    batchQueued: '已加入下载中心：{n} 个任务（最多同时跑 3 条）', batchNone: '先勾选要下载的壁纸',
+    batchFail: '批量提交失败：',
+    deviceRec: '推荐画质：{q}（{d}）', deviceHint: '这个推荐只影响默认值，随时可以自己改',
+    compatTitle: '打包前兼容性', compatOk: '兼容性良好', compatWarn: '需注意', compatBad: '大概率黑屏',
+    compatMeta: '{t} · 纹理 {n} 张（视频 {v}）· 预计显存 {m} MB · 体积 {s}',
+    compatNone: '暂无预检结果（任务开始打包后会显示）',
+    updateTitle: '版本更新', updateCheck: '检查更新', updateDownload: '打开下载页',
+    updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
+    updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
     keepAudio: '保留壁纸自带音频',
     rawTip: '勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。',
     exitApp: '退出程序（关闭后台服务）',
@@ -66,6 +76,16 @@ const I18N = {
     cancelTask: 'Cancel task', hubHint: 'runs in a separate process, safe to close this page',
     openSetup: 'Launcher: local / remote / import credential', setupHint: 'Use this to switch local / remote service or paste a desktop credential; page state is kept.',
     quality: 'Quality', qHigh: 'High (native size)', qBalanced: 'Balanced (1/2)', qSmooth: 'Smooth (1/4)',
+    pickedN: '{n} selected', batchStart: 'Download selected', batchClear: 'Clear', batchConfirm: 'Queue {n} selected wallpapers?',
+    batchQueued: 'Queued {n} jobs in download center (max 3 at once)', batchNone: 'Tick some wallpapers first',
+    batchFail: 'Batch failed: ',
+    deviceRec: 'Recommended: {q} ({d})', deviceHint: 'This only changes the default — you can override anytime',
+    compatTitle: 'Pre-pack compatibility', compatOk: 'Looks good', compatWarn: 'Needs attention', compatBad: 'Likely black screen',
+    compatMeta: '{t} · {n} textures ({v} video) · ~{m} MB VRAM · {s}',
+    compatNone: 'No report yet (appears when packing starts)',
+    updateTitle: 'Updates', updateCheck: 'Check for updates', updateDownload: 'Open download page',
+    updateChecking: 'Checking the latest GitHub release…', updateLatest: 'You are up to date ({v})',
+    updateFound: 'New version {v} available (current {c})', updateFail: 'Check failed: ',
     keepAudio: 'Keep wallpaper audio',
     rawTip: 'Downloads the original files into "download dir/js-<id>" (scene.pkg, mp4, …) untouched — handy for your own conversion or other tools.',
     exitApp: 'Quit (stop background service)',
@@ -190,6 +210,9 @@ const state = {
   statusText: '',
   lang: 'zh',
   loginPoll: null,
+  picked: new Map(),      // 批量下载：id -> 条目对象
+  batchBusy: false,
+  device: null,           // 设备画像与推荐画质
 };
 
 const $ = (id) => document.getElementById(id);
@@ -357,16 +380,100 @@ function renderItems(items) {
   for (const it of items) {
     const card = document.createElement('div');
     card.className = 'card';
+    card.dataset.id = it.id;
     const img = it.preview
       ? `<img class="thumb" src="${esc(it.preview)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
       : '<div class="thumb"></div>';
     card.innerHTML = `${img}
+      <label class="pick" title="选择">
+        <input type="checkbox" ${state.picked.has(String(it.id)) ? 'checked' : ''} aria-label="选择" />
+      </label>
       <div class="card-body">
         <div class="card-title">${esc(it.title || it.id)}</div>
         <div class="card-meta"><span>${esc((it.tags || []).slice(0, 2).map(tagLabel).join(' · ') || '—')}</span><span>${human(it.fileSize)}</span></div>
       </div>`;
+    if (state.picked.has(String(it.id))) card.classList.add('selected');
+    const box = card.querySelector('input[type=checkbox]');
+    box.onclick = (ev) => {
+      ev.stopPropagation();
+      togglePick(it, box.checked);
+    };
     card.onclick = () => openDetail(it.id, it);
     grid.appendChild(card);
+  }
+  updateBatchBar();
+}
+
+function togglePick(it, on) {
+  const id = String(it.id);
+  if (on) state.picked.set(id, it);
+  else state.picked.delete(id);
+  const card = document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
+  if (card) card.classList.toggle('selected', on);
+  updateBatchBar();
+}
+
+function updateBatchBar() {
+  const bar = $('batchBar');
+  if (!bar) return;
+  const n = state.picked.size;
+  bar.classList.toggle('hidden', n === 0);
+  $('batchCount').textContent = tr('pickedN', { n });
+}
+
+/** 批量下载：逐条提交到下载中心，队列由下载中心限流（最多 3 条同时跑） */
+async function startBatch() {
+  if (state.batchBusy) return;
+  const items = [...state.picked.values()];
+  if (!items.length) {
+    $('status').textContent = tr('batchNone');
+    return;
+  }
+  if (!state.loggedIn) {
+    openSettings();
+    $('loginHint').textContent = tr('notLogged');
+    return;
+  }
+  if (!confirm(tr('batchConfirm', { n: items.length }))) return;
+  state.batchBusy = true;
+  $('batchStart').disabled = true;
+  const preset = ($('batchQuality') || {}).value || (state.device ? state.device.preset : 'high');
+  let ok = 0;
+  const errors = [];
+  for (const it of items) {
+    try {
+      await api('/api/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: it.id,
+          title: it.title,
+          raw: state.rawOnly,
+          preset,
+          preserveAudio: !!($('d-audio') && $('d-audio').checked),
+        }),
+      });
+      ok++;
+    } catch (e) {
+      errors.push(`${it.title || it.id}: ${e.message}`);
+    }
+  }
+  state.batchBusy = false;
+  $('batchStart').disabled = false;
+  state.picked.clear();
+  document.querySelectorAll('.card').forEach((c) => {
+    c.classList.remove('selected');
+    const b = c.querySelector('input[type=checkbox]');
+    if (b) b.checked = false;
+  });
+  updateBatchBar();
+  if (window.WE_DLC) window.WE_DLC.notifyJobAdded();
+  if (errors.length) {
+    $('status').className = 'status err';
+    $('status').textContent = tr('batchFail') + errors.join('；');
+  } else {
+    $('status').className = 'status';
+    $('status').textContent = tr('batchQueued', { n: ok });
   }
 }
 
@@ -418,6 +525,90 @@ async function load() {
   }
 }
 
+async function checkUpdate() {
+  const hint = $('updateHint');
+  const link = $('updateLink');
+  hint.textContent = tr('updateChecking');
+  try {
+    const d = await api('/api/update/check?force=1');
+    if (d.error) throw new Error(d.error);
+    if (d.hasUpdate) {
+      hint.textContent = tr('updateFound', { v: d.latest, c: d.current });
+      if (d.release && d.release.url) {
+        link.href = d.release.url;
+        link.classList.remove('hidden');
+      }
+    } else {
+      hint.textContent = tr('updateLatest', { v: d.current });
+      link.classList.add('hidden');
+    }
+  } catch (e) {
+    hint.textContent = tr('updateFail') + e.message;
+  }
+}
+
+// ---------------- 设备画像 / 画质推荐 ----------------
+function detectDevice() {
+  const memGB = Number(navigator.deviceMemory || 0);
+  const cores = Number(navigator.hardwareConcurrency || 0);
+  let renderer = '';
+  try {
+    const c = document.createElement('canvas');
+    const gl = c.getContext('webgl') || c.getContext('experimental-webgl');
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      renderer = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) || '');
+      gl.getExtension('WEBGL_lose_context') && gl.getExtension('WEBGL_lose_context').loseContext();
+    }
+  } catch { /* ignore */ }
+
+  let preset = 'high';
+  let why = '配置看起来够用';
+  if (/Mali-4|Mali-T[0-7]|Adreno [23]\d\d|Intel.*HD Graphics [3-6]\d\d|PowerVR (SGX|G6)/i.test(renderer)) {
+    preset = 'smooth'; why = 'GPU 偏老，优先流畅';
+  } else if ((memGB && memGB <= 4) || (cores && cores <= 4)) {
+    preset = 'smooth'; why = '内存/核心数偏少';
+  } else if ((memGB && memGB < 8) || /Mali-G[0-9]{2}|Adreno 5\d\d|Adreno 6[0-4]\d/i.test(renderer)) {
+    preset = 'balanced'; why = '中端配置，均衡更稳';
+  }
+  const memText = memGB ? `${memGB} GB 内存` : (cores ? `${cores} 核` : '配置未知');
+  return { preset, label: QUALITY_LABEL[preset] || preset, renderer, memGB, cores, why, desc: `${memText}${renderer ? ' · ' + renderer : ''}` };
+}
+
+const QUALITY_LABEL = { high: '高画质', balanced: '均衡', smooth: '流畅' };
+
+function applyDeviceHint() {
+  if (!state.device) state.device = detectDevice();
+  const hint = $('d-device');
+  if (!hint) return;
+  hint.textContent = tr('deviceRec', { q: QUALITY_LABEL[state.device.preset] || state.device.preset, d: state.device.desc });
+  hint.title = tr('deviceHint');
+  const sel = $('d-quality');
+  const override = localStorage.getItem('qualityOverride');
+  if (sel) {
+    if (override) sel.value = override;
+    else sel.value = state.device.preset;
+  }
+}
+
+function renderCompat(c) {
+  const el = $('d-compat');
+  if (!el || !c) return;
+  el.classList.remove('hidden', 'ok', 'warn', 'bad');
+  el.classList.add(c.level === 'bad' ? 'bad' : (c.level === 'warn' ? 'warn' : 'ok'));
+  const head = c.level === 'bad' ? tr('compatBad') : (c.level === 'warn' ? tr('compatWarn') : tr('compatOk'));
+  const t = c.textures || {};
+  const meta = tr('compatMeta', {
+    t: c.type || 'unknown', n: t.files || 0, v: t.video || 0,
+    m: t.estimatedRgbaMB || 0, s: c.totalText || '',
+  });
+  const warn = (c.warnings || []).map((w) => `<li>⚠ ${esc(w)}</li>`).join('');
+  const note = (c.notes || []).map((w) => `<li>· ${esc(w)}</li>`).join('');
+  el.innerHTML = `<h4>${esc(tr('compatTitle'))} · ${esc(head)}</h4>
+    <div class="meta">${esc(meta)}</div>
+    ${warn || note ? `<ul>${warn}${note}</ul>` : ''}`;
+}
+
 // ---------------- 详情 ----------------
 function setDownloadLabel() {
   const btn = $('d-download');
@@ -444,7 +635,9 @@ function openDetail(id, seed) {
   $('d-progress').classList.add('hidden');
   $('p-file').classList.add('hidden');
   $('p-log').textContent = '';
+  if ($('d-compat')) $('d-compat').classList.add('hidden');
   setDownloadLabel();
+  applyDeviceHint();
 
   api('/api/item?id=' + encodeURIComponent(id)).then((d) => {
     if (!state.current || state.current.id !== id) return;
@@ -580,6 +773,7 @@ function applyProgress(job) {
   const sub = $('p-sub');
   if (sub) sub.textContent = (percent === null ? '' : `${percent}%`) + (parts.length ? `  ${parts.join(' · ')}` : '');
   $('p-note').textContent = (p.detail || '') + late;
+  if (p.compat) renderCompat(p.compat);
   const cancel = $('p-cancel');
   if (cancel) cancel.classList.toggle('hidden', !running);
 }
@@ -599,6 +793,7 @@ function pollJob(jobId) {
 
       if (job.state === 'done') {
         const r = job.result || {};
+        if (r.compat) renderCompat(r.compat);
         if (r.raw) {
           // 只下载模式：不产出 mpkg，直接把原始文件目录告诉用户（scene.pkg / mp4 原样保留）
           $('p-note').textContent = r.rawDir || '';
@@ -945,6 +1140,17 @@ function wire() {
   $('next').onclick = () => { state.page += state.pages; load(); };
   $('close').onclick = closeDetail;
   $('d-download').onclick = startDownload;
+  if ($('batchStart')) $('batchStart').onclick = startBatch;
+  if ($('batchClear')) $('batchClear').onclick = () => {
+    state.picked.clear();
+    document.querySelectorAll('.card').forEach((c) => {
+      c.classList.remove('selected');
+      const b = c.querySelector('input[type=checkbox]');
+      if (b) b.checked = false;
+    });
+    updateBatchBar();
+  };
+  if ($('d-quality')) $('d-quality').onchange = (e) => localStorage.setItem('qualityOverride', e.target.value);
   if ($('p-cancel')) $('p-cancel').onclick = cancelCurrentJob;
   // 下载中心改成页内浮层：不跳页、不重载主界面
   const openDlCenter = () => { if (window.WE_DLC) window.WE_DLC.open(); };
@@ -982,6 +1188,7 @@ function wire() {
   if ($('saveProxy')) $('saveProxy').onclick = saveProxy;
   if ($('testProxy')) $('testProxy').onclick = testProxyConn;
   if ($('resetProxy')) $('resetProxy').onclick = resetProxy;
+  if ($('checkUpdate')) $('checkUpdate').onclick = checkUpdate;
   if ($('cdnTest')) $('cdnTest').onclick = testCdnNodes;
   if ($('pickDir')) $('pickDir').onclick = pickFolder;
   $('rawOnly').checked = state.rawOnly;
@@ -1032,6 +1239,7 @@ async function init() {
   wire();
   applyLang();
   watchStickyLayout();
+  state.device = detectDevice();
   // 恢复上次的抓取深度与时间窗
   state.pages = Math.max(1, Math.min(5, parseInt(localStorage.getItem('depth') || '1', 10) || 1));
   state.days = parseInt(localStorage.getItem('days') || '7', 10) || 7;

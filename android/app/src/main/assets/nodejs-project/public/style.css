@@ -454,3 +454,42 @@ button.ghost, a.ghost {
 }
 button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
 button.ghost:disabled { opacity: 0.45; cursor: default; }
+
+/* ---- 卡片多选 / 批量下载 ---- */
+.card { position: relative; }
+.pick {
+  position: absolute; top: 8px; left: 8px; z-index: 2;
+  width: 26px; height: 26px; border-radius: 8px;
+  background: rgba(15,23,32,.72); display: flex; align-items: center; justify-content: center;
+}
+.pick input { width: 16px; height: 16px; margin: 0; accent-color: #6ee7ff; }
+.card.selected { outline: 2px solid #6ee7ff; outline-offset: -2px; }
+
+.batchbar {
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  z-index: 60; display: flex; gap: 8px; align-items: center;
+  padding: 8px 12px; border-radius: 14px;
+  background: rgba(15,23,32,.94); border: 1px solid rgba(110,231,255,.35);
+  box-shadow: 0 12px 30px rgba(0,0,0,.45);
+  max-width: calc(100vw - 24px);
+}
+.batchbar select { max-width: 130px; }
+.batchbar #batchCount { color: #cfe8ff; font-size: 13px; white-space: nowrap; }
+@media (max-width: 640px) {
+  .batchbar { bottom: 10px; padding: 6px 8px; gap: 6px; }
+  .batchbar select { max-width: 96px; }
+}
+
+/* ---- 兼容性报告 ---- */
+.compat {
+  margin: 10px 0 4px; padding: 10px 12px; border-radius: 12px;
+  border: 1px solid rgba(148,163,184,.3); background: rgba(148,163,184,.08);
+  font-size: 13px; line-height: 1.5;
+}
+.compat.ok { border-color: rgba(34,197,94,.35); background: rgba(34,197,94,.08); }
+.compat.warn { border-color: rgba(245,158,11,.35); background: rgba(245,158,11,.08); }
+.compat.bad { border-color: rgba(239,68,68,.45); background: rgba(239,68,68,.1); }
+.compat h4 { margin: 0 0 4px; font-size: 13px; }
+.compat ul { margin: 4px 0 0 16px; padding: 0; }
+.compat li { margin: 2px 0; color: #d7e3f1; }
+.compat .meta { color: #9fb3c8; }

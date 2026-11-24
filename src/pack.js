@@ -528,6 +528,18 @@ async function packFromItemDir(itemDir, opts = {}) {
 
   const warnings = [...prepared.warnings, ...validateProject(prepared.projectDir, prepared.project, prepared.type)];
 
+  // 打包前兼容性报告：先告诉用户会不会黑屏、显存大概多少，再去动纹理
+  let compat = null;
+  try {
+    compat = require('./compat').inspect(prepared.projectDir, { type: prepared.type, preset });
+    onLog(`兼容性 ${compat.level.toUpperCase()}: ${compat.summary}`);
+    for (const w of compat.warnings) onLog(`  ⚠ ${w}`);
+    for (const n of compat.notes) onLog(`  · ${n}`);
+    onProgress({ phase: 'inspect', compat });
+  } catch (e) {
+    onLog(`  ⚠ 兼容性预检失败: ${e.message}`);
+  }
+
   let mobileDir = prepared.projectDir;
   let webInfo = null;
   if (prepared.type === 'web') {
@@ -608,6 +620,7 @@ async function packFromItemDir(itemDir, opts = {}) {
     shader: adapted.shader,
     audio,
     web: webInfo,
+    compat,
     plan: summarizePlan(plan),
     planFile: keepWorkDir ? planFile : null,
     checkpointFile: keepWorkDir ? checkpointFile : null,
