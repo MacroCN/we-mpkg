@@ -1,0 +1,233 @@
+name: Release
+
+# 打一个 v 开头的 tag（例如 v2.2.0）就自动构建并发布三件套。
+# 也可以手动触发，填写一个已存在的 tag。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（必须已存在，如 v2.2.0）'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  ANDROID_NDK_VERSION: '26.1.10909125'
+  ANDROID_BUILD_TOOLS: '34.0.0'
+
+jobs:
+  portable:
+    name: Portable (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Resolve version
+        shell: pwsh
+        run: |
+          $tag = if ("${{ github.event_name }}" -eq 'workflow_dispatch') { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
+          $ver = $tag -replace '^v', ''
+          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch ffmpeg (essentials build)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path .cache\toolchain\ffmpeg-lite | Out-Null
+          curl.exe -L --retry 3 -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg -Force
+          $exe = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+          Copy-Item $exe.FullName .cache\toolchain\ffmpeg-lite\ffmpeg.exe -Force
+          Remove-Item ffmpeg.zip -Force
+          .cache\toolchain\ffmpeg-lite\ffmpeg.exe -version | Select-Object -First 1
+
+      - name: Build portable zip
+        shell: pwsh
+        run: |
+          $node = (Get-Command node).Source
+          ./build-portable.ps1 -Version $env:VERSION -NodeExe $node
+
+      - name: Build source zip
+        shell: pwsh
+        run: |
+          git archive --format=zip -o "dist/we-mpkg-src-$env:VERSION.zip" --prefix=we-mpkg/ HEAD
+
+      - name: Release notes
+        shell: pwsh
+        run: |
+          $lines = @(
+            "we-mpkg $env:VERSION",
+            "============",
+            "由 GitHub Actions 自动构建（tag $env:TAG）。",
+            "",
+            "- 绿色版：解压 we-mpkg-portable-$env:VERSION.zip，双击 start.bat",
+            "- 安卓：安装 we-mpkg-android-$env:VERSION.apk（arm64-v8a，覆盖安装保留登录凭据）",
+            "- 源码：we-mpkg-src-$env:VERSION.zip",
+            "",
+            "构建提交：${{ github.sha }}"
+          )
+          $lines -join "`r`n" | Set-Content -Path "dist/发布说明-$env:VERSION.txt" -Encoding utf8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: portable
+          if-no-files-found: error
+          path: |
+            dist/we-mpkg-portable-*.zip
+            dist/we-mpkg-src-*.zip
+            dist/发布说明-*.txt
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install NDK & build-tools
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "ndk;${ANDROID_NDK_VERSION}" "build-tools;${ANDROID_BUILD_TOOLS}" "platforms;android-34"
+
+      - name: Resolve version
+        run: |
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Fetch libnode + headers (prebuilt toolchain)
+        run: |
+          curl -L --retry 3 -o toolchain.tar.gz \
+            https://github.com/MacroCN/we-mpkg/releases/download/android-node-toolchain-v1/android-node-toolchain-v1.tar.gz
+          mkdir -p android-node
+          tar -xzf toolchain.tar.gz -C android-node
+          ls -la android-node | head
+
+      - name: Prepare jniLibs
+        run: |
+          JNI=android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p "$JNI"
+          gunzip -c android-node/libnode.so.gz > "$JNI/libnode.so"
+          cp "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI/libc++_shared.so"
+          NDK="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
+          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
+            --target=aarch64-linux-android24 -D__ANDROID_API__=24 \
+            --sysroot="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot" \
+            -shared -fPIC -O2 -std=c++17 \
+            -I"$GITHUB_WORKSPACE/android-node/include/node" \
+            -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
+            android/app/src/main/jni/shim.cpp \
+            -o "$JNI/libwempkg-node.so" -L"$JNI" -lnode -llog
+          ls -lh "$JNI"
+
+      - name: Sync JS project into assets
+        run: |
+          ASSETS=android/app/src/main/assets/nodejs-project
+          rm -rf "$ASSETS"
+          mkdir -p "$ASSETS"
+          cp -R bin src public package.json "$ASSETS"/
+          cp -R node_modules "$ASSETS/node_modules"
+          du -sh "$ASSETS"
+
+      - name: Write local.properties
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: Gradle assembleRelease
+        run: gradle -p android assembleRelease --no-daemon --console=plain
+
+      - name: Align 16 KB & sign with debug key
+        run: |
+          mkdir -p output dist
+          APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
+          echo "raw apk: $APK"
+          node tools/zipalign16.js "$APK" output/_aligned.apk
+          keytool -genkeypair -v -keystore output/debug.keystore -storepass android -keypass android \
+            -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 1000
+          APKSIGNER="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
+          "$APKSIGNER" sign --ks output/debug.keystore --ks-pass pass:android --key-pass pass:android \
+            --ks-key-alias androiddebugkey --out output/_signed.apk output/_aligned.apk
+          cp output/_signed.apk "dist/we-mpkg-android-${VERSION}.apk"
+          node tools/zipalign16.js "dist/we-mpkg-android-${VERSION}.apk" --check
+          ls -lh "dist/we-mpkg-android-${VERSION}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          if-no-files-found: error
+          path: dist/we-mpkg-android-*.apk
+
+  release:
+    name: Publish release
+    runs-on: ubuntu-latest
+    needs: [portable, android]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Collect assets
+        run: |
+          mkdir -p dist
+          find artifacts -type f -exec cp {} dist/ \;
+          ls -lh dist
+
+      - name: Resolve tag
+        run: |
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Rename notes
+        run: |
+          for f in dist/发布说明-*.txt; do [ -e "$f" ] && mv "$f" "dist/RELEASE-NOTES-${VERSION}.txt"; done || true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: we-mpkg ${{ env.VERSION }}
+          body: |
+            we-mpkg ${{ env.VERSION }}
+
+            GitHub Actions 自动构建，提交 ${{ github.sha }}。
+            - 绿色版：解压 `we-mpkg-portable-${{ env.VERSION }}.zip`，双击 `start.bat`
+            - 安卓：安装 `we-mpkg-android-${{ env.VERSION }}.apk`（arm64-v8a，覆盖安装保留凭据）
+            - 源码：`we-mpkg-src-${{ env.VERSION }}.zip`
+          files: |
+            dist/we-mpkg-portable-*.zip
+            dist/we-mpkg-android-*.apk
+            dist/we-mpkg-src-*.zip
+            dist/RELEASE-NOTES-*.txt
+          fail_on_unmatched_files: true
