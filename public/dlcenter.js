@@ -93,13 +93,18 @@
     if (j.state === 'done' && j.size) meta.push(human(j.size));
     if (p.total) meta.push(`${human(p.bytes || 0)} / ${human(p.total)}`);
     else if (p.bytes) meta.push(human(p.bytes));
-    if (run && p.speed) meta.push(`${human(p.speed)}/s`);
-    if (run && p.eta) meta.push(t(`剩 ${secs(p.eta)}`, `${secs(p.eta)} left`));
+    if (run && p.speed && !j.paused) meta.push(`${human(p.speed)}/s`);
+    if (run && p.eta && !j.paused) meta.push(t(`剩 ${secs(p.eta)}`, `${secs(p.eta)} left`));
     if (p.phase === 'convert' && p.total) meta.push(`${p.done || 0}/${p.total} ${t('张', 'tex')}`);
     if (j.result && j.result.type) meta.push(j.result.type);
     if (j.rawDir) meta.push(t('原始文件', 'raw files'));
 
     const acts = [];
+    if (run && j.state === 'downloading' && (!p.phase || p.phase === 'download')) {
+      acts.push(j.paused
+        ? `<button class="primary-act" data-act="resume" data-id="${esc(j.id)}">${t('继续', 'Resume')}</button>`
+        : `<button data-act="pause" data-id="${esc(j.id)}">${t('暂停', 'Pause')}</button>`);
+    }
     if (run) acts.push(`<button data-act="cancel" data-id="${esc(j.id)}">${t('取消', 'Cancel')}</button>`);
     if (j.state === 'failed' || j.state === 'cancelled') {
       acts.push(`<button data-act="retry" data-id="${esc(j.id)}">${t('重试', 'Retry')}</button>`);
@@ -113,9 +118,10 @@
       }
       if (j.outFile && !j.rawDir) acts.push(`<span class="tag">${esc(j.outFile)}</span>`);
     }
-    if (isEnded(j)) acts.push(`<button class="grow-end" data-act="forget" data-id="${esc(j.id)}">${t('移除', 'Remove')}</button>`);
+    // 下载中也能移除：队列会先取消任务再删记录，点一下卡片就消失
+    acts.push(`<button class="grow-end" data-act="forget" data-id="${esc(j.id)}">${t('移除', 'Remove')}</button>`);
 
-    const phase = [phaseText(p), p.detail].filter(Boolean).join(' · ');
+    const phase = [j.paused ? t('已暂停', 'Paused') : phaseText(p), p.detail].filter(Boolean).join(' · ');
     const err = j.error ? `<div class="dlc-err">✘ ${esc(j.error)}</div>` : '';
     const warn = j.result && j.result.warnings && j.result.warnings.length
       ? `<div class="dlc-warn">⚠ ${esc(j.result.warnings.slice(0, 2).join('；'))}</div>` : '';
@@ -123,7 +129,7 @@
     return `
       <div class="dlc-job st-${esc(j.state)}" data-id="${esc(j.id)}">
         <div class="row1">
-          <span class="badge">${esc(stateText(j.state))}</span>
+          <span class="badge">${esc(j.paused ? t('已暂停', 'Paused') : stateText(j.state))}</span>
           <strong title="${esc(j.title)}">${esc(j.title)}</strong>
           <span class="id">#${esc(j.itemId)}</span>
         </div>
@@ -288,7 +294,7 @@
     try {
       if (act === 'forget') {
         await api(`api/jobs/${encodeURIComponent(id)}/forget`, { method: 'POST' });
-      } else if (act === 'cancel' || act === 'retry') {
+      } else if (act === 'cancel' || act === 'retry' || act === 'pause' || act === 'resume') {
         const r = await api(`api/jobs/${encodeURIComponent(id)}/${act}`, { method: 'POST' });
         if (!r.ok) {
           const j = await r.json().catch(() => ({}));

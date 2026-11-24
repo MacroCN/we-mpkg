@@ -34,7 +34,9 @@
  */
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const zlib = require('zlib');
+const { execFileSync } = require('child_process');
 const lz4 = require('./lz4');
 const dxt = require('./dxt');
 const { sha256Buffer } = require('./convertplan');
@@ -236,6 +238,86 @@ function isMobileCompatible(tex) {
 function isVerifiedVideo(tex) {
   return (tex.container.imageFormat === FREE_IMAGE.MP4 || tex.container.videoMp4 === 1)
     && tex.images.length > 0 && tex.images[0].mips.length > 0;
+}
+
+/**
+ * 取出「视频纹理」里真正的视频载荷。
+ * 官方写的视频纹理有两种头：imageFormat=MP4/videoMp4=1，以及 imageFormat=-1/videoMp4=0
+ * 但 flags 带 IsVideoTexture(32)（repkg 与桌面版都用后者）。所以以「载荷是不是 MP4/WebM」
+ * 为准，不能只看容器声明。
+ * @returns {{data:Buffer,width:number,height:number}|null}
+ */
+function videoPayload(tex) {
+  if (tex.images.length !== 1 || tex.images[0].mips.length !== 1) return null;
+  const mip = tex.images[0].mips[0];
+  const data = mip.bytes;
+  if (!data || data.length < 24) return null;
+  const isMp4 = data.subarray(4, 8).toString('latin1') === 'ftyp';
+  const isWebm = data.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
+  if (!isMp4 && !isWebm) return null;
+  return {
+    data,
+    width: mip.width || tex.header.imageWidth,
+    height: mip.height || tex.header.imageHeight,
+  };
+}
+
+/** 手机端建议的视频纹理宽度上限（超过就转码，避免 4K 视频纹理解不出来） */
+function videoMaxWidth(opts = {}) {
+  const raw = opts.videoMaxWidth !== undefined
+    ? opts.videoMaxWidth
+    : process.env.WE_MPKG_VIDEO_MAX_WIDTH;
+  if (raw === undefined || raw === null || raw === '') return 1920;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 1920;
+}
+
+const FFMPEG_CANDIDATES = [
+  process.env.WEM_FFMPEG,
+  process.env.FFMPEG,
+  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+  path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
+  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg'),
+];
+
+function findFfmpeg() {
+  for (const p of FFMPEG_CANDIDATES) {
+    if (!p) continue;
+    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* ignore */ }
+  }
+  try {
+    const out = execFileSync(process.platform === 'win32' ? 'where.exe' : 'which',
+      [process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'], { encoding: 'utf8' });
+    const first = out.split(/\r?\n/)[0].trim();
+    if (first && fs.existsSync(first)) return first;
+  } catch { /* ignore */ }
+  return null;
+}
+
+/**
+ * 写「视频纹理」TEX（与官方/repkg 一致：TEXB0004 + imageFormat=-1 + videoMp4=0 + V3 mip，
+ * mip 载荷整段就是 MP4）。Android 端认这种结构，且 texture 尺寸与视频一致。
+ */
+function buildVideoTex({ format, flags, unk, width, height, mp4 }) {
+  const parts = [
+    writeNString('TEXV0005'),
+    writeNString('TEXI0001'),
+    Buffer.concat([
+      i32(format), i32(flags), i32(width), i32(height), i32(width), i32(height), i32(unk || 0),
+    ]),
+    writeNString('TEXB0004'),
+    i32(1),
+    i32(FREE_IMAGE.UNKNOWN),
+    i32(0),
+    i32(1),
+    i32(width),
+    i32(height),
+    i32(0),
+    i32(0),
+    i32(mp4.length),
+    mp4,
+  ];
+  return Buffer.concat(parts);
 }
 
 // ---- 图片解码（直通载荷） ----
@@ -554,6 +636,18 @@ function inspectTex(buf, opts = {}) {
   }
   const { header } = tex;
   const animated = (header.flags & TEX_FLAGS.IsGif) !== 0;
+  const video = videoPayload(tex);
+  if (video) {
+    const maxW = videoMaxWidth(opts);
+    const needShrink = maxW > 0 && Math.max(video.width, video.height) > maxW;
+    return {
+      route: needShrink ? 'video-texture-shrink' : 'video-texture',
+      reason: needShrink
+        ? `视频纹理 ${video.width}x${video.height}，超过手机端建议的 ${maxW} 宽，将转码后重封装`
+        : '视频纹理（MP4 载荷，手机端可直接解码）',
+      pixels: 0, width: video.width, height: video.height, animated: true,
+    };
+  }
   const kind = classify(tex);
   const largest = tex.images.reduce((max, img) => {
     const w = img.mips.length ? img.mips[0].width : 0;
@@ -688,13 +782,76 @@ function verifyMobileTex(buf, expect = {}) {
 }
 
 /**
+ * 把过大的视频纹理转码到手机友好尺寸，再按官方结构重封装。
+ * 转码失败/没有 ffmpeg 时原样保留（至少不会比原文件更差）。
+ */
+function shrinkVideoTex(buf, info, opts = {}) {
+  const tex = parseTex(buf);
+  const video = videoPayload(tex);
+  if (!video) return { changed: false, route: 'video-texture', reason: '视频载荷异常，原样保留' };
+  const maxW = videoMaxWidth(opts);
+  const ffmpeg = findFfmpeg();
+  if (!ffmpeg) {
+    return { changed: false, route: 'video-texture', reason: '没有找到 ffmpeg，视频纹理原样保留（尺寸偏大，手机端可能读不出）' };
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wempkg-video-'));
+  try {
+    const src = path.join(tmp, 'in' + (video.data.subarray(4, 8).toString('latin1') === 'ftyp' ? '.mp4' : '.webm'));
+    const dst = path.join(tmp, 'out.mp4');
+    fs.writeFileSync(src, video.data);
+    execFileSync(ffmpeg, [
+      '-y', '-loglevel', 'error',
+      '-i', src,
+      '-an',
+      '-c:v', 'libx264',
+      '-profile:v', 'baseline',
+      '-pix_fmt', 'yuv420p',
+      '-vf', `scale=${maxW}:-2:flags=lanczos`,
+      '-preset', 'medium',
+      '-crf', '20',
+      '-movflags', '+faststart',
+      dst,
+    ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+    const mp4 = fs.readFileSync(dst);
+    const height = Math.max(2, Math.round(video.height * maxW / video.width / 2) * 2);
+    const out = buildVideoTex({
+      format: tex.header.format,
+      flags: tex.header.flags, // 保留 IsVideoTexture(32) 与 ClampUVs(2)
+      unk: tex.header.unk,
+      width: maxW,
+      height,
+      mp4,
+    });
+    return {
+      changed: true,
+      bytes: out,
+      route: 'video-texture-shrink',
+      reason: `视频纹理 ${video.width}x${video.height} -> ${maxW}x${height}（H.264 baseline/yuv420p，手机端兼容）`,
+      width: maxW,
+      height,
+    };
+  } catch (e) {
+    return { changed: false, route: 'video-texture', reason: `视频转码失败，原样保留（${e.message.split('\n')[0]}）` };
+  } finally {
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+}
+
+/**
  * 单个纹理转换（不写盘）。
  * @param {Buffer} buf
- * @param {{relPath?:string, preset?:object|string, maxRgbaBytes?:number, semantic?:string, force?:boolean}} opts
+ * @param {{relPath?:string, preset?:object|string, maxRgbaBytes?:number, semantic?:string, force?:boolean,
+ *          videoMaxWidth?:number}} opts
  * @returns {{changed:boolean, bytes?:Buffer, reason:string, route:string, width?:number, height?:number, downsampled?:boolean}}
  */
 function convertTexBuffer(buf, opts = {}) {
   const info = inspectTex(buf, opts);
+  if (info.route === 'video-texture') {
+    return { changed: false, route: 'video-texture', reason: info.reason, width: info.width, height: info.height };
+  }
+  if (info.route === 'video-texture-shrink') {
+    return shrinkVideoTex(buf, info, opts);
+  }
   if (!opts.force && !info.route.startsWith('convert')) {
     return { changed: false, route: info.route, reason: info.reason };
   }
@@ -755,7 +912,8 @@ function convertTexBuffer(buf, opts = {}) {
     images.push({ width: want.width, height: want.height, pixels });
   }
 
-  const out = writeMobileTex({ flags: tex.header.flags, unk: tex.header.unk, images, framesTail });
+  // 非视频纹理的输出必须清掉 IsVideoTexture 位：否则手机端会去找视频流，找不到就整块黑
+  const out = writeMobileTex({ flags: tex.header.flags & ~TEX_FLAGS.IsVideoTexture, unk: tex.header.unk, images, framesTail });
   verifyMobileTex(out, {
     width: images[0].width,
     height: images[0].height,
@@ -848,7 +1006,7 @@ function convertTexDir(dir, opts = {}) {
         onLog(`  [纹理] ${rel}: ${r.reason} ${r.width}x${r.height} (${(buf.length / 1048576).toFixed(2)} -> ${(r.bytes.length / 1048576).toFixed(2)} MB, ${ratio}%)`);
       } else {
         if (r.route === 'keep-budget') stats.budget++;
-        else if (r.route.startsWith('keep-video')) stats.video++;
+        else if (r.route.startsWith('keep-video') || r.route.startsWith('video-texture')) stats.video++;
         else if (r.route === 'failed') stats.failed++;
         else stats.kept++;
         // 原样保留的也记一笔，续转时不会反复解析
@@ -881,7 +1039,7 @@ function materializeTex(buf) {
 
 module.exports = {
   parseTex, classify, isMobileCompatible, inspectTex, convertTexBuffer, convertTexDir, materializeTex,
-  verifyMobileTex, writeMobileTex, semanticOf, presetOf, PRESETS,
+  verifyMobileTex, writeMobileTex, buildVideoTex, videoPayload, semanticOf, presetOf, PRESETS,
   decodePng, decodeJpeg, decodeImage,
   FREE_IMAGE, TEX_FORMAT, TEX_FLAGS, DEFAULT_MAX_RGBA_BYTES,
 };

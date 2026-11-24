@@ -4,7 +4,7 @@
 
 三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
 
-- 当前版本：**2.0.5**（安全加固：默认只监听本机、代理凭据不再外泄，见 [2.0.5 改进](#205-改进)）
+- 当前版本：**2.0.6**（视频纹理壁纸不再黑屏；下载中心支持暂停/继续，移除对下载中的任务立即生效，见 [2.0.6 改进](#206-改进)）
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Windows x64、Android 17（arm64-v8a）
 
@@ -28,9 +28,9 @@
 
 | 产物 | 用途 |
 |---|---|
-| `we-mpkg-portable-2.0.5.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
-| `we-mpkg-android-2.0.5.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
-| `we-mpkg-src-2.0.5.zip` | 源码包（不含依赖与二进制） |
+| `we-mpkg-portable-2.0.6.zip` | 绿色版，解压双击 `start.bat` 即用，自带 Node 22 运行时（约 38 MB） |
+| `we-mpkg-android-2.0.6.apk` | 安卓安装包（arm64-v8a，约 69 MB） |
+| `we-mpkg-src-2.0.6.zip` | 源码包（不含依赖与二进制） |
 
 发布页：<https://github.com/MacroCN/we-mpkg/releases>
 
@@ -41,7 +41,7 @@
 ### 1. 绿色版（Windows，推荐）
 
 ```
-解压 we-mpkg-portable-2.0.5.zip
+解压 we-mpkg-portable-2.0.6.zip
 双击 start.bat          → 浏览器打开 http://localhost:3090
 双击 stop.bat           → 关闭后台服务
 双击 run.bat            → 命令行入口
@@ -81,6 +81,19 @@ node bin\wempkg.js serve --port 3090
 | `scene` | 可用（DXT/直通图解码成 RGBA8 并按 LZ4 压缩、着色器做移动端改写） |
 | `web` | 可用（渲染成视频封装，含音频轨与音频响应频谱） |
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
+
+---
+
+## 2.0.6 改进（视频纹理 + 下载中心暂停）
+
+| # | 改动 | 说明 |
+|---|---|---|
+| 1 | **视频纹理壁纸不再黑屏** | 原来只按容器声明的 `videoMp4` 判断视频纹理，而官方视频纹理写的是 `imageFormat=-1 / videoMp4=0`，载荷其实是一段 MP4。结果 MP4 被当 RGBA 像素解，打包后又带着 `IsVideoTexture(32)` 标志，手机端按像素纹理去取视频流 → 整块黑。现在以 mip 载荷的 `ftyp`/EBML 头为准识别视频纹理：≤ 上限原字节保留，超限用 ffmpeg 转 H.264 Constrained Baseline + yuv420p（默认宽 1920，`WE_MPKG_VIDEO_MAX_WIDTH` 可调），再按官方 `TEXB0004 + imageFormat=-1 + videoMp4=0` 结构重封装。scene 与文字层（如 `时钟` + `getHours`）完全不动 |
+| 2 | **非视频纹理清掉视频标志** | 转换输出统一 `flags & ~IsVideoTexture`，避免普通像素纹理带着视频标志被手机端误读 |
+| 3 | **下载中心支持暂停 / 继续** | 新增 `POST /api/jobs/<id>/pause`、`/resume`，暂停挂在分块边界：已下的分块与 `.part.json` 断点全部保留，不重下不断连接；只有下载阶段可暂停（打包阶段按钮自动隐藏） |
+| 4 | **下载中的任务也能移除** | 原来取消只在「下载完成后」检查一次，分块循环照跑到底，所以点取消/移除看起来没反应；且队列直接拒绝删除运行中任务。现在分块循环每个分块前检查取消，`forget` 对所有状态生效：运行/排队的任务先取消再从列表删掉，卡片立即消失 |
+
+验证：单测 76 通过 / 0 失败（新增视频纹理四条 + 暂停/继续、取消打断、运行中 forget、HTTP 断言）；假 client 分块探针下，暂停期间只落下在飞的 4 个分块，取消在 0.6 秒内以 `cancelled` 退出（改前要跑满全部分块）。《星海花影的长发少女》（`3842466368`）实测：3840×2160 / 96 Mbps 的 6 秒视频重封装为 1920×1080 / 7.74 MB，scene 与时钟文字层保留，手机端正常播放。
 
 ---
 

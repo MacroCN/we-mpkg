@@ -14,11 +14,24 @@ const assert = require('assert');
 const pkgformat = require('../src/pkgformat');
 const packer = require('../src/pack');
 const workshop = require('../src/workshop');
+const tex = require('../src/tex');
 const { redactProxy } = require('../src/server');
 
 let passed = 0;
 let failed = 0;
 const failures = [];
+
+/** 测试用：NUL 结尾字符串 */
+function sstr(s) {
+  const b = Buffer.from(s, 'latin1');
+  return Buffer.concat([b, Buffer.from([0])]);
+}
+/** 测试用：int32 小端 */
+function i32Buf(n) {
+  const b = Buffer.alloc(4);
+  b.writeInt32LE(Math.trunc(n), 0);
+  return b;
+}
 
 function test(name, fn) {
   try {
@@ -926,7 +939,7 @@ await testAsync('队列落盘：重启后未完成任务重新排队、完成记
   hub2.stop();
 });
 
-await testAsync('历史超过 20 条会裁剪，forget 只能删已结束的', async () => {
+await testAsync('历史超过 20 条会裁剪，运行中也能 forget（先取消再删记录）', async () => {
   let n = 0;
   const fastRunner = () => Promise.resolve({ result: { outFile: `/tmp/x${++n}.mpkg`, size: 1, type: 'scene' } });
   const hub = dlhub.createHub({ runner: fastRunner, file: path.join(tmp('hub6'), 'state.json'), maxConcurrent: 3 });
@@ -936,7 +949,33 @@ await testAsync('历史超过 20 条会裁剪，forget 只能删已结束的', a
   const doneId = hub.list().find((j) => j.state === 'done').id;
   assert.strictEqual(hub.forget(doneId), true, '已完成任务可移除');
   const queued = hub.add({ id: 'still-running' });
-  assert.strictEqual(hub.forget(queued.id), false, '排队中的不可移除');
+  assert.strictEqual(hub.forget(queued.id), true, '排队中的也应能移除');
+  assert.strictEqual(hub.get(queued.id), null, '移除后记录立刻消失');
+  assert.strictEqual(queued.cancelRequested, true, '移除排队任务要同时发取消信号');
+  hub.stop();
+});
+
+await testAsync('暂停 / 继续：只在下载中生效，暂停可被取消打断', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6b'), 'state.json'), maxConcurrent: 3 });
+  const job = hub.add({ id: 'p1' });
+  await sleepMs(10);
+  assert.strictEqual(job.state, 'downloading');
+  assert.strictEqual(hub.pause(job.id), true);
+  assert.strictEqual(job.paused, true);
+  assert.strictEqual(hub.view(job).paused, true, '接口返回要带 paused');
+  assert.strictEqual(d.calls[0].hooks.isPaused(), true, 'runner 应能看到暂停标记');
+  assert.strictEqual(hub.resume(job.id), true);
+  assert.strictEqual(job.paused, false);
+  assert.strictEqual(d.calls[0].hooks.isPaused(), false);
+  assert.strictEqual(hub.pause(job.id), true, '再次暂停');
+  assert.strictEqual(hub.cancel(job.id), true);
+  assert.strictEqual(job.paused, false, '取消要清掉暂停，否则分块循环卡在等待里');
+  d.calls[0].reject(new (require('../src/packjob').CancelledError)());
+  await sleepMs(20);
+  assert.strictEqual(job.state, 'cancelled');
+  // 已结束的不能再暂停
+  assert.strictEqual(hub.pause(job.id), false);
   hub.stop();
 });
 
@@ -979,6 +1018,11 @@ await testAsync('HTTP 接口：创建 / 列表 / 取消 / 文件', async () => {
   const one = await req('GET', `/api/hub/jobs/${jobId}`);
   assert.strictEqual(one.status, 200);
   assert.strictEqual(one.json.itemId, '300');
+
+  const pause = await req('POST', `/api/hub/jobs/${jobId}/pause`);
+  assert.strictEqual(pause.status, 200, '运行中的任务应能暂停');
+  const resumed = await req('POST', `/api/hub/jobs/${jobId}/resume`);
+  assert.strictEqual(resumed.status, 200, '暂停中的任务应能继续');
 
   const cancel = await req('POST', `/api/hub/jobs/${jobId}/cancel`);
   assert.strictEqual(cancel.status, 200);
@@ -1150,6 +1194,60 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     const again = picker.next();
     assert.ok(again === a || again === b, '全部判死后要能重置再试');
     assert.strictEqual(picker.rounds, 1);
+  });
+
+  console.log('\n[18] 视频纹理识别 / 重封装');
+
+  // 造一个桌面版视频纹理：TEXB0004 + imageFormat=-1 + videoMp4=0 + flags=34，mip 载荷是 MP4
+  const mp4Stub = Buffer.from('000000186674797069736F6D0000020069736F6D6D703431', 'hex');
+  const makeVideoTex = (w, h) => tex.buildVideoTex({ format: 0, flags: 34, unk: 0, width: w, height: h, mp4: mp4Stub });
+
+  test('4K 视频纹理被判为需转码（不是 raw 像素）', () => {
+    const info = tex.inspectTex(makeVideoTex(3840, 2160));
+    assert.strictEqual(info.route, 'video-texture-shrink');
+    assert.strictEqual(info.width, 3840);
+    assert.ok(!/原始像素/.test(info.reason));
+  });
+
+  test('1080p 视频纹理原样保留，不改写任何字节', () => {
+    const buf = makeVideoTex(1920, 1080);
+    const info = tex.inspectTex(buf);
+    assert.strictEqual(info.route, 'video-texture');
+    const r = tex.convertTexBuffer(buf, { preset: 'high' });
+    assert.strictEqual(r.changed, false);
+    assert.strictEqual(r.route, 'video-texture');
+  });
+
+  test('视频纹理重封装后能被解析回同一个 MP4 载荷', () => {
+    const buf = makeVideoTex(1920, 1080);
+    const t = tex.parseTex(buf);
+    const v = tex.videoPayload(t);
+    assert.ok(v, '应识别出视频载荷');
+    assert.strictEqual(v.data.length, mp4Stub.length);
+    assert.ok(v.data.equals(mp4Stub));
+    assert.strictEqual(t.header.flags & tex.TEX_FLAGS.IsVideoTexture, 32, 'IsVideoTexture 位要保留');
+  });
+
+  test('普通像素纹理转换后必须清掉 IsVideoTexture 位（否则手机端按视频纹理找流，整块黑）', () => {
+    const w = 4, h = 4;
+    const mips = [
+      { width: w, height: h, lz4: 0, decompressedBytes: 0, bytes: Buffer.alloc(w * h * 4, 0x80) },
+      { width: 2, height: 2, lz4: 0, decompressedBytes: 0, bytes: Buffer.alloc(2 * 2 * 4, 0x80) },
+    ];
+    const parts = [
+      sstr('TEXV0005'), sstr('TEXI0001'),
+      i32Buf(tex.TEX_FORMAT.RGBA8888), i32Buf(34), i32Buf(w), i32Buf(h), i32Buf(w), i32Buf(h), i32Buf(0),
+      sstr('TEXB0004'), i32Buf(1), i32Buf(tex.FREE_IMAGE.UNKNOWN), i32Buf(0), i32Buf(mips.length),
+    ];
+    for (const m of mips) {
+      parts.push(i32Buf(m.width), i32Buf(m.height), i32Buf(0), i32Buf(0), i32Buf(m.bytes.length), m.bytes);
+    }
+    const src = Buffer.concat(parts);
+    const r = tex.convertTexBuffer(src, { relPath: 'materials/bg.tex', preset: 'high' });
+    assert.ok(r.changed, '多 mip 的原始像素纹理应被转换');
+    const out = tex.parseTex(r.bytes);
+    assert.strictEqual(out.header.flags & tex.TEX_FLAGS.IsVideoTexture, 0, '输出不应保留 IsVideoTexture');
+    assert.strictEqual(out.header.flags & tex.TEX_FLAGS.ClampUVs, 2, 'ClampUVs 等无关标志要保留');
   });
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);

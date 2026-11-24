@@ -57,6 +57,7 @@ function secs(n) {
 
 function phaseLabel(j) {
   const p = j.progress || {};
+  if (j.paused) return '已暂停 · 已下的分块保留，点「继续」接着下';
   const base = PHASE_TEXT[p.phase] || STATE_TEXT[j.state] || j.state;
   return p.detail && p.detail !== base ? `${base} · ${p.detail}` : base;
 }
@@ -80,15 +81,21 @@ function renderJob(j) {
   const meta = [];
   if (p.total) meta.push(`${human(p.bytes || 0)} / ${human(p.total)}`);
   else if (p.bytes) meta.push(human(p.bytes));
-  if (isRun && p.speed) meta.push(`${human(p.speed)}/s`);
-  if (isRun && p.eta) meta.push(`剩 ${secs(p.eta)}`);
+  if (isRun && p.speed && !j.paused) meta.push(`${human(p.speed)}/s`);
+  if (isRun && p.eta && !j.paused) meta.push(`剩 ${secs(p.eta)}`);
   if (p.phase === 'convert' && p.total) meta.push(`${p.done || 0}/${p.total} 张`);
   if (j.size && j.state === 'done') meta.push(human(j.size));
   if (j.result && j.result.type) meta.push(j.result.type);
 
   const actions = [];
+  if (isRun && j.state === 'downloading' && (!p.phase || p.phase === 'download')) {
+    actions.push(j.paused
+      ? `<button class="ghost" data-act="resume" data-id="${esc(j.id)}">继续</button>`
+      : `<button class="ghost" data-act="pause" data-id="${esc(j.id)}">暂停</button>`);
+  }
   if (isRun) actions.push(`<button class="ghost" data-act="cancel" data-id="${esc(j.id)}">取消</button>`);
   if (j.state === 'failed' || j.state === 'cancelled') actions.push(`<button class="ghost" data-act="retry" data-id="${esc(j.id)}">重试</button>`);
+  actions.push(`<button class="ghost" data-act="forget" data-id="${esc(j.id)}">移除</button>`);
   if (j.state === 'done' && hasBridge() && j.outPath) actions.push(`<button class="ghost small" data-act="import" data-id="${esc(j.id)}">导入壁纸引擎</button>`);
   else if (j.state === 'done' && j.outFile) actions.push(`<a class="download small" href="api/hub/file/${encodeURIComponent(j.id)}">保存 .mpkg</a>`);
   if (j.state === 'done' && j.rawDir) actions.push(`<span class="dl-path" title="${esc(j.rawDir)}">已下载：${esc(j.rawDir)}</span>`);
@@ -109,7 +116,7 @@ function renderJob(j) {
     <article class="dl-card ${stateClass(j.state)}" data-id="${esc(j.id)}">
       <div class="dl-card-head">
         <div class="dl-card-title">
-          <span class="st ${stateClass(j.state)}">${esc(STATE_TEXT[j.state] || j.state)}</span>
+          <span class="st ${stateClass(j.state)}">${esc(j.paused ? '已暂停' : (STATE_TEXT[j.state] || j.state))}</span>
           <strong>${esc(j.title)}</strong>
           <span class="dl-sub">#${esc(j.itemId)}</span>
         </div>

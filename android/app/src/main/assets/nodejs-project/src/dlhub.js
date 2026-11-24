@@ -119,7 +119,7 @@ function createHub(opts = {}) {
         progress: defaultProgress(), error: raw.error || null, result: raw.result || null,
         log: Array.isArray(raw.log) ? raw.log.slice(-400) : [],
         createdAt: raw.createdAt || Date.now(), startedAt: raw.startedAt || null,
-        finishedAt: raw.finishedAt || null, cancelRequested: false,
+        finishedAt: raw.finishedAt || null, cancelRequested: false, paused: false,
       };
       if (raw.state === 'downloading' || raw.state === 'packing') {
         job.log.push('上次进程中断，已重新排队（下载支持按块续传）');
@@ -208,6 +208,7 @@ function createHub(opts = {}) {
         onLog: (l) => pushLog(job, l),
         onProgress,
         isCancelled: () => !!job.cancelRequested,
+        isPaused: () => !!job.paused,
       });
       job.result = result;
       if (job.cancelRequested) {
@@ -263,6 +264,7 @@ function createHub(opts = {}) {
       startedAt: null,
       finishedAt: null,
       cancelRequested: false,
+      paused: false,
     };
     for (const k of JOB_PARAMS) if (job[k] === undefined) job[k] = req[k];
     jobs.set(job.id, job);
@@ -284,6 +286,7 @@ function createHub(opts = {}) {
     if (!job) return false;
     if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return false;
     job.cancelRequested = true;
+    job.paused = false; // 暂停中的任务也要能被取消（否则分块循环还停在暂停等待里）
     if (job.state === 'queued') {
       job.state = 'cancelled';
       job.finishedAt = Date.now();
@@ -314,11 +317,45 @@ function createHub(opts = {}) {
     return job;
   }
 
-  /** 从历史里移除（只允许已完成/失败/取消的任务） */
+  /** 暂停：只对正在下载的任务有效；已下的分块和断点记录都保留 */
+  function pause(id) {
+    const job = get(id);
+    if (!job) return false;
+    if (job.state !== 'downloading' || job.cancelRequested) return false;
+    // 打包阶段是 CPU 活儿，没有可暂停的下载循环，按钮不该在这个阶段出现
+    if (job.progress && job.progress.phase && job.progress.phase !== 'download') return false;
+    if (job.paused) return true;
+    job.paused = true;
+    pushLog(job, '已暂停（已下的分块保留，点「继续」接着下）');
+    persistNow();
+    return true;
+  }
+
+  /** 继续：把暂停中的任务放回下载循环 */
+  function resume(id) {
+    const job = get(id);
+    if (!job || !job.paused) return false;
+    job.paused = false;
+    pushLog(job, '继续下载');
+    persistNow();
+    return true;
+  }
+
+  /**
+   * 从列表移除。
+   * 已完成/失败/取消 → 直接删记录；
+   * 排队中/下载中/打包中 → 先发取消信号再立刻删掉记录（下载器在下一个分块边界退出），
+   * 让「移除」在下载中点了就生效，不用等任务自己结束。
+   */
   function forget(id) {
     const job = get(id);
     if (!job) return false;
-    if (!['done', 'failed', 'cancelled'].includes(job.state)) return false;
+    if (!['done', 'failed', 'cancelled'].includes(job.state)) {
+      job.cancelRequested = true;
+      job.paused = false;
+      job.state = 'cancelled';
+      job.finishedAt = Date.now();
+    }
     jobs.delete(job.id);
     persistNow();
     return true;
@@ -329,7 +366,7 @@ function createHub(opts = {}) {
       id: j.id, itemId: j.itemId, title: j.title, state: j.state,
       raw: j.raw, preset: j.preset, preserveAudio: j.preserveAudio, videoMagic: j.videoMagic,
       progress: j.progress, error: j.error, createdAt: j.createdAt,
-      finishedAt: j.finishedAt, hasResult: !!j.result,
+      finishedAt: j.finishedAt, hasResult: !!j.result, paused: !!j.paused,
       outFile: j.result && j.result.outFile ? path.basename(j.result.outFile) : null,
       // 绝对路径只给本机网页/安卓外壳用：安卓要靠它拉起壁纸引擎导入，绕开 WebView 下载
       outPath: j.result && j.result.outFile ? j.result.outFile : null,
@@ -361,7 +398,7 @@ function createHub(opts = {}) {
 
   return {
     maxConcurrent,
-    add, get, list, cancel, retry, forget, view, stop, persistNow,
+    add, get, list, cancel, retry, forget, pause, resume, view, stop, persistNow,
     stats: () => ({
       total: jobs.size, running,
       queued: [...jobs.values()].filter((j) => j.state === 'queued').length,
@@ -468,6 +505,14 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
         if (action === 'retry' && req.method === 'POST') {
           const job = hub.retry(id);
           return json(res, job ? 200 : 404, job ? { ok: true, jobId: job.id } : { error: '任务不存在' });
+        }
+        if (action === 'pause' && req.method === 'POST') {
+          const ok = hub.pause(id);
+          return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: '只有正在下载的任务可以暂停' });
+        }
+        if (action === 'resume' && req.method === 'POST') {
+          const ok = hub.resume(id);
+          return json(res, ok ? 200 : 409, ok ? { ok: true } : { error: '任务不在暂停状态' });
         }
         if (action === 'forget' && req.method === 'POST') {
           const ok = hub.forget(id);

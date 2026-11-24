@@ -282,6 +282,20 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
     let next = 0;
     let failure = null;
   
+    // 取消 / 暂停探针：队列侧传同步函数，分块循环在每个分块开始前检查。
+    const cancelledProbe = () => !!(opts.isCancelled && opts.isCancelled());
+    const pausedProbe = () => !!(opts.isPaused && opts.isPaused());
+    const cancelledError = () => Object.assign(new Error('任务已取消'), { cancelled: true });
+    const gate = async () => {
+      let announced = false;
+      while (pausedProbe()) {
+        if (cancelledProbe()) throw cancelledError();
+        if (!announced) { announced = true; onLog('已暂停（已下的分块保留，继续后接着下）'); }
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      if (cancelledProbe()) throw cancelledError();
+    };
+
     const writeChunk = (c, data) => new Promise((resolve, reject) => {
       fs.write(fd, data, 0, data.length, parseInt(c.offset, 10), (err) => (err ? reject(err) : resolve()));
     });
@@ -314,9 +328,11 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
   
     const worker = async () => {
       while (!failure) {
-        const idx = next++;
-        if (idx >= pending.length) return;
         try {
+          // 暂停 / 取消都在分块边界响应：暂停不丢已下的分块，取消抛错让队列记「已取消」
+          await gate();
+          const idx = next++;
+          if (idx >= pending.length) return;
           await oneChunk(pending[idx]);
         } catch (e) {
           failure = e;
@@ -403,7 +419,7 @@ async function getManifestWithFailover(client, manifestId, orderedServers, { onL
 /**
  * 下载一个创意工坊条目到目录。
  */
-async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog = () => {}, onProgress = () => {} }) {
+async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog = () => {}, onProgress = () => {}, isCancelled, isPaused }) {
   ensureDirs();
   // 同一个进程里多条任务共用一条 CM 连接（同一 refresh token 同时两条会被 Steam 判 403），
   // 分块请求本身是并发的，所以多任务共用一个 client 仍然能跑满带宽。
@@ -453,6 +469,7 @@ async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog
       });
     };
     for (const f of files) {
+      if (isCancelled && isCancelled()) throw Object.assign(new Error('任务已取消'), { cancelled: true });
       const rel = String(f.filename || '').replace(/\\/g, '/');
       if (!rel) continue;
       const target = path.resolve(root, rel);
@@ -465,8 +482,9 @@ async function downloadItem({ id, outDir, refreshToken, client: extClient, onLog
       onLog(`下载 ${rel} (${f.size} B)…`);
       let r;
       try {
-        r = await downloadFileResumable(client, f, target, { onLog, onProgress: progressTo(rel), servers: orderedServers });
+        r = await downloadFileResumable(client, f, target, { onLog, onProgress: progressTo(rel), servers: orderedServers, isCancelled, isPaused });
       } catch (e) {
+        if (e && e.cancelled) throw e;
         throw new Error(`下载 ${rel} 失败: ${e.message}`);
       }
       doneBytes += Number(f.size) || 0;

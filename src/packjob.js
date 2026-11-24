@@ -86,7 +86,7 @@ async function downloadWithEngine(itemId, opts = {}) {
     const outDir = path.join(config.DOWNLOAD_DIR, `js-${itemId}`);
     const client = await getSharedClient(onLog);
     try {
-      const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress });
+      const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress, isCancelled: opts.isCancelled, isPaused: opts.isPaused });
       return { ok: true, dir: r.dir };
     } catch (e) {
       // 连接被 Steam 踢掉/过期/超时类故障时，下次重试用新连接
@@ -141,6 +141,8 @@ async function runJob(job, hooks = {}) {
   // 下载阶段：0-100% 由字节数推进（下载器逐文件汇总）
   const dl = await downloadWithEngine(itemId, {
     onLog,
+    isCancelled: hooks.isCancelled,
+    isPaused: hooks.isPaused,
     onProgress: (p) => {
       onProgress({
         phase: 'download',
