@@ -1567,6 +1567,70 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(restored.servers[0].host, 'original', '并发结束后必须恢复原始方法');
   });
 
+  await testAsync('分块断点按 offset 标识：相同 sha 的多块不会被误跳过', async () => {
+    const steamjs = require('../src/steamjs');
+    const crypto = require('crypto');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-mpkg-dup-chunk-'));
+    const target = path.join(dir, 'dup.bin');
+    const chunk = Buffer.from('AB');
+    const chunks = [
+      { offset: 0, sha: 'same-sha', size: 2 },
+      { offset: 2, sha: 'same-sha', size: 2 },
+    ];
+    const fileSha = crypto.createHash('sha1').update('ABAB').digest('hex');
+    let calls = 0;
+    const client = {
+      downloadChunk(appId, depotId, sha, server, cb) {
+        calls++;
+        setImmediate(() => cb(null, chunk));
+      },
+    };
+    try {
+      await steamjs.downloadFileResumable(client, { size: 4, sha: fileSha, chunks }, target, {
+        servers: [{ Host: 'fake' }],
+        onLog: () => {},
+      });
+      assert.strictEqual(calls, 2, 'offset 不同的两个块都必须下载');
+      assert.strictEqual(fs.readFileSync(target).toString(), 'ABAB');
+      assert.ok(!fs.existsSync(target + '.part.json'), '完成后应删除断点文件');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  await testAsync('旧的 sha 断点记录会被丢弃并按 offset 重下', async () => {
+    const steamjs = require('../src/steamjs');
+    const crypto = require('crypto');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-mpkg-old-chunk-'));
+    const target = path.join(dir, 'old.bin');
+    const partFile = target + '.part.json';
+    const chunk = Buffer.from('AB');
+    const chunks = [
+      { offset: 0, sha: 'same-sha', size: 2 },
+      { offset: 2, sha: 'same-sha', size: 2 },
+    ];
+    const fileSha = crypto.createHash('sha1').update('ABAB').digest('hex');
+    fs.writeFileSync(target, Buffer.from('AB\0\0'));
+    fs.writeFileSync(partFile, JSON.stringify({ size: 4, done: ['same-sha'] }));
+    let calls = 0;
+    const client = {
+      downloadChunk(appId, depotId, sha, server, cb) {
+        calls++;
+        setImmediate(() => cb(null, chunk));
+      },
+    };
+    try {
+      await steamjs.downloadFileResumable(client, { size: 4, sha: fileSha, chunks }, target, {
+        servers: [{ Host: 'fake' }],
+        onLog: () => {},
+      });
+      assert.strictEqual(calls, 2, '不可信的旧断点不能跳过任何块');
+      assert.strictEqual(fs.readFileSync(target).toString(), 'ABAB');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('前端有批量下载、兼容性块、设备推荐与更新入口', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     for (const id of ['batchBar', 'batchStart', 'd-compat', 'd-device', 'checkUpdate']) {

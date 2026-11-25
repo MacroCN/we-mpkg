@@ -236,28 +236,36 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
     onLog('已有文件校验不通过，重新下载');
   }
 
-  let doneShas = new Set();
+  let doneOffsets = new Set();
   if (have > 0) {
     try {
       const st = JSON.parse(fs.readFileSync(partFile, 'utf8'));
-      if (Number(st.size) === size && Array.isArray(st.done)) doneShas = new Set(st.done);
+      // 2.2.4 及更早的断点记录用 sha 标识分块；同一文件可能出现内容相同、
+      // 但 offset 不同的块，继续沿用会误判为“已完成”。旧格式一律丢弃重下。
+      if (Number(st.size) === size && Array.isArray(st.doneOffsets)) {
+        doneOffsets = new Set(st.doneOffsets
+          .map((o) => String(parseInt(o, 10)))
+          .filter((o) => /^\d+$/.test(o)));
+      }
     } catch { /* 没有断点记录：旧数据不可信，重下 */ }
   }
+
+  const chunkOffset = (c) => String(parseInt(c.offset, 10));
 
   const fd = fs.openSync(target, have > 0 ? 'r+' : 'w+');
   try {
     fs.ftruncateSync(fd, size);
     // 没有可信断点记录就把已有内容当无效（避免把半截乱序数据当成已下载）
-    if (have > 0 && doneShas.size === 0) {
+    if (have > 0 && doneOffsets.size === 0) {
       fs.ftruncateSync(fd, 0);
       fs.ftruncateSync(fd, size);
     }
     // 先落一个断点标记：以后就算进程被杀，也能看出「这个文件是下到一半的」
-    try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
+    try { fs.writeFileSync(partFile, JSON.stringify({ size, doneOffsets: Array.from(doneOffsets) })); } catch { /* ignore */ }
   
-    const pending = chunks.filter((c) => !doneShas.has(String(c.sha).toLowerCase()));
+    const pending = chunks.filter((c) => !doneOffsets.has(chunkOffset(c)));
     const totalDone = chunks
-      .filter((c) => doneShas.has(String(c.sha).toLowerCase()))
+      .filter((c) => doneOffsets.has(chunkOffset(c)))
       .reduce((s, c) => s + (parseInt(c.size, 10) || 0), 0);
     let bytesDone = totalDone;
     if (totalDone > 0) onLog(`断点续传: 已有 ${(totalDone / 1048576).toFixed(1)} MB，还需 ${pending.length} 个分块`);
@@ -285,7 +293,7 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
       saveTimer = setTimeout(() => {
         savePending = false;
         try {
-          fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) }));
+          fs.writeFileSync(partFile, JSON.stringify({ size, doneOffsets: Array.from(doneOffsets) }));
         } catch { /* ignore */ }
       }, 400);
     };
@@ -339,7 +347,7 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
         lastChunkAt = Date.now();
         if (!res.err && res.data) {
           await writeChunk(c, res.data);
-          doneShas.add(String(c.sha).toLowerCase());
+          doneOffsets.add(chunkOffset(c));
           bytesDone += res.data.length;
           onProgress({ bytesDownloaded: bytesDone, totalSizeBytes: size });
           saveState();
@@ -385,7 +393,7 @@ async function downloadFileResumable(client, fileManifest, target, opts = {}) {
     await Promise.all(workers);
   
     if (saveTimer) clearTimeout(saveTimer);
-    try { fs.writeFileSync(partFile, JSON.stringify({ size, done: Array.from(doneShas) })); } catch { /* ignore */ }
+    try { fs.writeFileSync(partFile, JSON.stringify({ size, doneOffsets: Array.from(doneOffsets) })); } catch { /* ignore */ }
   
     if (failure) throw failure;
   
