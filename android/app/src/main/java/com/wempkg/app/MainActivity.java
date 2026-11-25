@@ -9,6 +9,9 @@ import android.os.Environment;
 import android.provider.DocumentsContract;
 import android.provider.Settings;
 import android.view.View;
+import android.webkit.JsResult;
+import android.webkit.WebChromeClient;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -29,6 +32,12 @@ public class MainActivity extends Activity {
     private View setupPanel;
     private TextView txtStatus;
     private EditText editRemote;
+    private EditText editRemoteToken;
+
+    /** 当前 WebView 允许加载/调用原生桥的 origin（本地 127.0.0.1 或用户配置的远程主机） */
+    private Uri trustedOrigin;
+    /** 当前页面地址：JS 桥在后台线程调用，不能直接读 WebView 的 UI 状态 */
+    private volatile String currentPageUrl = "";
 
     /** 下载中心浮层是否展开（返回键先收浮层，不跳页、不重载） */
     private boolean downloadsOpen = false;
@@ -45,13 +54,52 @@ public class MainActivity extends Activity {
         setupPanel = findViewById(R.id.setupPanel);
         txtStatus = findViewById(R.id.txtStatus);
         editRemote = findViewById(R.id.editRemote);
+        editRemoteToken = findViewById(R.id.editRemoteToken);
 
         WebSettings s = web.getSettings();        s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setUseWideViewPort(true);
         s.setLoadWithOverviewMode(true);
         s.setSupportZoom(false);
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                currentPageUrl = url == null ? "" : url;
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+                return handleNavigation(request.getUrl());
+            }
+
+            @Override
+            @SuppressWarnings("deprecation")
+            public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                return handleNavigation(Uri.parse(url));
+            }
+        });
+        web.setWebChromeClient(new WebChromeClient() {
+            @Override
+            public boolean onJsConfirm(WebView view, String url, String message, final JsResult result) {
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                        .setMessage(message)
+                        .setPositiveButton("确定", (d, w) -> result.confirm())
+                        .setNegativeButton("取消", (d, w) -> result.cancel())
+                        .setOnCancelListener(d -> result.cancel())
+                        .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, final JsResult result) {
+                new android.app.AlertDialog.Builder(MainActivity.this)
+                        .setMessage(message)
+                        .setPositiveButton("确定", (d, w) -> result.confirm())
+                        .setOnCancelListener(d -> result.cancel())
+                        .show();
+                return true;
+            }
+        });
         web.setBackgroundColor(0xFF0F1720);
 
         // WebView 不认 env(safe-area-inset-*)，用原生 insets 把页面挤到刘海/挖孔和底部手势区之内
@@ -77,8 +125,16 @@ public class MainActivity extends Activity {
         web.addJavascriptInterface(new Object() {
             @android.webkit.JavascriptInterface
             public void openExternal(String url) {
+                if (!canUseBridge()) return;
                 try {
-                    Intent it = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+                    Uri uri = Uri.parse(String.valueOf(url));
+                    String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+                    // 只允许浏览器能安全处理的网页链接，拒绝 file:// / intent:// 等本机协议
+                    if (!"http".equals(scheme) && !"https".equals(scheme)) {
+                        status("✘ 只允许打开 http/https 链接");
+                        return;
+                    }
+                    Intent it = new Intent(Intent.ACTION_VIEW, uri);
                     it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                     startActivity(it);
                 } catch (Exception e) {
@@ -89,6 +145,7 @@ public class MainActivity extends Activity {
             /** 调起系统目录选择器，结果在 onActivityResult 里回填网页 */
             @android.webkit.JavascriptInterface
             public void pickFolder() {
+                if (!canUseBridge()) return;
                 runOnUiThread(new Runnable() {
                     @Override public void run() { openTreePicker(); }
                 });
@@ -97,23 +154,32 @@ public class MainActivity extends Activity {
             /** 把刚做好的 mpkg 直接交给壁纸引擎导入（返回一行给网页日志用的提示） */
             @android.webkit.JavascriptInterface
             public String openMpkg(String path) {
-                return sendToWallpaperEngine(path);
+                if (!canUseBridge()) return "✘ 页面来源未授权";
+                if (path == null || path.trim().isEmpty()) return "✘ 没有拿到 mpkg 路径";
+                File f = new File(path.trim());
+                if (!MpkgProvider.isAllowedFile(MainActivity.this, f)) {
+                    return "✘ 只允许导入产出目录里的 .mpkg";
+                }
+                return sendToWallpaperEngine(f.getAbsolutePath());
             }
 
             /** 下载中心浮层开关：返回键据此决定「先收浮层」还是「退到后台」 */
             @android.webkit.JavascriptInterface
             public void setDownloadsOpen(boolean open) {
+                if (!canUseBridge()) return;
                 downloadsOpen = open;
             }
 
             /** 从网页里回到启动页（本地/远程切换、导入凭据、退出），不销毁 WebView */
             @android.webkit.JavascriptInterface
             public void openSetup() {
+                if (!canUseBridge()) return;
                 showSetupPanel();
             }
         }, "Android");
 
         editRemote.setText(getPreferences(MODE_PRIVATE).getString("remote", ""));
+        editRemoteToken.setText(getPreferences(MODE_PRIVATE).getString("remoteToken", ""));
 
         Button btnLocal = findViewById(R.id.btnLocal);
         Button btnRemote = findViewById(R.id.btnRemote);
@@ -166,6 +232,8 @@ public class MainActivity extends Activity {
         setupPanel.setVisibility(View.GONE);
         web.setVisibility(View.VISIBLE);
         loadedUrl = web.getUrl();     // 回来时按当前地址认，避免重复加载
+        currentPageUrl = loadedUrl == null ? "" : loadedUrl;
+        trustedOrigin = originOf(Uri.parse(currentPageUrl));
         return true;
     }
 
@@ -395,6 +463,57 @@ public class MainActivity extends Activity {
         }
     }
 
+    private Uri originOf(Uri u) {
+        if (u == null) return null;
+        String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase();
+        String host = u.getHost();
+        if (host == null || host.isEmpty()) return null;
+        Uri.Builder b = new Uri.Builder().scheme(scheme);
+        int port = effectivePort(u, scheme);
+        b.encodedAuthority(port > 0 ? host + ":" + port : host);
+        return b.build();
+    }
+
+    private int effectivePort(Uri u, String scheme) {
+        int port = u.getPort();
+        if (port > 0) return port;
+        if ("https".equals(scheme)) return 443;
+        if ("http".equals(scheme)) return 80;
+        return -1;
+    }
+
+    private boolean isSameOrigin(Uri a, Uri b) {
+        if (a == null || b == null) return false;
+        String as = a.getScheme() == null ? "" : a.getScheme().toLowerCase();
+        String bs = b.getScheme() == null ? "" : b.getScheme().toLowerCase();
+        return as.equals(bs)
+                && String.valueOf(a.getHost()).equalsIgnoreCase(String.valueOf(b.getHost()))
+                && effectivePort(a, as) == effectivePort(b, bs);
+    }
+
+    /** 原生桥只对当前配置的页面 origin 开放，防止 WebView 跳到第三方页面后继续调用 */
+    private boolean canUseBridge() {
+        if (trustedOrigin == null) return false;
+        return isSameOrigin(Uri.parse(currentPageUrl == null ? "" : currentPageUrl), trustedOrigin);
+    }
+
+    /** 站内页面留在 WebView；站外 http/https 交给系统浏览器；其它协议直接拒绝 */
+    private boolean handleNavigation(Uri uri) {
+        if (uri == null) return true;
+        String scheme = uri.getScheme() == null ? "" : uri.getScheme().toLowerCase();
+        if ("about".equals(scheme)) return false;
+        if (!"http".equals(scheme) && !"https".equals(scheme)) return true;
+        if (isSameOrigin(uri, trustedOrigin)) return false;
+        try {
+            Intent it = new Intent(Intent.ACTION_VIEW, uri);
+            it.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(it);
+        } catch (Exception e) {
+            status("✘ 打不开外部链接: " + e.getMessage());
+        }
+        return true;
+    }
+
     private boolean portOpen() {        Socket so = new Socket();
         try {
             so.connect(new InetSocketAddress("127.0.0.1", PORT), 1000);
@@ -407,18 +526,37 @@ public class MainActivity extends Activity {
     }
 
     private void startRemote() {
-        String host = editRemote.getText().toString().trim();
-        if (host.isEmpty()) {
+        String raw = editRemote.getText().toString().trim();
+        if (raw.isEmpty()) {
             status("先填电脑地址，例如 192.168.1.10:3090");
             return;
         }
-        if (!host.startsWith("http")) host = "http://" + host;
-        if (!host.endsWith("/")) host = host + "/";
+        if (!raw.matches("(?i)https?://.*")) raw = "http://" + raw;
+        Uri base;
+        try {
+            base = Uri.parse(raw);
+        } catch (Exception e) {
+            status("✘ 地址格式不对: " + e.getMessage());
+            return;
+        }
+        String scheme = base.getScheme() == null ? "" : base.getScheme().toLowerCase();
+        if ((!"http".equals(scheme) && !"https".equals(scheme)) || base.getHost() == null) {
+            status("✘ 只支持 http/https 的电脑地址");
+            return;
+        }
+        Uri.Builder builder = base.buildUpon();
+        if (base.getPath() == null || base.getPath().isEmpty()) builder.path("/");
+        String token = editRemoteToken.getText().toString().trim();
+        if (!token.isEmpty() && base.getQueryParameter("token") == null) {
+            builder.appendQueryParameter("token", token);
+        }
+        Uri target = builder.build();
         getPreferences(MODE_PRIVATE).edit()
                 .putString("remote", editRemote.getText().toString().trim())
+                .putString("remoteToken", token)
                 .putString("mode", "remote")
                 .apply();
-        showWeb(host);
+        showWeb(target.toString());
     }
 
     private String tailLog() {
@@ -452,6 +590,8 @@ public class MainActivity extends Activity {
                     status("已回到: " + url);
                     return;
                 }
+                trustedOrigin = originOf(Uri.parse(url));
+                currentPageUrl = url;
                 web.loadUrl(url);
                 loadedUrl = url;
                 status("已连接: " + url);

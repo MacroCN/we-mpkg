@@ -47,7 +47,7 @@ const TEXT_HINTS = [
   [/TwoFactorCodeMismatch|guard code mismatch|验证码错误/i, ERESULT_TEXT[88]],
   [/Not Logged On|not logged on|LoggedInElsewhere|已失效|登录态/i, ERESULT_TEXT[7]],
   [/RateLimit|rate limit|too many|请求太频繁|429/i, ERESULT_TEXT[84]],
-  [/Ban|banned|封禁/i, ERESULT_TEXT[50]],
+  [/\b(?:ban|banned)\b|封禁/i, ERESULT_TEXT[50]],
   [/ENOENT|no such file/i, '文件不存在，可能是内容已下架或缓存被清理'],
 ];
 

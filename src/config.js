@@ -89,8 +89,10 @@ const config = {
   LANG: env('STEAM_LANG') || 'schinese',
   COUNTRY: env('STEAM_COUNTRY') || '',
   PORT: parseInt(env('PORT') || '3090', 10),
-  /** 网页服务默认只允许本机访问；需要局域网访问时可显式设置 WE_MPKG_HOST */
+  /** 网页服务默认只允许本机访问；需要局域网访问时必须同时设置 WE_MPKG_TOKEN */
   LISTEN_HOST: env('WE_MPKG_HOST') || '127.0.0.1',
+  /** 远程访问令牌：非回环地址的请求必须携带，防止局域网裸奔 */
+  REMOTE_TOKEN: env('WE_MPKG_TOKEN'),
   /** 国内网络下有时原生 TLS 会握手失败，自动改用 curl.exe 兜底 */
   USE_CURL_FALLBACK: env('WE_MPKG_NO_CURL') !== '1' && process.platform === 'win32' && !!findCurl(),
   /** curl 可执行文件绝对路径（PATH 不可靠时也能用） */
@@ -136,8 +138,9 @@ function writeSettings(patch) {
 
 /** 校验并切换输出目录（必须是可写目录），返回绝对路径 */
 function setOutputDir(dir) {
-  const abs = path.resolve(String(dir || '').trim());
-  if (!abs) throw new Error('目录不能为空');
+  const raw = String(dir || '').trim();
+  if (!raw) throw new Error('目录不能为空');
+  const abs = path.resolve(raw);
   fs.mkdirSync(abs, { recursive: true });
   fs.accessSync(abs, fs.constants.W_OK); // 不可写会抛错
   config.OUTPUT_DIR = abs;
@@ -153,7 +156,7 @@ function normalizeProxy(raw) {
   let u;
   try { u = new URL(withScheme); } catch { throw new Error('代理格式不对，示例：http://127.0.0.1:7890'); }
   if (!u.hostname) throw new Error('代理格式不对，示例：http://127.0.0.1:7890');
-  if (!/^http:\/\//.test(withScheme)) throw new Error('只支持 http:// 代理，例如 http://127.0.0.1:7890');
+  if (!/^http:\/\//i.test(withScheme)) throw new Error('只支持 http:// 代理，例如 http://127.0.0.1:7890');
   return withScheme;
 }
 

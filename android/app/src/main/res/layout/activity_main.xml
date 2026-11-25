@@ -52,6 +52,22 @@
             android:textColor="#F0F4F8"
             android:textColorHint="#4A637A" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="访问令牌（电脑端设置了 WE_MPKG_TOKEN 时填写）"
+            android:textColor="#8FA3B8"
+            android:textSize="13sp" />
+
+        <EditText
+            android:id="@+id/editRemoteToken"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="留空表示电脑端未启用令牌"
+            android:inputType="textPassword"
+            android:textColor="#F0F4F8"
+            android:textColorHint="#4A637A" />
+
         <Button
             android:id="@+id/btnRemote"
             android:layout_width="match_parent"

@@ -619,7 +619,7 @@ function rewriteAudioSpectrumArray(source) {
   const out = source.replace(SPECTRUM_ARRAY_COPY, (match, indent, name, size, uniformName) => {
     count++;
     const k = `_s${spectrumLoopId++}`;
-    return `${indent}float ${name}[${size}];\n${indent}for (int ${k} = 0; ${k} < AUDIOSAMPLES; ${k}++) ${name}[${k}] = ${uniformName}[${k}];`;
+    return `${indent}float ${name}[${size}];\n${indent}for (int ${k} = 0; ${k} < ${size}; ${k}++) ${name}[${k}] = ${uniformName}[${k}];`;
   });
   return { text: out, count };
 }

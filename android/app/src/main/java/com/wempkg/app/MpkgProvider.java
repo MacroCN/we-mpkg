@@ -39,18 +39,36 @@ public class MpkgProvider extends ContentProvider {
         return Uri.parse("content://" + AUTHORITY + "/" + token);
     }
 
-    /** 只放开这几个目录，避免变成任意文件读取器 */
-    private List<File> allowedRoots() {
+    /** 只放开产出目录，避免变成任意文件读取器（凭据所在的 filesDir 根不在其中） */
+    private static List<File> allowedRoots(android.content.Context ctx) {
         List<File> roots = new ArrayList<>();
         try {
             File dl = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
             roots.add(dl);
         } catch (Throwable ignored) { }
-        File ext = getContext().getExternalFilesDir(null);
+        File ext = ctx.getExternalFilesDir(null);
         if (ext != null) roots.add(ext);
-        roots.add(getContext().getFilesDir());
-        roots.add(getContext().getCacheDir());
+        // 没有「所有文件访问」权限时，默认输出会退回应用私有目录的 nodejs-project/output
+        roots.add(new File(ctx.getFilesDir(), "nodejs-project/output"));
         return roots;
+    }
+
+    /** 给外壳层复用：只允许把产出目录里的 .mpkg 交给壁纸引擎 */
+    public static boolean isAllowedFile(android.content.Context ctx, File f) {
+        try {
+            File canonical = f.getCanonicalFile();
+            if (!canonical.isFile() || !canonical.getName().toLowerCase().endsWith(".mpkg")) return false;
+            for (File root : allowedRoots(ctx)) {
+                String rootPath = root.getCanonicalPath();
+                if (canonical.getPath().equals(rootPath)
+                        || canonical.getPath().startsWith(rootPath + File.separator)) return true;
+            }
+        } catch (java.io.IOException ignored) { }
+        return false;
+    }
+
+    private List<File> allowedRoots() {
+        return allowedRoots(getContext());
     }
 
     private File resolve(Uri uri) throws FileNotFoundException {

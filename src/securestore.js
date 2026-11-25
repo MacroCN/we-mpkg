@@ -39,10 +39,16 @@ function dpapi(protect, buf) {
 }
 
 function localKey() {
+  let raw = null;
   try {
-    const raw = fs.readFileSync(KEY_FILE);
+    raw = fs.readFileSync(KEY_FILE);
+  } catch (e) {
+    if (e.code !== 'ENOENT') throw new Error(`读取本机密钥失败（${e.message}）`);
+  }
+  if (raw) {
     if (raw.length === 32) return raw;
-  } catch { /* 不存在就建一个 */ }
+    throw new Error(`本机密钥文件已损坏（${KEY_FILE}），为避免历史凭据全部失效，请先备份/删除它再重新登录`);
+  }
   fs.mkdirSync(path.dirname(KEY_FILE), { recursive: true });
   const key = crypto.randomBytes(32);
   fs.writeFileSync(KEY_FILE, key, { mode: 0o600 });

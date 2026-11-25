@@ -402,9 +402,10 @@ installCdnGuard();
  * @param {object} client 已登录的 steam-user 实例
  */
 async function testRanking(client, { onLog = () => {}, onProgress = null, countryCode = null } = {}) {
+  const detected = await detectGeo().catch(() => ({}));
   const geo = countryCode
-    ? Object.assign({ countryCode: String(countryCode).toUpperCase(), source: 'manual' }, await detectGeo().catch(() => ({})))
-    : await detectGeo();
+    ? Object.assign({}, detected, { countryCode: String(countryCode).toUpperCase(), source: 'manual' })
+    : detected;
   const servers = await fetchServers(client);
   if (!servers.length) throw new Error('拿不到 Steam 内容服务器列表');
   onLog(`节点测速：${servers.length} 台，客户端地区 ${geo.countryCode || '未知'}`);

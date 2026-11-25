@@ -155,6 +155,8 @@ jobs:
           rm -rf "$ASSETS"
           mkdir -p "$ASSETS"
           cp -R bin src public package.json "$ASSETS"/
+          # 纯 JS 下载引擎的依赖必须一起进 APK，否则手机上起不了 Steam 客户端
+          cp -R node_modules "$ASSETS"/node_modules
           du -sh "$ASSETS"
 
       - name: Write local.properties

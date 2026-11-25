@@ -456,9 +456,23 @@ function json(res, code, obj) {
   res.writeHead(code, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store',
-    'Access-Control-Allow-Origin': '*',
   });
   res.end(body);
+}
+
+/** 下载中心的写接口只接受同源请求，避免任意网页跨站操控本机队列 */
+function sameOriginRequest(req) {
+  const origin = req.headers.origin;
+  if (origin) {
+    try {
+      if (new URL(origin).host !== req.headers.host) return false;
+    } catch {
+      return false;
+    }
+  }
+  const site = req.headers['sec-fetch-site'];
+  if (site && site !== 'same-origin' && site !== 'none') return false;
+  return true;
 }
 
 function readBody(req) {
@@ -478,7 +492,8 @@ function readBody(req) {
 function serveStatic(res, pathname) {
   const rel = pathname === '/' || pathname === '' ? '/downloads.html' : pathname;
   const safe = path.normalize(path.join(config.PUBLIC_DIR, decodeURIComponent(rel)));
-  if (!safe.startsWith(path.resolve(config.PUBLIC_DIR))) { res.writeHead(403); return res.end('Forbidden'); }
+  const publicRoot = path.resolve(config.PUBLIC_DIR);
+  if (safe !== publicRoot && !safe.startsWith(publicRoot + path.sep)) { res.writeHead(403); return res.end('Forbidden'); }
   fs.stat(safe, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404); return res.end('Not Found'); }
     res.writeHead(200, { 'Content-Type': MIME[path.extname(safe).toLowerCase()] || 'application/octet-stream' });
@@ -507,6 +522,9 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
     const u = new URL(req.url, 'http://localhost');
     const pn = u.pathname;
     try {
+      if (pn.startsWith('/api/') && !sameOriginRequest(req)) {
+        return json(res, 403, { error: '拒绝跨站请求' });
+      }
       if (pn === '/api/hub/ping') {
         return json(res, 200, { ok: true, pid: process.pid, version: '2.0.1', maxConcurrent: hub.maxConcurrent, ...hub.stats() });
       }
@@ -663,10 +681,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * 确保 hub 在跑：桌面端 spawn 独立进程，安卓端在主进程内起服务。
+ * 并发首请求必须共享同一次拉起流程，否则会同时 spawn 两个进程抢同一端口。
  * @returns {Promise<{port:number,url:string,embedded:boolean}>}
  */
+let hubEnsure = null;
+
 async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () => {} } = {}) {
   const p = portOf(port);
+  const key = String(p);
+  if (hubEnsure && hubEnsure.key === key) return hubEnsure.promise;
+  const promise = (async () => {
   const alive = await pingHub(p);
   if (alive) return { port: p, url: hubUrl(p), embedded: !!alive.embedded };
 
@@ -693,6 +717,13 @@ async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () =>
     if (info) return { port: p, url: hubUrl(p), embedded: !!info.embedded };
   }
   throw new Error('下载中心启动超时（可查看 .cache/dlhub.log，或用 run.bat dlhub 手动启动）');
+  })();
+  hubEnsure = { key, promise };
+  try {
+    return await promise;
+  } finally {
+    if (hubEnsure && hubEnsure.promise === promise) hubEnsure = null;
+  }
 }
 
 module.exports = {

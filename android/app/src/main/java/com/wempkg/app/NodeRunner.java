@@ -165,6 +165,7 @@ public final class NodeRunner {
         new Thread(new Runnable() {
             @Override
             public void run() {
+                boolean nativeEntered = false;
                 try {
                     extractAssets(ctx);
                     cleanLegacyDownloadCache(ctx);
@@ -172,11 +173,15 @@ public final class NodeRunner {
                     String dir = projectDir(ctx);
                     Log.i(TAG, "starting node, project=" + dir);
                     // 注意：必须带 serve 子命令，否则 CLI 只打印用法后退出
+                    nativeEntered = true;
                     startNode(new String[]{"node", scriptPath(ctx), "serve"},
                               dir + ":" + dir + "/node_modules",
                               ctx.getCacheDir().getAbsolutePath(),
                               logFile(ctx).getAbsolutePath());
                 } catch (Throwable t) {
+                    // 解包/写设置等 Java 阶段失败还没进 native，允许下次重试；
+                    // 一旦进了 node::Start 就不能再启动第二次，保持 STARTED=true
+                    if (!nativeEntered) STARTED.set(false);
                     Log.e(TAG, "node start failed", t);
                 }
             }

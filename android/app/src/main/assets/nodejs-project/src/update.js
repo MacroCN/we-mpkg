@@ -54,7 +54,7 @@ async function check({ force = false } = {}) {
   let release = null;
   let error = null;
   try {
-    const body = await net.getText(API, { timeout: 12000 });
+    const body = await net.getText(API, { timeout: 12000, cookie: false });
     const j = JSON.parse(body);
     release = {
       tag: j.tag_name,
@@ -78,7 +78,8 @@ async function check({ force = false } = {}) {
     checkedAt: new Date().toISOString(),
     error,
   };
-  cached = { at: Date.now(), data };
+  // 只缓存成功结果；一次网络抖动不能把错误状态锁 6 小时
+  if (!error) cached = { at: Date.now(), data };
   return data;
 }
 

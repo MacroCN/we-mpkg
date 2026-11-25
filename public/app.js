@@ -202,6 +202,8 @@ const state = {
   total: 0,
   current: null,
   poll: null,
+  loadSeq: 0,
+  loadAbort: null,
   canDownload: true,
   canDownloadReason: '',
   loggedIn: false,
@@ -210,6 +212,7 @@ const state = {
   statusText: '',
   lang: 'zh',
   loginPoll: null,
+  loginPollSeq: 0,
   picked: new Map(),      // 批量下载：id -> 条目对象
   batchBusy: false,
   device: null,           // 设备画像与推荐画质
@@ -262,6 +265,16 @@ async function api(path, opts) {
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
+}
+
+/** 只接受 http/https 链接，防止接口返回 javascript:/file: 等危险协议 */
+function safeHttpUrl(raw) {
+  try {
+    const u = new URL(String(raw || ''), location.href);
+    return (u.protocol === 'http:' || u.protocol === 'https:') ? u.toString() : '';
+  } catch {
+    return '';
+  }
 }
 
 // ---------------- 筛选区 ----------------
@@ -478,6 +491,10 @@ async function startBatch() {
 }
 
 async function load() {
+  const seq = ++state.loadSeq;
+  if (state.loadAbort) state.loadAbort.abort();
+  const ac = new AbortController();
+  state.loadAbort = ac;
   const st = $('status');
   st.className = 'status';
   state.statusText = tr('loading');
@@ -496,7 +513,8 @@ async function load() {
     if (groups.length) params.set('groups', JSON.stringify(groups));
     // 时间窗只对「热门趋势」有意义
     if (state.sort === 'trend' && state.days) params.set('days', state.days);
-    const data = await api('/api/browse?' + params.toString());
+    const data = await api('/api/browse?' + params.toString(), { signal: ac.signal });
+    if (seq !== state.loadSeq) return;
     state.total = data.total || 0;
     renderItems(data.items || []);
     const backend = data.backend === 'api' ? tr('backendApi') : tr('backendHtml');
@@ -517,6 +535,7 @@ async function load() {
     $('prev').disabled = state.page <= 1;
     $('next').disabled = (data.items || []).length < state.perPage;
   } catch (e) {
+    if (e && (e.name === 'AbortError' || seq !== state.loadSeq)) return;
     st.className = 'status err';
     // 国内网络下创意工坊页面/接口经常直接被墙，明确提示先开加速器
     st.innerHTML = esc(tr('failed') + e.message)
@@ -538,7 +557,13 @@ async function checkUpdate() {
         // 安卓端直接给 APK 资产地址：点击后交给系统浏览器下载，不再先落到 Release 页面
         const canExternal = !!(window.Android && typeof window.Android.openExternal === 'function');
         const apk = canExternal && d.release.assets && d.release.assets.apk;
-        link.href = apk ? apk.url : d.release.url;
+        const target = safeHttpUrl(apk ? apk.url : d.release.url);
+        if (!target) {
+          hint.textContent = tr('updateFound', { v: d.latest, c: d.current }) + '（更新链接协议不安全，已忽略）';
+          link.classList.add('hidden');
+          return;
+        }
+        link.href = target;
         link.dataset.direct = apk ? '1' : '';
         link.textContent = apk ? tr('updateDownloadApk') : tr('updateDownload');
         link.classList.remove('hidden');
@@ -632,7 +657,8 @@ function openDetail(id, seed) {
   $('drawer').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   $('d-title').textContent = seed.title || id;
-  $('d-preview').src = seed.preview || '';
+  if (seed.preview) $('d-preview').src = seed.preview;
+  else $('d-preview').removeAttribute('src');
   $('d-meta').textContent = `${human(seed.fileSize)} · ${seed.subscriptions || 0}`;
   $('d-tags').innerHTML = (seed.tags || []).map((t) => `<span class="chip">${esc(tagLabel(t))}</span>`).join('');
   $('d-desc').textContent = seed.description || '';
@@ -658,6 +684,8 @@ function closeDetail() {
   $('drawer').classList.add('hidden');
   document.body.style.overflow = '';
   if (state.poll) clearTimeout(state.poll);
+  state.poll = null;
+  state.currentJob = null;
 }
 
 /** 安卓返回键：先关抽屉/弹窗，返回 true 表示已在页面内消费掉这次返回 */
@@ -666,6 +694,8 @@ window.__androidBack = function () {
   if (modal && !modal.classList.contains('hidden')) {
     modal.classList.add('hidden');
     if (state.loginPoll) clearTimeout(state.loginPoll);
+    state.loginPoll = null;
+    state.loginPollSeq++;
     return true;
   }
   const drawer = $('drawer');
@@ -821,6 +851,7 @@ function pollJob(jobId) {
       }
       state.poll = setTimeout(tick, 900);
     } catch (e) {
+      if (state.currentJob !== jobId) return;
       state.poll = setTimeout(tick, 1500);
     }
   };
@@ -1075,9 +1106,11 @@ async function submitCode() {
 
 function pollLogin() {
   if (state.loginPoll) clearTimeout(state.loginPoll);
+  const seq = ++state.loginPollSeq;
   const tick = async () => {
     try {
       const s = await api('/api/login/status');
+      if (seq !== state.loginPollSeq) return;
       if (s.state === 'done') {
         $('loginHint').textContent = tr('loginDone', { a: s.accountName || '?' });
         $('loginAccount').value = s.accountName || '';
@@ -1085,7 +1118,7 @@ function pollLogin() {
         state.loggedIn = true;
         setDownloadLabel();
         api('/api/config').then((cfg) => {
-          $('cfg').textContent = `${cfg.engine} · ${cfg.outputDir}`;
+          if (seq === state.loginPollSeq) $('cfg').textContent = `${cfg.engine} · ${cfg.outputDir}`;
         }).catch(() => {});
         return;
       }
@@ -1101,6 +1134,7 @@ function pollLogin() {
       }
       state.loginPoll = setTimeout(tick, 2000);
     } catch (e) {
+      if (seq !== state.loginPollSeq) return;
       state.loginPoll = setTimeout(tick, 3000);
     }
   };
@@ -1109,8 +1143,17 @@ function pollLogin() {
 
 async function logout() {
   await api('/api/logout', { method: 'POST' });
+  if (state.loginPoll) { clearTimeout(state.loginPoll); state.loginPoll = null; }
+  state.loginPollSeq++;
+  state.loggedIn = false;
+  state.webLogin = null;
+  state.canDownload = false;
+  state.canDownloadReason = tr('needLogin');
   $('loginAccount').value = '';
   $('loginHint').textContent = tr('loginIdle');
+  setDownloadLabel();
+  if ($('batchBar')) $('batchBar').classList.add('hidden');
+  renderItems();
 }
 
 // ---------------- 事件绑定 ----------------
@@ -1165,6 +1208,12 @@ function wire() {
     state.filtersOpen = !state.filtersOpen;
     applyFiltersOpen();
   };
+  $('filterToggle').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      $('filterToggle').click();
+    }
+  });
   $('clearFilters').onclick = () => {
     state.sel = {};
     renderFilters();
@@ -1188,6 +1237,8 @@ function wire() {
   $('modalClose').onclick = () => {
     $('modal').classList.add('hidden');
     if (state.loginPoll) clearTimeout(state.loginPoll);
+    state.loginPoll = null;
+    state.loginPollSeq++;
   };
   $('saveDir').onclick = saveDir;
   if ($('saveProxy')) $('saveProxy').onclick = saveProxy;

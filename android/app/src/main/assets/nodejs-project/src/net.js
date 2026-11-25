@@ -190,12 +190,12 @@ function curlOnce(urlStr, opts) {
   const attempt = (idx) => new Promise((resolve, reject) => {
     const outFile = path.join(os.tmpdir(), `wempkg-curl-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
     const args = [
-      '--silent', '--show-error', '--location', '--compressed',
+      '--silent', '--show-error', '--compressed',
       '--max-time', String(Math.max(5, Math.ceil((opts.timeout || 20000) / 1000))),
       '--request', opts.method || 'GET',
       '--url', urlStr,
       '--output', outFile,
-      '--write-out', '%{http_code}',
+      '--write-out', '%{http_code}\n%{redirect_url}',
     ];
     const px = tries[idx];
     if (px) args.unshift('--proxy', px);
@@ -212,12 +212,13 @@ function curlOnce(urlStr, opts) {
       let buf;
       try { buf = fs.readFileSync(outFile); } catch (e) { cleanup(); return reject(e); }
       cleanup();
-      const code = parseInt(String(stdout).trim(), 10) || 0;
+      const code = parseInt(String(stdout).trim().split(/\r?\n/)[0], 10) || 0;
+      const redirectUrl = (String(stdout).trim().split(/\r?\n/)[1] || '').trim();
       if (code < 200 || code >= 400) {
         if (idx + 1 < tries.length) return attempt(idx + 1).then(resolve, reject);
         return reject(new Error(`HTTP ${code}`));
       }
-      resolve({ status: code, headers: {}, body: buf, url: urlStr });
+      resolve({ status: code, headers: redirectUrl ? { location: redirectUrl } : {}, body: buf, url: urlStr });
     });
   });
   return attempt(0);
@@ -251,14 +252,22 @@ async function request(urlStr, opts = {}) {
         continue;
       }
     }
-    // 手动跟随重定向（curl 兜底时 curl 已经 -L 过了，但仍可能返回 3xx）
+    // 手动跟随重定向（curl 兜底也关闭自动跟随，统一在这里处理）
     let cur = res;
     let redirects = 0;
     while (cur.status >= 300 && cur.status < 400 && cur.headers && cur.headers.location && redirects < 5) {
       const loc = cur.headers.location;
-      const next = /^https?:/.test(loc) ? loc : new URL(loc, urlStr).toString();
+      const fromUrl = cur.url || urlStr;
+      const next = new URL(loc, fromUrl).toString();
       const method = cur.status === 303 ? 'GET' : (opts.method || 'GET');
-      cur = await requestOnce(next, { ...opts, method, body: method === 'GET' ? null : opts.body }, proxy);
+      const headers = Object.assign({}, opts.headers || {});
+      // 跨域重定向时不能把 Steam 登录态/授权头带到第三方站点
+      if (new URL(fromUrl).origin !== new URL(next).origin) {
+        for (const k of Object.keys(headers)) {
+          if (/^(cookie|authorization)$/i.test(k)) delete headers[k];
+        }
+      }
+      cur = await requestOnce(next, { ...opts, headers, method, body: method === 'GET' ? null : opts.body }, proxy);
       redirects++;
     }
     if (cur.status >= 200 && cur.status < 300) return cur;
@@ -269,9 +278,9 @@ async function request(urlStr, opts = {}) {
 }
 
 async function getText(url, opts = {}) {
-  const headers = opts.cookie === false
-    ? Object.assign({}, opts.headers || {})
-    : Object.assign({ Cookie: steamCookie() }, opts.headers || {});
+  // 登录 Cookie 只发给明确要求的请求；默认不带，避免误发给 GitHub 等第三方
+  const headers = Object.assign({}, opts.headers || {});
+  if (opts.cookie === true && !headers.Cookie) headers.Cookie = steamCookie();
   const res = await request(url, { ...opts, headers });
   return res.body.toString('utf8');
 }

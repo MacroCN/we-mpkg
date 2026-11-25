@@ -20,6 +20,7 @@ const { redactProxy } = require('../src/server');
 
 let passed = 0;
 let failed = 0;
+let skipped = 0;
 const failures = [];
 
 /** 测试用：NUL 结尾字符串 */
@@ -35,6 +36,13 @@ function i32Buf(n) {
 }
 
 function test(name, fn) {
+  if (fn && fn.constructor && fn.constructor.name === 'AsyncFunction') {
+    failed++;
+    const error = new Error('async 用例必须用 await testAsync(...)，否则失败不会被统计');
+    failures.push({ name, error });
+    console.log(`  ✘ ${name}\n      ${error.message}`);
+    return;
+  }
   try {
     fn();
     passed++;
@@ -155,7 +163,7 @@ test('packDirToBuffer 把 project.json 放在最前', () => {
 
 console.log('\n[4] 参考 mpkg 替换');
 
-test('参考 mpkg 的 tex/着色器被替换，preview.gif 被补入', async () => {
+test('参考 mpkg 的 tex/着色器被替换，preview.gif 被补入', () => {
   const itemDir = makeItemDir();
   const workDir = tmp('work');
   const prepared = packer.prepareProjectDir(itemDir, { workDir, onLog: () => {} });
@@ -173,6 +181,22 @@ test('参考 mpkg 的 tex/着色器被替换，preview.gif 被补入', async () 
   assert.ok(fs.existsSync(path.join(prepared.projectDir, 'preview.gif')));
   const tex = fs.readFileSync(path.join(prepared.projectDir, 'textures', '背景.tex')).toString();
   assert.ok(tex.includes('mobile-etc2'), 'tex 未被替换');
+});
+
+test('参考 mpkg 的路径穿越条目被跳过，不写到目录外', () => {
+  const itemDir = makeItemDir();
+  const workDir = tmp('work-escape');
+  const prepared = packer.prepareProjectDir(itemDir, { workDir, onLog: () => {} });
+  const outside = path.join(workDir, 'outside.txt');
+  fs.writeFileSync(outside, 'ORIGINAL');
+  const refPath = path.join(workDir, 'evil.mpkg');
+  fs.writeFileSync(refPath, pkgformat.buildPkg(pkgformat.MAGIC_MOBILE, [
+    { path: '../outside.txt', data: Buffer.from('PWNED') },
+    { path: '..\\outside.txt', data: Buffer.from('PWNED2') },
+  ]));
+  const stats = packer.applyReference(prepared.projectDir, refPath, () => {});
+  assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'ORIGINAL');
+  assert.ok(stats.warnings.some((w) => /不安全/.test(w)), '应给出跳过告警');
 });
 
 console.log('\n[5] 创意工坊页面解析');
@@ -247,16 +271,22 @@ test('官方已下线的「应用」类型被剔掉', () => {
   assert.ok(workshop.isRemovedTag('application') && workshop.isRemovedTag('应用'));
 });
 
-test('筛选分组解析：Application 从类型组消失', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'logs', 'debug', 'ws.html'), 'utf8');
-  const groups = workshop.extractFilterGroups(html);
-  assert.ok(groups && groups.length, '应能解析出分组');
-  for (const g of groups) {
-    assert.ok(!g.tags.some((t) => workshop.isRemovedTag(t.name)), `${g.name} 组里仍有已下线标签`);
-  }
-  const type = groups.find((g) => g.name === 'Type');
-  assert.ok(type && type.tags.length >= 3, 'Type 组应保留 Scene/Video/Web');
-});
+const filterFixture = path.join(__dirname, '..', 'logs', 'debug', 'ws.html');
+if (!fs.existsSync(filterFixture)) {
+  skipped++;
+  console.log('  - 跳过「筛选分组解析」：缺少本地抓包夹具 logs/debug/ws.html（不进仓库）');
+} else {
+  test('筛选分组解析：Application 从类型组消失', () => {
+    const html = fs.readFileSync(filterFixture, 'utf8');
+    const groups = workshop.extractFilterGroups(html);
+    assert.ok(groups && groups.length, '应能解析出分组');
+    for (const g of groups) {
+      assert.ok(!g.tags.some((t) => workshop.isRemovedTag(t.name)), `${g.name} 组里仍有已下线标签`);
+    }
+    const type = groups.find((g) => g.name === 'Type');
+    assert.ok(type && type.tags.length >= 3, 'Type 组应保留 Scene/Video/Web');
+  });
+}
 
 test('days 只在 trend 排序下拼进 URL', () => {
   const url = workshop.buildBrowseUrl({ sort: 'trend', days: 90 });
@@ -715,6 +745,8 @@ test('频谱 uniform 整数组拷贝展开成逐元素循环', () => {
   assert.ok(!r.text.includes('float left[AUDIOSAMPLES] = g_AudioSpectrum32Left'), r.text);
   assert.ok(r.text.includes('float left[AUDIOSAMPLES];'), r.text);
   assert.ok(r.text.includes('float l = left[i];'), '使用处保持不动');
+  const small = shader.rewriteAudioSpectrumArray('\tfloat s[8] = g_AudioSpectrum32Left;\n');
+  assert.ok(small.text.includes('_s') && small.text.includes('< 8;'), '循环上界应跟实际数组长度一致：' + small.text);
 });
 
 test('频谱动态下标改写成循环取值（移动端 GLSL ES 只接受常量下标）', () => {
@@ -1407,8 +1439,10 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
   test('代理字符串规范化：补 scheme、拒绝 socks', () => {
     const config = require('../src/config');
     assert.strictEqual(config.normalizeProxy('127.0.0.1:7890'), 'http://127.0.0.1:7890');
+    assert.strictEqual(config.normalizeProxy('HTTP://127.0.0.1:7890'), 'HTTP://127.0.0.1:7890');
     assert.strictEqual(config.normalizeProxy(''), '');
     assert.throws(() => config.normalizeProxy('socks5://127.0.0.1:1080'), /只支持 http/);
+    assert.throws(() => config.setOutputDir(''), /不能为空/);
   });
   test('net.js 导出 testProxy，且不再导出写死的 PROXY', () => {
     const net = require('../src/net');
@@ -1422,6 +1456,8 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.match(errors.humanizeMessage('EResult 85'), /账号或密码错误/);
     assert.match(errors.humanizeMessage('EResult 88'), /Steam Guard 验证码错误/);
     assert.match(errors.humanizeMessage('ECONNREFUSED 127.0.0.1:7890'), /测试连通性/);
+    assert.doesNotMatch(errors.humanizeMessage('exceeded bandwidth limit'), /封禁/);
+    assert.match(errors.humanizeMessage('account banned'), /封禁/);
     assert.strictEqual(errors.eresultOf('eresult: 84'), 84);
   });
   test('设置页必须有代理输入 / 测试按钮，后端有 /api/proxy/test', () => {
@@ -1466,6 +1502,71 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(u.compare('2.0.9', '2.1.0'), -1);
     assert.match(u.currentVersion(), /^\d+\.\d+\.\d+$/);
   });
+  await testAsync('net.getText 默认不带 Cookie，跨域重定向会剥离 Cookie', async () => {
+    const http = require('http');
+    const net = require('../src/net');
+    const config = require('../src/config').config;
+    const oldProxy = config.PROXY;
+    config.PROXY = '';
+    net.setLoginCookie('session=STEAM-SECRET');
+    const seen = [];
+    const serverB = http.createServer((req, res) => {
+      seen.push(req.headers.cookie || '');
+      res.end('b');
+    });
+    await new Promise((r) => serverB.listen(0, '127.0.0.1', r));
+    const portB = serverB.address().port;
+    const serverA = http.createServer((req, res) => {
+      if (req.url === '/go') {
+        res.writeHead(302, { Location: `http://127.0.0.1:${portB}/catch` });
+        return res.end();
+      }
+      seen.push(req.headers.cookie || '');
+      res.end('a');
+    });
+    await new Promise((r) => serverA.listen(0, '127.0.0.1', r));
+    const portA = serverA.address().port;
+    try {
+      seen.length = 0;
+      await net.getText(`http://127.0.0.1:${portA}/`);
+      assert.ok(!seen[0].includes('STEAM-SECRET'), '默认请求不应带 Steam Cookie');
+
+      seen.length = 0;
+      await net.getText(`http://127.0.0.1:${portA}/`, { headers: { Cookie: 'session=STEAM-SECRET' } });
+      assert.ok(seen[0].includes('STEAM-SECRET'), '显式 Cookie 应保留');
+
+      seen.length = 0;
+      await net.getText(`http://127.0.0.1:${portA}/go`, { headers: { Cookie: 'session=STEAM-SECRET' } });
+      const bCookie = seen.find((c) => c === '') !== undefined ? '' : seen[seen.length - 1];
+      assert.ok(!bCookie.includes('STEAM-SECRET'), '跨 origin 重定向不能带 Cookie');
+    } finally {
+      net.setLoginCookie('');
+      config.PROXY = oldProxy;
+      await new Promise((r) => serverA.close(r));
+      await new Promise((r) => serverB.close(r));
+    }
+  });
+
+  await testAsync('并发的 getManifestFrom 不会污染共享 client 的节点选择', async () => {
+    const steamjs = require('../src/steamjs');
+    const client = {
+      getContentServers: async () => ({ servers: [{ host: 'original' }] }),
+      getManifest(appId, depotId, manifestId, branch, cb) {
+        Promise.resolve(this.getContentServers()).then((data) => {
+          setTimeout(() => cb(null, `${manifestId}:${data.servers[0].host}`), 40);
+        });
+      },
+    };
+    const [a, b] = await Promise.all([
+      steamjs.getManifestFrom(client, '111', { host: 'server-a' }),
+      steamjs.getManifestFrom(client, '222', { host: 'server-b' }),
+    ]);
+    assert.match(a, /server-a/);
+    assert.match(b, /server-b/);
+    const restored = await client.getContentServers();
+    assert.strictEqual(restored.servers[0].host, 'original', '并发结束后必须恢复原始方法');
+  });
+
   test('前端有批量下载、兼容性块、设备推荐与更新入口', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     for (const id of ['batchBar', 'batchStart', 'd-compat', 'd-device', 'checkUpdate']) {
@@ -1488,7 +1589,7 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(!wf.includes('pwpwsh'), 'shell 拼写错误会让任务直接失败');
   });
 
-  console.log(`\n结果: ${passed} 通过 / ${failed} 失败`);
+  console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);
   if (failed) {
     for (const f of failures) console.error(`\n失败: ${f.name}\n${f.error.stack}`);
     process.exitCode = 1;

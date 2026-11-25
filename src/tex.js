@@ -40,6 +40,18 @@ const os = require('os');
 const zlib = require('zlib');
 const { execFileSync } = require('child_process');
 const lz4 = require('./lz4');
+
+/** 同目录临时文件 + rename，避免中断时留下半截 .tex；失败时清掉临时文件 */
+function writeFileAtomic(file, bytes) {
+  const tmp = `${file}.tmp-${process.pid}-${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    fs.writeFileSync(tmp, bytes);
+    fs.renameSync(tmp, file);
+  } catch (e) {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ }
+    throw e;
+  }
+}
 const dxt = require('./dxt');
 const { sha256Buffer } = require('./convertplan');
 
@@ -1116,7 +1128,7 @@ function convertTexDir(dir, opts = {}) {
       stats.routes[r.route] = (stats.routes[r.route] || 0) + 1;
 
       if (r.changed) {
-        fs.writeFileSync(abs, r.bytes);
+        writeFileAtomic(abs, r.bytes);
         if (checkpoint) checkpoint.record(rel, shaIn, sha256Buffer(r.bytes), r.route);
         stats.converted++;
         if (r.downsampled) stats.downsampled++;

@@ -62,9 +62,19 @@ function invoke(obj, method, ...args) {
 
 function once(emitter, event, { timeoutMs = 30000, label = event } = {}) {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} 超时（${timeoutMs} ms）`)), timeoutMs);
-    emitter.once(event, (...a) => { clearTimeout(timer); resolve(a); });
-    emitter.once('error', (err) => { clearTimeout(timer); reject(err); });
+    const cleanup = () => {
+      clearTimeout(timer);
+      emitter.removeListener(event, onEvent);
+      emitter.removeListener('error', onError);
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      reject(new Error(`${label} 超时（${timeoutMs} ms）`));
+    }, timeoutMs);
+    const onEvent = (...a) => { cleanup(); resolve(a); };
+    const onError = (err) => { cleanup(); reject(err); };
+    emitter.once(event, onEvent);
+    emitter.once('error', onError);
   });
 }
 
@@ -408,15 +418,29 @@ function sha1File(file) {
 /**
  * 从指定节点取 manifest（steam-user 的 getManifest 内部会随机挑节点，
  * 这里临时把 getContentServers 固定成单台，就能强制它走我们选好的线路）。
+ *
+ * 共享 client 上的方法替换必须串行，否则并发调用会互相覆盖，最终把
+ * getContentServers 永久固定在某个节点，导致后续 failover 失效。
  */
+const clientMethodLocks = new WeakMap();
+
+function withClientMethodLock(client, fn) {
+  const prev = clientMethodLocks.get(client) || Promise.resolve();
+  const run = prev.then(fn, fn);
+  clientMethodLocks.set(client, run.catch(() => {}));
+  return run;
+}
+
 async function getManifestFrom(client, manifestId, server) {
-  const orig = client.getContentServers;
-  client.getContentServers = async () => ({ servers: [server] });
-  try {
-    return await invoke(client, 'getManifest', APP_ID, DEPOT_ID, String(manifestId), 'public');
-  } finally {
-    client.getContentServers = orig;
-  }
+  return withClientMethodLock(client, async () => {
+    const orig = client.getContentServers;
+    client.getContentServers = async () => ({ servers: [server] });
+    try {
+      return await invoke(client, 'getManifest', APP_ID, DEPOT_ID, String(manifestId), 'public');
+    } finally {
+      client.getContentServers = orig;
+    }
+  });
 }
 
 /**
@@ -540,5 +564,6 @@ module.exports = {
   createQrSession, awaitQrSession,
   createPasswordSession, finishSession,
   getPublishedFileDetails, downloadItem, downloadFileResumable,
+  getManifestFrom,
   printQr,
 };

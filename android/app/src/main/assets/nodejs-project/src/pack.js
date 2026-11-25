@@ -13,6 +13,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const pkgformat = require('./pkgformat');
 const tex = require('./tex');
 const shadercompat = require('./shadercompat');
@@ -142,7 +143,14 @@ function applyReference(projectDir, referencePath, onLog = () => {}) {
     for (let i = 0; i < ref.entries.length; i++) {
       const entry = ref.entries[i];
       const rel = pkgformat.normalizeEntryPath(entry.path);
-      const dest = path.join(projectDir, rel);
+      let dest;
+      try {
+        dest = pkgformat.safeJoin(projectDir, rel);
+      } catch (e) {
+        warnings.push(`跳过不安全的参考包条目 ${rel}: ${e.message}`);
+        onLog(`  ⚠ 跳过不安全的参考包条目: ${rel}`);
+        continue;
+      }
       const ext = path.extname(rel).toLowerCase();
       const exists = fs.existsSync(dest);
       if (!exists && (rel === 'project.json' || rel === 'preview.gif')) {
@@ -699,7 +707,25 @@ async function packFromItemDir(itemDir, opts = {}) {
   onLog(`\n=== 打包 ${title} (${id}) ===`);
   // 续转需要一个稳定的工作目录：临时目录一删，断点就没了
   const workDir = opts.workDir || (opts.resume ? stableWorkDir(id) : tempDir('pack'));
-  const prepared = prepareProjectDir(itemDir, { workDir, onLog });
+  const isTempWork = !opts.workDir && !opts.resume;
+  if (opts.resume) {
+    const stampFile = path.join(workDir, 'source-stamp.json');
+    const stamp = sourceStamp(itemDir);
+    let prev = null;
+    try { prev = JSON.parse(fs.readFileSync(stampFile, 'utf8')).stamp || null; } catch { /* 首次续转 */ }
+    if (!prev || prev !== stamp) {
+      // 源条目换过（或旧版本没记录指纹）：清掉旧解包目录，避免陈旧资源混进新包
+      onLog('  续转目录的源快照已变化，重新解包');
+      try { fs.rmSync(path.join(workDir, 'project'), { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    try {
+      fs.mkdirSync(workDir, { recursive: true });
+      fs.writeFileSync(stampFile, JSON.stringify({ stamp, at: Date.now() }));
+    } catch { /* 指纹写不了不影响主流程 */ }
+  }
+  let prepared;
+  try {
+  prepared = prepareProjectDir(itemDir, { workDir, onLog });
   for (const w of prepared.warnings) onLog(`  ⚠ ${w}`);
   onLog(`壁纸类型: ${prepared.type}`);
 
@@ -804,6 +830,12 @@ async function packFromItemDir(itemDir, opts = {}) {
     workDir: keepWorkDir ? prepared.workDir : null,
     outcomes: adapted.outcomes,
   };
+  } catch (e) {
+    if (isTempWork) {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+    throw e;
+  }
 }
 
 /** 续转用的稳定工作目录（按条目 id 区分，失败后可原地重跑） */
@@ -811,6 +843,19 @@ function stableWorkDir(id) {
   const dir = path.join(config.CACHE_DIR, 'pack-plan', safeFileName(id));
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+}
+
+/** 源目录指纹：路径 + 大小 + mtime，源条目更新后不能复用旧的解包目录 */
+function sourceStamp(dir) {
+  const h = crypto.createHash('sha1');
+  for (const f of listFiles(dir)) {
+    try {
+      const st = fs.statSync(f);
+      h.update(path.relative(dir, f).split(path.sep).join('/'));
+      h.update(`${st.size}:${st.mtimeMs}\n`);
+    } catch { /* 读取中消失就算了 */ }
+  }
+  return h.digest('hex');
 }
 
 /** 计划文件的精简摘要（不把整份资源清单塞进任务结果） */

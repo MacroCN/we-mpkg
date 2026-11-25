@@ -124,7 +124,8 @@ run.bat steamjs login|status|logout|token|webcookie
 | `STEAM_API_KEY` | 走 `IPublishedFileService/QueryFiles`（每页 100 条，上限更高） | 空 |
 | `STEAM_PASSWORD` | CLI `get` / `fetch` 配合 `--user` 做账号密码登录 | 空 |
 | `PORT` | 网页端口 | `3090` |
-| `WE_MPKG_HOST` | 网页服务监听地址；设为 `0.0.0.0` 可允许局域网访问（API 无身份验证，请勿暴露到不可信网络） | `127.0.0.1`（仅本机） |
+| `WE_MPKG_HOST` | 网页服务监听地址；设为 `0.0.0.0` 可允许局域网访问，此时必须同时设置 `WE_MPKG_TOKEN`，否则只监听本机 | `127.0.0.1`（仅本机） |
+| `WE_MPKG_TOKEN` | 远程访问令牌；手机/其他电脑打开 `http://主机:3090/?token=...` 后写入 Cookie | 空 |
 | `STEAM_LANG` / `STEAM_COUNTRY` | 社区页语言 / 地区 | `schinese` / 空 |
 
 ---

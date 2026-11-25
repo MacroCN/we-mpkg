@@ -5,6 +5,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { URL } = require('url');
 const configMod = require('./config');
 const { config, ensureDirs } = configMod;
@@ -29,6 +30,67 @@ function redactProxy(raw) {
       return prefix ? `${prefix}已配置` : '已配置';
     }
   }).join(';');
+}
+
+function isLoopbackAddress(addr) {
+  return /^(127\.|::1$|::ffff:127\.)/.test(String(addr || ''));
+}
+
+function safeEqual(a, b) {
+  const x = Buffer.from(String(a || ''));
+  const y = Buffer.from(String(b || ''));
+  return x.length > 0 && x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+function requestToken(req, u) {
+  const auth = String(req.headers.authorization || '');
+  const bearer = /^Bearer\s+(.+)$/i.exec(auth);
+  if (bearer) return bearer[1].trim();
+  const cookie = String(req.headers.cookie || '');
+  const hit = /(?:^|;\s*)we_mpkg_token=([^;]+)/.exec(cookie);
+  if (hit) return decodeURIComponent(hit[1]);
+  return u.searchParams.get('token') || '';
+}
+
+/**
+ * 本机请求直接放行；局域网/远程请求必须带令牌。
+ * 同时拒绝跨站写请求，防止任意网页通过表单/简单 POST 操控本地服务。
+ * @returns {boolean} true 表示已经响应并应结束
+ */
+function guardRequest(req, res, u, pn) {
+  const remote = !isLoopbackAddress(req.socket && req.socket.remoteAddress);
+  if (remote) {
+    if (!config.REMOTE_TOKEN) {
+      json(res, 403, { error: '远程访问未启用：请先设置 WE_MPKG_TOKEN，再设置 WE_MPKG_HOST' });
+      return true;
+    }
+    if (!safeEqual(requestToken(req, u), config.REMOTE_TOKEN)) {
+      if (pn.startsWith('/api/')) json(res, 401, { error: '访问令牌无效' });
+      else { res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('访问令牌无效'); }
+      return true;
+    }
+    if (u.searchParams.get('token')) {
+      res.setHeader('Set-Cookie',
+        `we_mpkg_token=${encodeURIComponent(config.REMOTE_TOKEN)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=31536000`);
+    }
+  }
+  if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS') {
+    const origin = req.headers.origin;
+    if (origin) {
+      let originHost = '';
+      try { originHost = new URL(origin).host; } catch { /* invalid */ }
+      if (!originHost || originHost !== req.headers.host) {
+        json(res, 403, { error: '拒绝跨站写入' });
+        return true;
+      }
+    }
+    const site = req.headers['sec-fetch-site'];
+    if (site && site !== 'same-origin' && site !== 'none') {
+      json(res, 403, { error: '拒绝跨站写入' });
+      return true;
+    }
+  }
+  return false;
 }
 
 /** CDN 测速状态（页面轮询用） */
@@ -143,7 +205,8 @@ function readBody(req) {
 function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? '/index.html' : pathname;
   const safe = path.normalize(path.join(config.PUBLIC_DIR, decodeURIComponent(rel)));
-  if (!safe.startsWith(path.resolve(config.PUBLIC_DIR))) {
+  const publicRoot = path.resolve(config.PUBLIC_DIR);
+  if (safe !== publicRoot && !safe.startsWith(publicRoot + path.sep)) {
     res.writeHead(403); return res.end('Forbidden');
   }
   fs.stat(safe, (err, st) => {
@@ -166,6 +229,7 @@ const server = http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://localhost');
   const pn = u.pathname;
   try {
+    if (guardRequest(req, res, u, pn)) return;
     if (pn === '/api/tags') return json(res, 200, { tags: workshop.POPULAR_TAGS });
     if (pn === '/api/filters') {
       try {
@@ -182,7 +246,7 @@ const server = http.createServer(async (req, res) => {
         try {
           if (body.outputDir !== undefined) out.outputDir = configMod.setOutputDir(body.outputDir);
           if (body.proxy !== undefined) {
-            out.proxy = configMod.setProxy(body.proxy);
+            out.proxy = redactProxy(configMod.setProxy(body.proxy));
             // 已连接的 Steam 客户端还带着旧代理，下次下载前重建
             try { packjob.resetSharedClient(); } catch { /* ignore */ }
           }
@@ -196,8 +260,8 @@ const server = http.createServer(async (req, res) => {
       return json(res, 200, {
         outputDir: config.OUTPUT_DIR,
         defaultOutputDir: configMod.DEFAULT_OUTPUT_DIR,
-        proxy: config.PROXY,
-        defaultProxy: config.PROXY_DEFAULT,
+        proxy: redactProxy(config.PROXY),
+        defaultProxy: redactProxy(config.PROXY_DEFAULT),
         accountName: token ? token.accountName || null : null,
         hasToken: !!token,
         platform: `${process.platform}/${process.arch}`,
@@ -599,11 +663,16 @@ function start(port = config.PORT) {
 
   return new Promise((resolve, reject) => {
     server.once('error', reject);
-    const host = config.LISTEN_HOST;
+    let host = config.LISTEN_HOST;
+    const loopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+    if (!loopback && !config.REMOTE_TOKEN) {
+      console.log('  ⚠ WE_MPKG_HOST 指向局域网，但没有设置 WE_MPKG_TOKEN；为避免局域网裸奔，本次只监听 127.0.0.1');
+      host = '127.0.0.1';
+    }
     server.listen(port, host, () => {
       console.log(`\n  we-mpkg 已启动: http://localhost:${port}`);
       if (host !== '127.0.0.1' && host !== '::1' && host !== 'localhost') {
-        console.log(`  网络监听地址: ${host}（未启用身份验证，请勿暴露到不可信网络）`);
+        console.log(`  网络监听地址: ${host}（已启用访问令牌，请用带 ?token= 的地址打开）`);
       }
       console.log(`  输出目录: ${config.OUTPUT_DIR}`);
       if (!config.PROXY) console.log('  （可用 WE_MPKG_PROXY / HTTPS_PROXY 指定代理）\n');

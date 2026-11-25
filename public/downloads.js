@@ -7,6 +7,14 @@
 const POLL_MS = 1000;
 const $ = (id) => document.getElementById(id);
 
+// 手机远程连接时 localhost 会指向手机自己，必须按当前页面主机拼主界面地址
+(function fixMainLink() {
+  const a = $('mainLink');
+  if (!a) return;
+  const scheme = location.protocol === 'https:' ? 'https:' : 'http:';
+  a.href = `${scheme}//${location.hostname}:3090/`;
+})();
+
 const STATE_TEXT = {
   queued: '排队中',
   downloading: '下载中',
@@ -135,7 +143,11 @@ let lastFingerprint = '';
 let lastJobs = [];
 
 function fingerprint(jobs) {
-  return JSON.stringify(jobs.map((j) => [j.id, j.state, j.progress && j.progress.percent, j.progress && j.progress.bytes, j.error, j.log && j.log.length]));
+  return JSON.stringify(jobs.map((j) => [
+    j.id, j.state, !!j.paused, j.progress && j.progress.percent,
+    j.progress && j.progress.bytes, j.error, j.log && j.log.length,
+    j.result && j.result.warnings && j.result.warnings.length,
+  ]));
 }
 
 async function tick() {
@@ -170,8 +182,9 @@ async function loadOutputs() {
     const d = await r.json();
     $('dl-out-dir').textContent = d.dir || '';
     const files = d.files || [];
+    const mainBase = `${location.protocol === 'https:' ? 'https:' : 'http:'}//${location.hostname}:3090`;
     $('dl-out-list').innerHTML = files.length
-      ? files.slice(0, 30).map((f) => `<a class="dl-out" href="http://localhost:3090/api/download-local/${encodeURIComponent(f.name)}" title="${esc(f.name)}">${esc(f.name)}<span>${human(f.size)}</span></a>`).join('')
+      ? files.slice(0, 30).map((f) => `<a class="dl-out" href="${mainBase}/api/download-local/${encodeURIComponent(f.name)}" title="${esc(f.name)}">${esc(f.name)}<span>${human(f.size)}</span></a>`).join('')
       : '<span class="dl-sub">暂无成品</span>';
   } catch { /* ignore */ }
 }
