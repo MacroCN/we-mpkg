@@ -226,12 +226,12 @@ function isMobileCompatible(tex) {
     } else {
       return false;
     }
-    // 逻辑尺寸要么等于 mip 尺寸，要么是 1/2、1/4 关系
+    // 逻辑尺寸要么等于 mip 尺寸，要么是同倍率的整数缩小（源包存在 8K 逻辑 + 1K mip 的图层）
     const rx = header.imageWidth / mip.width;
     const ry = header.imageHeight / mip.height;
-    const same = Math.abs(rx - 1) < 1e-6 && Math.abs(ry - 1) < 1e-6;
-    const reduced = Math.abs(rx - ry) < 1e-6 && (Math.abs(rx - 2) < 1e-6 || Math.abs(rx - 4) < 1e-6);
-    if (!same && !reduced) return false;
+    const intRatio = rx >= 1 && Math.abs(rx - Math.round(rx)) < 1e-6
+      && Math.abs(rx - ry) < 1e-6;
+    if (!intRatio) return false;
   }
   return true;
 }
@@ -723,16 +723,22 @@ function targetSize(width, height, scale) {
 function writeMobileTex({ flags, unk, images, framesTail }) {
   if (!images.length) throw new Error('没有可写入的图像');
   const first = images[0];
+  // imageWidth/Height 必须和真实 mip 尺寸一致：手机端按这两个字段决定纹理上传大小，
+  // 写成和载荷不同的值会按错误 stride 采样。需要保持图层大小的纹理由场景 scale 补偿。
+  const texW = first.width;
+  const texH = first.height;
+  const imgW = texW;
+  const imgH = texH;
   const parts = [
     writeNString('TEXV0005'),
     writeNString('TEXI0001'),
     Buffer.concat([
       i32(TEX_FORMAT.RGBA8888),
       i32(flags),
-      i32(first.width),
-      i32(first.height),
-      i32(first.width),
-      i32(first.height),
+      i32(texW),
+      i32(texH),
+      i32(imgW),
+      i32(imgH),
       i32(unk),
     ]),
     writeNString('TEXB0004'),
@@ -961,8 +967,7 @@ function convertTexBuffer(buf, opts = {}) {
       effH = mip.height;
     }
 
-    // 头部声明的逻辑尺寸一般等于贴图尺寸，只有「逻辑比实际小」时才裁左上角；
-    // 反过来（逻辑比载荷大，常见于直通 JPEG）不能裁，也不该报错 —— 按实际载荷尺寸缩放。
+    // 逻辑尺寸比实际小时裁左上角；逻辑尺寸比实际大（直通图常见）时保留实际载荷，不放大像素。
     if (logicalW <= effW && logicalH <= effH && (logicalW !== effW || logicalH !== effH)) {
       pixels = cropRgba(pixels, effW, effH, logicalW, logicalH);
       effW = logicalW;
@@ -978,9 +983,15 @@ function convertTexBuffer(buf, opts = {}) {
     if (!outW) { outW = want.width; outH = want.height; }
     images.push({ width: want.width, height: want.height, pixels });
   }
+  // 只有像素尺寸真正变了才算降采样
 
   // 非视频纹理的输出必须清掉 IsVideoTexture 位：否则手机端会去找视频流，找不到就整块黑
-  const out = writeMobileTex({ flags: tex.header.flags & ~TEX_FLAGS.IsVideoTexture, unk: tex.header.unk, images, framesTail });
+  const out = writeMobileTex({
+    flags: tex.header.flags & ~TEX_FLAGS.IsVideoTexture,
+    unk: tex.header.unk,
+    images,
+    framesTail,
+  });
   verifyMobileTex(out, {
     width: images[0].width,
     height: images[0].height,
@@ -993,6 +1004,8 @@ function convertTexBuffer(buf, opts = {}) {
     reason: info.reason + (downsampled ? '（已降采样）' : ''),
     width: images[0].width,
     height: images[0].height,
+    sourceWidth: tex.header.textureWidth || images[0].width,
+    sourceHeight: tex.header.textureHeight || images[0].height,
     downsampled,
   };
 }
@@ -1008,8 +1021,8 @@ function convertTexBuffer(buf, opts = {}) {
  */
 /**
  * 扫一遍目录，用「整包最大的可缩放静态纹理」算出统一倍率。
- * 只看 mip0 的实际尺寸，不看 header 的逻辑尺寸：逻辑尺寸偶尔比载荷大（直通 JPEG），
- * 用它算倍率会让实际载荷被裁/被放大；按实际像素算，所有图层才能保持原始相对比例。
+ * 按 header 的逻辑尺寸算：多数源包 imageWidth/Height 等于 mip 尺寸。
+ * autosize 图层的尺寸补偿由 pack 阶段按实际缩放倍率改场景 scale 完成。
  */
 function measureUniformScale(dir, preset, semanticFn, skip, maxFileBytes) {
   if (!preset || (preset.reduction <= 1 && !preset.maxDimension)) return 1;
@@ -1035,10 +1048,7 @@ function measureUniformScale(dir, preset, semanticFn, skip, maxFileBytes) {
           semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
         }
         if (semantic === 'data') continue;
-        for (const img of tex.images) {
-          if (!img.mips.length) continue;
-          maxDim = Math.max(maxDim, img.mips[0].width, img.mips[0].height);
-        }
+        maxDim = Math.max(maxDim, tex.header.imageWidth, tex.header.imageHeight);
       } catch { /* 坏文件留给正式转换阶段报错 */ }
     }
   };
@@ -1054,9 +1064,9 @@ function convertTexDir(dir, opts = {}) {
   const semanticFn = opts.semanticOf || semanticOf;
   const skip = opts.skipRelPaths || new Set();
   const checkpoint = opts.checkpoint || null;
-  // 先算整包统一倍率：所有静态图层必须乘同一个比例，否则背景和小贴图各缩各的，画面会错位
+  // 先算整包统一倍率：所有静态纹理乘同一个比例；autosize 图层在 pack 阶段补 scale
   const scale = measureUniformScale(dir, preset, semanticFn, skip, maxFileBytes);
-  if (scale < 1) onLog(`  统一缩放: ${(scale * 100).toFixed(1)}%（整包所有静态纹理按同一比例缩小）`);
+  if (scale < 1) onLog(`  统一缩放: ${(scale * 100).toFixed(1)}%（整包静态纹理按同一比例缩小）`);
 
   const stats = {
     total: 0, converted: 0, kept: 0, failed: 0, video: 0, budget: 0, resumed: 0,
@@ -1129,6 +1139,7 @@ function convertTexDir(dir, opts = {}) {
       const outcome = {
         path: rel, route: r.route, reason: r.reason, changed: !!r.changed,
         width: r.width, height: r.height, downsampled: !!r.downsampled,
+        sourceWidth: r.sourceWidth, sourceHeight: r.sourceHeight,
         bytesIn: buf.length, bytesOut: r.changed ? r.bytes.length : buf.length,
       };
       outcomes.push(outcome);

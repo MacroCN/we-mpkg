@@ -573,10 +573,11 @@ test('同一目录里的纹理按整包统一倍率缩放（不会各缩各的�
   fs.writeFileSync(path.join(dir, 'materials', '1.tex'), raw(8, 8));
   fs.writeFileSync(path.join(dir, 'materials', 'normal_map.tex'), raw(8, 8));
   const res = texlib.convertTexDir(dir, { preset: 'balanced' });
-  const w = (name) => texlib.parseTex(fs.readFileSync(path.join(dir, 'materials', name))).header.imageWidth;
-  assert.strictEqual(w('background.tex'), 8, '16->8，倍率 0.5');
-  assert.strictEqual(w('1.tex'), 4, '无名贴图也必须跟主图一起缩到 0.5');
-  assert.strictEqual(w('normal_map.tex'), 8, '数据图不做有损缩放');
+  const parsed = (name) => texlib.parseTex(fs.readFileSync(path.join(dir, 'materials', name)));
+  assert.strictEqual(parsed('background.tex').header.imageWidth, 8, '16->8，倍率 0.5');
+  assert.strictEqual(parsed('1.tex').header.imageWidth, 4, '无名贴图也必须跟主图一起缩到 0.5');
+  assert.strictEqual(parsed('normal_map.tex').header.imageWidth, 8, '数据图不做有损缩放');
+  assert.strictEqual(parsed('background.tex').header.textureWidth, 8, '头里的实际纹理尺寸必须和载荷一致');
 });
 
 test('semanticOf 识别数据图 / 彩色图 / 未知', () => {

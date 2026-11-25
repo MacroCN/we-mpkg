@@ -370,6 +370,175 @@ function verifyShaders(projectDir) {
   return stats;
 }
 
+/**
+ * 找出所有 autosize 模型，以及「模型 -> 纹理」的对应关系。
+ * 降采样后需要按纹理缩放倍率反向补偿图层的 scale，避免整层缩小、和其他图层错位。
+ */
+function collectAutosizeInfo(projectDir) {
+  const models = new Map();
+  const modelsDir = path.join(projectDir, 'models');
+  if (!fs.existsSync(modelsDir)) return { models };
+
+  const collectMaterial = (rel) => {
+    if (!rel || typeof rel !== 'string') return [];
+    const matPath = path.join(projectDir, rel.split('/').join(path.sep));
+    let mat;
+    try { mat = JSON.parse(fs.readFileSync(matPath, 'utf8')); } catch { return []; }
+    const found = [];
+    for (const pass of Array.isArray(mat.passes) ? mat.passes : []) {
+      for (const t of Array.isArray(pass.textures) ? pass.textures : []) {
+        // 一份 pass 里可能是 "texture" 或 "mask effects/xxx" 这种多项写法
+        for (const token of String(t).split(/\s+/)) {
+          if (!token) continue;
+          const base = path.basename(token).replace(/\.tex$/i, '');
+          if (!base) continue;
+          found.push(`${base}.tex`);
+        }
+      }
+    }
+    return found;
+  };
+
+  const walk = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const abs = path.join(dir, ent.name);
+      if (ent.isDirectory()) { walk(abs); continue; }
+      if (!ent.name.endsWith('.json')) continue;
+      let model;
+      try { model = JSON.parse(fs.readFileSync(abs, 'utf8')); } catch { continue; }
+      if (!model || !model.autosize) continue;
+      const texs = model.material ? collectMaterial(model.material) : [];
+      const rel = path.relative(projectDir, abs).split(path.sep).join('/');
+      models.set(rel, texs);
+    }
+  };
+  walk(modelsDir);
+  return { models };
+}
+
+/**
+ * 纹理降采样后，把引用它的 autosize 图层的 scale 反向放大，保持场景里的显示大小不变。
+ * 只处理普通的 "x y z" scale；带 script 的动态 scale 跳过，避免破坏动画。
+ */
+function compensateAutosizeScale(projectDir, info, outcomes) {
+  if (!info.models.size || !outcomes.length) return 0;
+  const factors = new Map();
+  for (const o of outcomes) {
+    if (!o.downsampled || !o.sourceWidth || !o.width) continue;
+    const name = `${path.basename(o.path, '.tex')}.tex`;
+    const f = o.sourceWidth / o.width;
+    if (f > 1.0001) factors.set(name, f);
+  }
+  if (!factors.size) return 0;
+
+  const scenePath = path.join(projectDir, 'scene.json');
+  let scene;
+  try { scene = JSON.parse(fs.readFileSync(scenePath, 'utf8')); } catch { return 0; }
+  let adjusted = 0;
+  const visit = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (typeof obj.image === 'string') {
+      const key = obj.image.split('\\').join('/').replace(/^\.\//, '');
+      const texs = info.models.get(key);
+      if (texs && texs.length) {
+        let factor = 1;
+        for (const t of texs) factor = Math.max(factor, factors.get(t) || 1);
+        if (factor > 1.0001) {
+          if (typeof obj.scale === 'string') {
+            const nums = obj.scale.trim().split(/\s+/).map(Number);
+            if (nums.length >= 3 && nums.every(Number.isFinite)) {
+              obj.scale = nums.map((n, i) => (i < 3 ? (n * factor).toFixed(5) : n)).join(' ');
+              adjusted++;
+            }
+          } else if (obj.scale === undefined) {
+            obj.scale = `${factor.toFixed(5)} ${factor.toFixed(5)} ${factor.toFixed(5)}`;
+            adjusted++;
+          }
+        }
+      }
+    }
+    for (const arr of ['objects', 'subobjects']) {
+      if (Array.isArray(obj[arr])) for (const child of obj[arr]) visit(child);
+    }
+  };
+  visit(scene);
+  if (adjusted) fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
+  return adjusted;
+}
+
+/**
+ * 把场景里「对象形式」的 visible 固化成布尔值。
+ * PC 引擎能按 {user, value} 在运行时求值；手机端对对象形式支持不好，常把整个对象当成真，
+ * 结果本应隐藏的主题/图层全部叠加显示（例如双主题模式下两套图层同时出现）。
+ * 这里按当前属性值求值一次，保证导入后的画面和作者当前预设一致。
+ * 带 script 的动态 visible 保持原样。
+ */
+function flattenSceneVisibility(projectDir, opts = {}) {
+  const onLog = opts.onLog || (() => {});
+  const scenePath = path.join(projectDir, 'scene.json');
+  let scene;
+  try { scene = JSON.parse(fs.readFileSync(scenePath, 'utf8')); } catch { return 0; }
+  let props = {};
+  try {
+    const project = JSON.parse(fs.readFileSync(path.join(projectDir, 'project.json'), 'utf8'));
+    props = (project.general && project.general.properties) || {};
+  } catch { /* 没有 project.json 就只按 value 处理 */ }
+
+  const propValue = (name) => {
+    const p = props[name];
+    return p && Object.prototype.hasOwnProperty.call(p, 'value') ? p.value : undefined;
+  };
+  const condMatches = (cond, val) => {
+    const c = String(cond).trim();
+    if (String(val) === c) return true;
+    const m = c.match(/(?:.*\.value)?\s*(==|!=|=)\s*(.+)$/);
+    if (m) {
+      const rhs = m[2].trim().replace(/^['"]|['"]$/g, '');
+      return m[1] === '!=' ? String(val) !== rhs : String(val) === rhs;
+    }
+    return false;
+  };
+  const resolve = (v) => {
+    if (typeof v === 'boolean') return v;
+    if (!v || typeof v !== 'object' || v.script) return undefined;
+    if (typeof v.value !== 'boolean') return undefined;
+    const user = v.user;
+    if (typeof user === 'string') {
+      const pv = propValue(user);
+      if (pv === undefined) return v.value;
+      return v.value && pv !== false && pv !== 'false';
+    }
+    if (user && typeof user === 'object' && !user.script) {
+      const pv = propValue(user.name);
+      if (pv === undefined || !user.condition) return v.value;
+      return v.value && condMatches(user.condition, pv);
+    }
+    return v.value;
+  };
+
+  let changed = 0;
+  let hidden = 0;
+  const visit = (obj) => {
+    if (!obj || typeof obj !== 'object') return;
+    if (Object.prototype.hasOwnProperty.call(obj, 'visible')) {
+      const b = resolve(obj.visible);
+      if (typeof b === 'boolean') {
+        if (!b && obj.visible !== false) hidden++;
+        if (b !== obj.visible) { obj.visible = b; changed++; }
+      }
+    }
+    for (const arr of ['objects', 'subobjects']) {
+      if (Array.isArray(obj[arr])) for (const child of obj[arr]) visit(child);
+    }
+  };
+  visit(scene);
+  if (changed) {
+    fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
+    onLog(`  已固化 ${changed} 个图层可见性（其中隐藏 ${hidden} 个，避免双主题图层叠加）`);
+  }
+  return changed;
+}
+
 function adaptForMobile(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const onProgress = opts.onProgress || (() => {});
@@ -380,6 +549,10 @@ function adaptForMobile(projectDir, opts = {}) {
   onLog(`  画质档位: ${preset.label}（reduction=${preset.reduction}, maxDimension=${preset.maxDimension || '不限'}）`);
 
   onProgress({ phase: 'convert', done: 0, total: textureTotal, detail: '纹理转换' });
+  const autosizeInfo = collectAutosizeInfo(projectDir);
+  if (autosizeInfo.models.size) {
+    onLog(`  autosize 图层 ${autosizeInfo.models.size} 个：降采样后会按比例补偿图层 scale`);
+  }
   const texRes = tex.convertTexDir(projectDir, {
     onLog,
     preset,
@@ -411,6 +584,10 @@ function adaptForMobile(projectDir, opts = {}) {
 
   const dropped = repairSceneCompat(projectDir, { onLog, dropAudioLayers: opts.dropAudioLayers });
   warnings.push(...dropped.warnings);
+
+  flattenSceneVisibility(projectDir, { onLog });
+  const autoAdjusted = compensateAutosizeScale(projectDir, autosizeInfo, texRes.outcomes);
+  if (autoAdjusted) onLog(`  已补偿 ${autoAdjusted} 个 autosize 图层的缩放，保持原始布局`);
 
   return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes, droppedLayers: dropped.removed, sceneRepairs: dropped.repaired };
 }
