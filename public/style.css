@@ -473,8 +473,9 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   box-shadow: 0 12px 30px rgba(0,0,0,.45);
   max-width: calc(100vw - 24px);
 }
-.batchbar select { max-width: 130px; }
-.batchbar #batchCount { color: #cfe8ff; font-size: 13px; white-space: nowrap; }
+.batchbar select { max-width: 130px; min-width: 0; flex: 1 1 96px; }
+.batchbar #batchCount { color: #cfe8ff; font-size: 13px; white-space: nowrap; flex: 0 0 auto; }
+.batchbar button { flex: 0 0 auto; white-space: nowrap; }
 @media (max-width: 640px) {
   .batchbar { bottom: 10px; padding: 6px 8px; gap: 6px; }
   .batchbar select { max-width: 96px; }

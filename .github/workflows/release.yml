@@ -154,17 +154,24 @@ jobs:
       - name: Gradle assembleRelease
         run: gradle -p android assembleRelease --no-daemon --console=plain
 
-      - name: Align 16 KB & sign with debug key
+      - name: Align 16 KB & sign with release key
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
         run: |
           mkdir -p output dist
           APK=$(find android/app/build/outputs/apk/release -name '*.apk' | head -1)
           echo "raw apk: $APK"
           node tools/zipalign16.js "$APK" output/_aligned.apk
-          keytool -genkeypair -v -keystore output/debug.keystore -storepass android -keypass android \
-            -alias androiddebugkey -dname "CN=Android Debug,O=Android,C=US" -keyalg RSA -keysize 2048 -validity 1000
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > output/release.keystore
           APKSIGNER="$ANDROID_HOME/build-tools/${ANDROID_BUILD_TOOLS}/apksigner"
-          "$APKSIGNER" sign --ks output/debug.keystore --ks-pass pass:android --key-pass pass:android \
-            --ks-key-alias androiddebugkey --out output/_signed.apk output/_aligned.apk
+          "$APKSIGNER" sign --ks output/release.keystore \
+            --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" \
+            --key-pass "pass:$ANDROID_KEY_PASSWORD" \
+            --ks-key-alias "$ANDROID_KEY_ALIAS" \
+            --out output/_signed.apk output/_aligned.apk
           cp output/_signed.apk "dist/we-mpkg-android-${VERSION}.apk"
           node tools/zipalign16.js "dist/we-mpkg-android-${VERSION}.apk" --check
           ls -lh "dist/we-mpkg-android-${VERSION}.apk"
