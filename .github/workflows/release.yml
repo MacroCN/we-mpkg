@@ -140,6 +140,8 @@ jobs:
           cp -R bin src public package.json "$ASSETS"/
           # 纯 JS 下载引擎的依赖必须一起进 APK，否则手机上起不了 Steam 客户端
           cp -R node_modules "$ASSETS"/node_modules
+          # Android asset merger 会把 foo.js.gz 当成 foo.js 的重复资源
+          find "$ASSETS" -name '*.gz' -delete
           du -sh "$ASSETS"
 
       - name: Write local.properties
