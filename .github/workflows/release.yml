@@ -124,30 +124,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Fetch libnode + headers (prebuilt toolchain)
+      - name: Fetch prebuilt native libraries
         run: |
-          curl -L --retry 3 -o toolchain.tar.gz \
-            https://github.com/MacroCN/we-mpkg/releases/download/android-node-toolchain-v1/android-node-toolchain-v1.tar.gz
-          mkdir -p android-node
-          tar -xzf toolchain.tar.gz -C android-node
-          ls -la android-node | head
-
-      - name: Prepare jniLibs
-        run: |
-          JNI=android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p "$JNI"
-          gunzip -c android-node/libnode.so.gz > "$JNI/libnode.so"
-          cp "$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so" "$JNI/libc++_shared.so"
-          NDK="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}"
-          "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang++" \
-            --target=aarch64-linux-android24 -D__ANDROID_API__=24 \
-            --sysroot="$NDK/toolchains/llvm/prebuilt/linux-x86_64/sysroot" \
-            -shared -fPIC -O2 -std=c++17 \
-            -I"$GITHUB_WORKSPACE/android-node/include/node" \
-            -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384 \
-            android/app/src/main/jni/shim.cpp \
-            -o "$JNI/libwempkg-node.so" -L"$JNI" -lnode -llog
-          ls -lh "$JNI"
+          curl -L --retry 3 -o native.tar.gz \
+            https://github.com/MacroCN/we-mpkg/releases/download/android-node-prebuilt-v1/android-node-prebuilt-v1.tar.gz
+          mkdir -p android/app/src/main/jniLibs
+          tar -xzf native.tar.gz -C android/app/src/main/jniLibs
+          ls -lh android/app/src/main/jniLibs/arm64-v8a
 
       - name: Sync JS project into assets
         run: |
