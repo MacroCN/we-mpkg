@@ -105,9 +105,29 @@ $signed = Join-Path $outDir '_signed.apk'
 Remove-Item $aligned, $signed -Force -ErrorAction SilentlyContinue
 & $node $zipalign16 $apk.FullName $aligned
 if ($LASTEXITCODE -ne 0) { throw "16 KB 对齐失败" }
-$ks = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.android\debug.keystore'
-& $apksigner sign --ks $ks --ks-pass 'pass:android' --key-pass 'pass:android' `
-    --ks-key-alias 'androiddebugkey' --out $signed $aligned
+
+if ($Variant -eq 'release') {
+    $signingDir = Join-Path $projRoot 'signing'
+    $ks = Join-Path $signingDir 'release.keystore'
+    $propsPath = Join-Path $signingDir 'keystore.properties'
+    if (-not (Test-Path $ks)) { throw "找不到正式签名密钥: $ks" }
+    if (-not (Test-Path $propsPath)) { throw "找不到签名配置: $propsPath" }
+    $signProps = @{}
+    Get-Content -LiteralPath $propsPath | ForEach-Object {
+        if ($_ -match '^([^=]+)=(.*)$') { $signProps[$matches[1].Trim()] = $matches[2].Trim() }
+    }
+    $ksPass = $signProps['storePassword']
+    $keyPass = $signProps['keyPassword']
+    $alias = $signProps['keyAlias']
+    if (-not $ksPass -or -not $alias) { throw "keystore.properties 缺少 storePassword 或 keyAlias" }
+    if (-not $keyPass) { $keyPass = $ksPass }
+    & $apksigner sign --ks $ks --ks-pass "pass:$ksPass" --key-pass "pass:$keyPass" `
+        --ks-key-alias $alias --out $signed $aligned
+} else {
+    $ks = Join-Path ([Environment]::GetFolderPath('UserProfile')) '.android\debug.keystore'
+    & $apksigner sign --ks $ks --ks-pass 'pass:android' --key-pass 'pass:android' `
+        --ks-key-alias 'androiddebugkey' --out $signed $aligned
+}
 if ($LASTEXITCODE -ne 0) { throw "apksigner 签名失败" }
 Move-Item $signed $dest -Force
 Remove-Item $aligned -Force -ErrorAction SilentlyContinue

@@ -45,6 +45,8 @@ local.properties
 tools/_sample.png
 
 
-# ---- 签名材料（绝对不要提交）----
+# ---- 签名材料（绝对不要提交到仓库或 Release）----
 *.jks
 *.keystore
+keystore.properties
+signing/
