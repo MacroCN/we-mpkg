@@ -27,7 +27,7 @@ public final class NodeRunner {
         System.loadLibrary("wempkg-node");
     }
 
-    private static native int startNode(String[] args, String nodePath, String tmpDir, String logPath);
+    private static native int startNode(String[] args, String nodePath, String tmpDir, String logPath, String nativeLibDir);
 
     private NodeRunner() {}
 
@@ -177,7 +177,8 @@ public final class NodeRunner {
                     startNode(new String[]{"node", scriptPath(ctx), "serve"},
                               dir + ":" + dir + "/node_modules",
                               ctx.getCacheDir().getAbsolutePath(),
-                              logFile(ctx).getAbsolutePath());
+                              logFile(ctx).getAbsolutePath(),
+                              ctx.getApplicationInfo().nativeLibraryDir);
                 } catch (Throwable t) {
                     // 解包/写设置等 Java 阶段失败还没进 native，允许下次重试；
                     // 一旦进了 node::Start 就不能再启动第二次，保持 STARTED=true

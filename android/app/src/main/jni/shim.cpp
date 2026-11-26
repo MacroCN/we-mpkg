@@ -6,6 +6,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <limits.h>
 #include <pthread.h>
 #include <android/log.h>
 
@@ -56,10 +57,24 @@ static int redirect_std_to_logcat(void) {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wempkg_app_NodeRunner_startNode(JNIEnv *env, jclass clazz,
                                          jobjectArray arguments, jstring nodePath,
-                                         jstring tmpDir, jstring logPath) {
+                                         jstring tmpDir, jstring logPath,
+                                         jstring nativeLibDir) {
     const char *path = env->GetStringUTFChars(nodePath, 0);
     setenv("NODE_PATH", path, 1);
     env->ReleaseStringUTFChars(nodePath, path);
+
+    if (nativeLibDir != NULL) {
+        const char *libDir = env->GetStringUTFChars(nativeLibDir, 0);
+        setenv("WEM_NATIVE_LIB_DIR", libDir, 1);
+        char ffmpegPath[PATH_MAX];
+        snprintf(ffmpegPath, sizeof(ffmpegPath), "%s/libffmpeg.so", libDir);
+        if (access(ffmpegPath, X_OK) == 0) {
+            setenv("WEM_FFMPEG", ffmpegPath, 1);
+            emit("[jni] WEM_FFMPEG=");
+            emit(ffmpegPath);
+        }
+        env->ReleaseStringUTFChars(nativeLibDir, libDir);
+    }
 
     if (tmpDir != NULL) {
         const char *tmp = env->GetStringUTFChars(tmpDir, 0);

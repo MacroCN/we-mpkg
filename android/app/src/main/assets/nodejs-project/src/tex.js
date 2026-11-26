@@ -36,10 +36,9 @@
  */
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const zlib = require('zlib');
-const { execFileSync } = require('child_process');
 const lz4 = require('./lz4');
+const videoUtil = require('./video');
 
 /** 同目录临时文件 + rename，避免中断时留下半截 .tex；失败时清掉临时文件 */
 function writeFileAtomic(file, bytes) {
@@ -276,43 +275,9 @@ function videoPayload(tex) {
   };
 }
 
-/** 手机端建议的视频纹理宽度上限（超过就转码，避免 4K 视频纹理解不出来） */
+/** 手机端建议的视频最长边上限（0 = 不限制；画质档位会在此基础上继续缩） */
 function videoMaxWidth(opts = {}) {
-  const raw = opts.videoMaxWidth !== undefined
-    ? opts.videoMaxWidth
-    : process.env.WE_MPKG_VIDEO_MAX_WIDTH;
-  if (raw === undefined || raw === null || raw === '') return 1920;
-  const n = parseInt(raw, 10);
-  return Number.isFinite(n) && n >= 0 ? n : 1920;
-}
-
-const FFMPEG_CANDIDATES = [
-  process.env.WEM_FFMPEG,
-  process.env.FFMPEG,
-  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
-  path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
-  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
-  path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
-  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg'),
-  path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg'),
-];
-
-function findFfmpeg() {
-  for (const p of FFMPEG_CANDIDATES) {
-    if (!p) continue;
-    try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* ignore */ }
-  }
-  const whereNames = process.platform === 'win32'
-    ? ['where.exe', path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe')]
-    : ['which'];
-  for (const exe of whereNames) {
-    try {
-      const out = execFileSync(exe, [process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'], { encoding: 'utf8' });
-      const first = out.split(/\r?\n/)[0].trim();
-      if (first && fs.existsSync(first)) return first;
-    } catch { /* 试下一个 */ }
-  }
-  return null;
+  return videoUtil.videoMaxWidth(opts);
 }
 
 /**
@@ -659,12 +624,11 @@ function inspectTex(buf, opts = {}) {
   const animated = (header.flags & TEX_FLAGS.IsGif) !== 0;
   const video = videoPayload(tex);
   if (video) {
-    const maxW = videoMaxWidth(opts);
-    const needShrink = maxW > 0 && Math.max(video.width, video.height) > maxW;
+    const target = videoUtil.targetLongEdge(video.width, video.height, opts.preset, opts);
     return {
-      route: needShrink ? 'video-texture-shrink' : 'video-texture',
-      reason: needShrink
-        ? `视频纹理 ${video.width}x${video.height}，超过手机端建议的 ${maxW} 宽，将转码后重封装`
+      route: target > 0 ? 'video-texture-shrink' : 'video-texture',
+      reason: target > 0
+        ? `视频纹理 ${video.width}x${video.height}，当前画质档位将缩到最长边 ${target}px`
         : '视频纹理（MP4 载荷，手机端可直接解码）',
       pixels: 0, width: video.width, height: video.height, animated: true,
     };
@@ -808,91 +772,42 @@ function verifyMobileTex(buf, expect = {}) {
 }
 
 /**
- * 把过大的视频纹理转码到手机友好尺寸，再按官方结构重封装。
+ * 把视频纹理按当前画质档位缩到目标最长边，再按官方结构重封装。
  * 转码失败/没有 ffmpeg 时原样保留（至少不会比原文件更差）。
  */
-/** 从 ffmpeg 的 stderr 里读「Stream #0:0 ... 1920x1080」 */
-function parseVideoDims(text) {
-  const m = /Video:.*?(\d{2,5})x(\d{2,5})/.exec(String(text || ''));
-  if (!m) return null;
-  return { width: parseInt(m[1], 10), height: parseInt(m[2], 10) };
-}
-
-function probeVideoDims(ffmpeg, file) {
-  try {
-    const out = execFileSync(ffmpeg, ['-hide_banner', '-i', file], {
-      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30000, windowsHide: true,
-    });
-    return parseVideoDims(out);
-  } catch (e) {
-    // ffmpeg -i 不带输出文件时固定以 1 退出，尺寸信息在 stderr 里
-    return parseVideoDims((e && (e.stderr || e.stdout)) || '');
-  }
-}
-
 function shrinkVideoTex(buf, info, opts = {}) {
   const tex = parseTex(buf);
   const video = videoPayload(tex);
   if (!video) return { changed: false, route: 'video-texture', reason: '视频载荷异常，原样保留' };
-  const maxW = videoMaxWidth(opts);
-  const ffmpeg = findFfmpeg();
+  const target = videoUtil.targetLongEdge(video.width, video.height, opts.preset, opts);
+  if (!target) return { changed: false, route: 'video-texture', reason: '当前画质档位无需缩小视频纹理' };
+  const ffmpeg = videoUtil.findFfmpeg(opts);
   if (!ffmpeg) {
     return {
       changed: false,
       route: 'keep-video-noffmpeg',
-      reason: `视频纹理 ${video.width}x${video.height} 超过 ${maxW} 宽，但没找到 ffmpeg，只能原样保留（手机端可能读不出画面）`,
+      reason: `视频纹理 ${video.width}x${video.height} 需要缩到 ${target}px，但没找到 ffmpeg，只能原样保留`,
     };
   }
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wempkg-video-'));
   try {
-    const isMp4 = video.data.subarray(4, 8).toString('latin1') === 'ftyp';
-    const src = path.join(tmp, 'in' + (isMp4 ? '.mp4' : '.webm'));
-    const dst = path.join(tmp, 'out.mp4');
-    fs.writeFileSync(src, video.data);
-
-    // 按「最长边」压到上限：横屏锁 width，竖屏锁 height。
-    // 之前固定 scale=<maxW>:-2 会把竖屏视频放宽到 maxW，高度反而更大。
-    const portrait = video.height > video.width;
-    const scaleFilter = portrait
-      ? `scale=-2:${maxW}:flags=lanczos`
-      : `scale=${maxW}:-2:flags=lanczos`;
-
-    execFileSync(ffmpeg, [
-      '-y', '-loglevel', 'error',
-      '-i', src,
-      '-an',
-      '-c:v', 'libx264',
-      '-profile:v', 'baseline',
-      '-pix_fmt', 'yuv420p',
-      '-vf', scaleFilter,
-      '-preset', 'medium',
-      '-crf', '20',
-      '-movflags', '+faststart',
-      dst,
-    ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
-
-    const mp4 = fs.readFileSync(dst);
-    if (mp4.length < 24 || mp4.subarray(4, 8).toString('latin1') !== 'ftyp') {
-      throw new Error('转码产物不是有效的 MP4');
-    }
-    // 纹理头的尺寸必须和真实视频流一致，所以以 ffmpeg 解出来的为准，不靠公式推算
-    const dims = probeVideoDims(ffmpeg, dst) || {
-      width: portrait ? Math.max(2, Math.round(video.width * maxW / video.height / 2) * 2) : maxW,
-      height: portrait ? maxW : Math.max(2, Math.round(video.height * maxW / video.width / 2) * 2),
-    };
+    const res = videoUtil.transcodeBuffer(video.data, {
+      width: video.width, height: video.height, target, ffmpeg, opts,
+    });
+    if (!res || !res.mp4) throw new Error('转码没有产出 MP4');
+    const dims = { width: res.width, height: res.height };
     const out = buildVideoTex({
       format: tex.header.format,
       flags: tex.header.flags, // 保留 IsVideoTexture(32) 与 ClampUVs(2)
       unk: tex.header.unk,
       width: dims.width,
       height: dims.height,
-      mp4,
+      mp4: res.mp4,
     });
     return {
       changed: true,
       bytes: out,
       route: 'video-texture-shrink',
-      reason: `视频纹理 ${video.width}x${video.height} -> ${dims.width}x${dims.height}（H.264 baseline/yuv420p，手机端兼容）`,
+      reason: `视频纹理 ${video.width}x${video.height} -> ${dims.width}x${dims.height}（H.264/yuv420p，手机端兼容）`,
       width: dims.width,
       height: dims.height,
     };
@@ -900,8 +815,6 @@ function shrinkVideoTex(buf, info, opts = {}) {
     const msg = String((e && e.message) || e).split('\n')[0];
     const tail = /ETIMEDOUT|timed out/i.test(msg) ? '（转码超时）' : '';
     return { changed: false, route: 'keep-video-transcode-failed', reason: `视频转码失败，原样保留${tail}（${msg}）` };
-  } finally {
-    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }
 

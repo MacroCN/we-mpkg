@@ -27,7 +27,8 @@
 | 其余 npm 依赖（protobufjs、pngjs、qrcode、adm-zip…） | MIT / BSD / Apache-2.0 | 各包目录内的 `LICENSE` / `NOTICE` |
 | [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile)（Node.js 运行时） | MIT（含内置 OpenSSL / ICU / V8 等声明） | 绿色版 `nodejs/LICENSE`；安卓端为 `libnode.so` |
 | Chromium（Edge headless） | BSD 等 | **不随本项目分发**，仅在用户本机作为外部程序调用，用于网页类壁纸的渲染与封装 |
-| [FFmpeg](https://ffmpeg.org/)（绿色版内置 `tools/ffmpeg/ffmpeg.exe`） | GPL v3（该构建含 libx264，因此整体按 GPL 分发） | 仅 Windows 绿色版随附，用于 4K / 竖屏视频纹理转码；源码见 <https://ffmpeg.org/download.html> 与 <https://github.com/FFmpeg/FFmpeg>。不需要它时可直接删除 `tools/ffmpeg/`，改用环境变量 `WEM_FFMPEG` 指向自己的 ffmpeg。安卓包不含此二进制 |
+| [FFmpeg](https://ffmpeg.org/)（绿色版内置 `tools/ffmpeg/ffmpeg.exe`） | GPL v3（该构建含 libx264，因此整体按 GPL 分发） | 仅 Windows 绿色版随附，用于视频纹理与 video 类型降分辨率；源码见 <https://ffmpeg.org/download.html> 与 <https://github.com/FFmpeg/FFmpeg>。不需要它时可直接删除 `tools/ffmpeg/`，改用环境变量 `WEM_FFMPEG` 指向自己的 ffmpeg。 |
+| FFmpeg Android arm64（`libffmpeg.so`） | LGPL v2.1+（不含 GPL 组件，启用 MediaCodec） | 随 APK 分发，用于手机本地把视频纹理和 video 类型降到当前画质档位。构建来源：<https://github.com/hzw1199/Android-FFmpeg-Prebuilt>（`ffmpeg-9.0/bin/ffmpeg`，SHA-256 `9085507B0DC32643B4D6D084A7E7D3469EF17907A7BA15C22D3997ED09C932AA`）；源码见 <https://github.com/FFmpeg/FFmpeg>。 |
 
 ## 再分发要求
 

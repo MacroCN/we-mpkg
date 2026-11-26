@@ -16,6 +16,7 @@ const pkgformat = require('../src/pkgformat');
 const packer = require('../src/pack');
 const workshop = require('../src/workshop');
 const tex = require('../src/tex');
+const videoUtil = require('../src/video');
 const { redactProxy } = require('../src/server');
 
 let passed = 0;
@@ -1385,6 +1386,27 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(info.route, 'video-texture-shrink');
     assert.strictEqual(info.width, 3840);
     assert.ok(!/原始像素/.test(info.reason));
+  });
+
+  test('视频目标尺寸跟随画质档位，且按最长边缩', () => {
+    const high = { id: 'high', reduction: 1, maxDimension: 4096 };
+    const balanced = { id: 'balanced', reduction: 2, maxDimension: 2048 };
+    const smooth = { id: 'smooth', reduction: 4, maxDimension: 1024 };
+    assert.strictEqual(videoUtil.targetLongEdge(3840, 2160, high), 1920);
+    assert.strictEqual(videoUtil.targetLongEdge(3840, 2160, balanced), 1920);
+    assert.strictEqual(videoUtil.targetLongEdge(3840, 2160, smooth), 960);
+    assert.strictEqual(videoUtil.targetLongEdge(1080, 1920, smooth), 480);
+    assert.strictEqual(videoUtil.targetLongEdge(1920, 1080, high), 0);
+    assert.strictEqual(videoUtil.targetLongEdge(3840, 2160, { id: 'original', reduction: 1, maxDimension: 0 }), 0);
+  });
+
+  test('均衡/流畅档位会缩视频纹理，原始档位保持字节不变', () => {
+    const buf = makeVideoTex(3840, 2160);
+    const smoothInfo = tex.inspectTex(buf, { preset: 'smooth' });
+    assert.strictEqual(smoothInfo.route, 'video-texture-shrink');
+    assert.ok(/960/.test(smoothInfo.reason));
+    const original = tex.convertTexBuffer(buf, { preset: 'original' });
+    assert.strictEqual(original.changed, false);
   });
 
   test('1080p 视频纹理原样保留，不改写任何字节', () => {

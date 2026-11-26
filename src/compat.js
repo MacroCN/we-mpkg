@@ -111,7 +111,8 @@ function inspect(projectDir, opts = {}) {
   if (brokenTex) warnings.push(`${brokenTex} 个 .tex 解析失败，可能已经损坏或是特殊格式`);
 
   const webrender = require('./webrender');
-  const hasFfmpeg = !!webrender.findFfmpeg();
+  const videoUtil = require('./video');
+  const hasFfmpeg = !!videoUtil.findFfmpeg();
   const hasBrowser = !!webrender.findBrowser();
 
   if (type === 'application') {
@@ -128,12 +129,13 @@ function inspect(projectDir, opts = {}) {
   if (type === 'preset') notes.push('预设类没有实际内容，打包后通常不能单独使用');
 
   if (videoTex > 0) {
-    if (!hasFfmpeg) {
-      warnings.push(`含 ${videoTex} 个视频纹理，但本机没有 ffmpeg：超过 ${tex.videoMaxWidth()} px 的转码做不了（手机端可能黑屏或很卡）`);
-    } else if (maxW > tex.videoMaxWidth()) {
-      notes.push(`视频纹理最大 ${maxW}×${maxH}，超过 ${tex.videoMaxWidth()} px 会自动用 ffmpeg 压缩`);
+    const target = videoUtil.targetLongEdge(maxW, maxH, preset);
+    if (!hasFfmpeg && target > 0) {
+      warnings.push(`含 ${videoTex} 个视频纹理，当前画质需要缩到 ${target}px，但本机没有 ffmpeg，只能原样保留`);
+    } else if (target > 0) {
+      notes.push(`视频纹理最大 ${maxW}×${maxH}，当前画质会缩到最长边 ${target}px`);
     } else {
-      notes.push(`含 ${videoTex} 个视频纹理（${maxW}×${maxH}），可直接复用`);
+      notes.push(`含 ${videoTex} 个视频纹理（${maxW}×${maxH}），当前画质可原样复用`);
     }
   }
 

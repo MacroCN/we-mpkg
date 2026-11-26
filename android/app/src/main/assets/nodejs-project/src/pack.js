@@ -16,6 +16,7 @@ const path = require('path');
 const crypto = require('crypto');
 const pkgformat = require('./pkgformat');
 const tex = require('./tex');
+const videoUtil = require('./video');
 const shadercompat = require('./shadercompat');
 const convertplan = require('./convertplan');
 const { config, ensureDirs, tempDir } = require('./config');
@@ -760,6 +761,12 @@ async function packFromItemDir(itemDir, opts = {}) {
 
   // 音频：默认剥离（官方导出手机版也不带），--keep-audio 可保留
   const audio = stripAudio(mobileDir, { preserveAudio: opts.preserveAudio, onLog });
+
+  // video 类型没有 .tex 可转，project.json 指向的原始 mp4 也要按画质档位降分辨率
+  if (prepared.type === 'video') {
+    const vr = videoUtil.transcodeProjectVideo(mobileDir, preset, { ...opts, onLog });
+    warnings.push(...vr.warnings);
+  }
 
   // 转换计划 + 断点：先把清单写下来，中断后再跑能接上
   const planFile = path.join(prepared.workDir, 'convert-plan.json');

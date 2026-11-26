@@ -132,6 +132,16 @@ jobs:
           tar -xzf native.tar.gz -C android/app/src/main/jniLibs
           ls -lh android/app/src/main/jniLibs/arm64-v8a
 
+      - name: Fetch Android ffmpeg (LGPL + MediaCodec)
+        run: |
+          mkdir -p .cache/toolchain/ffmpeg-android android/app/src/main/jniLibs/arm64-v8a
+          curl -L --retry 3 -o .cache/toolchain/ffmpeg-android/ffmpeg \
+            https://raw.githubusercontent.com/hzw1199/Android-FFmpeg-Prebuilt/main/ffmpeg-9.0/bin/ffmpeg
+          echo "9085507B0DC32643B4D6D084A7E7D3469EF17907A7BA15C22D3997ED09C932AA  .cache/toolchain/ffmpeg-android/ffmpeg" | sha256sum -c -
+          chmod +x .cache/toolchain/ffmpeg-android/ffmpeg
+          cp .cache/toolchain/ffmpeg-android/ffmpeg android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          ls -lh android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+
       - name: Sync JS project into assets
         run: |
           ASSETS=android/app/src/main/assets/nodejs-project

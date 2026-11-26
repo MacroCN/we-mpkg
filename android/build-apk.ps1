@@ -35,6 +35,16 @@ if (-not (Test-Path $cxxSrc)) { throw "找不到 libc++_shared.so: $cxxSrc" }
 Copy-Item $cxxSrc (Join-Path $jniDir 'libc++_shared.so') -Force
 Write-Host ("    libc++_shared.so {0:N1} MB" -f ((Get-Item (Join-Path $jniDir 'libc++_shared.so')).Length / 1MB))
 
+# 视频降分辨率用的 Android FFmpeg（LGPL，含 MediaCodec H.264 编码器）。
+# 放在 nativeLibraryDir 里以 libffmpeg.so 命名，Node 端通过 WEM_FFMPEG 调用。
+$ffmpegSrc = Join-Path $projRoot '.cache\toolchain\ffmpeg-android\ffmpeg'
+if (Test-Path $ffmpegSrc) {
+    Copy-Item $ffmpegSrc (Join-Path $jniDir 'libffmpeg.so') -Force
+    Write-Host ("    libffmpeg.so {0:N1} MB" -f ((Get-Item (Join-Path $jniDir 'libffmpeg.so')).Length / 1MB))
+} else {
+    Write-Warning '未找到 .cache\toolchain\ffmpeg-android\ffmpeg，Android 视频转码会回退为原样保留'
+}
+
 Write-Host "[2/5] 编译 JNI 桥"
 $ndkRoot = Get-ChildItem (Join-Path $Toolchain 'android-sdk\ndk') -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $ndkRoot) { throw "没找到 NDK，先 sdkmanager 装 ndk" }
