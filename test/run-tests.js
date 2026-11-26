@@ -2059,46 +2059,73 @@ await testAsync('net：服务端慢速滴漏数据也会被总超时打断', asy
   }
 });
 
-await testAsync('cachegc：临时目录 / 续转计划 / 日志都会被限额', async () => {
+await testAsync('cachegc：临时目录 / 着色器缓存 / 续转计划 / 日志都会按策略限额', async () => {
   const cachegc = require('../src/cachegc');
   const root = tmp('gc');
   const cacheDir = path.join(root, '.cache');
   const logDir = path.join(root, 'logs');
   fs.mkdirSync(cacheDir, { recursive: true });
   fs.mkdirSync(logDir, { recursive: true });
-  const old = Date.now() - 10 * 24 * 3600 * 1000;
+  const DAY = 24 * 3600 * 1000;
+  const at = (ms) => new Date(Date.now() - ms);
 
-  // 旧临时目录
-  for (const name of ['pkg-old1', 'pkg-old2', 'item-123']) {
+  // 临时目录：12 天前的要删，1 小时前的留着（正在用）
+  for (const name of ['pkg-old', 'pkg-new']) {
     const p = path.join(cacheDir, name);
     fs.mkdirSync(p, { recursive: true });
     fs.writeFileSync(path.join(p, 'x.bin'), Buffer.alloc(1024));
-    fs.utimesSync(p, new Date(old), new Date(old));
+    const age = name === 'pkg-old' ? 12 * DAY : 3600 * 1000;
+    fs.utimesSync(p, at(age), at(age));
   }
-  // pack-plan：12 份，越靠前越旧
+  // 着色器 blob 缓存：5 天前的属于「宽限期」内，不该被当成临时目录删掉
+  const itemDir = path.join(cacheDir, 'item-123');
+  fs.mkdirSync(itemDir, { recursive: true });
+  fs.utimesSync(itemDir, at(5 * DAY), at(5 * DAY));
+
+  // 续转计划：8 份新的（名额内）+ 4 份「5 天没动且指纹也老」的（名额外的）
   const planRoot = path.join(cacheDir, 'pack-plan');
   fs.mkdirSync(planRoot, { recursive: true });
-  for (let i = 0; i < 12; i++) {
-    const p = path.join(planRoot, `id${i}`);
+  const mkPlan = (name, ageMs, stampAgeMs) => {
+    const p = path.join(planRoot, name);
     fs.mkdirSync(p, { recursive: true });
-    const t = new Date(Date.now() - (12 - i) * 3600 * 1000);
-    fs.utimesSync(p, t, t);
-  }
-  // 超大日志
-  const bigLog = path.join(logDir, 'app.log');
-  fs.writeFileSync(bigLog, `head\n${'x'.repeat(12 * 1024 * 1024)}`);
+    fs.mkdirSync(path.join(p, 'project'), { recursive: true });
+    fs.writeFileSync(path.join(p, 'project', 'a.txt'), 'x');
+    if (stampAgeMs !== null) {
+      fs.writeFileSync(path.join(p, 'source-stamp.json'), JSON.stringify({ stamp: 'abc', at: Date.now() - stampAgeMs }));
+    }
+    fs.utimesSync(p, at(ageMs), at(ageMs));
+  };
+  for (let i = 0; i < 8; i++) mkPlan(`new${i}`, 3600 * 1000, 3600 * 1000);
+  for (let i = 0; i < 4; i++) mkPlan(`stale${i}`, 5 * DAY, null);
+  // 双条件用例：目录 40 天没动，但指纹是 2 天前更新的 → 说明源条目后来又续转过，不能删
+  mkPlan('keepByStamp', 40 * DAY, 2 * DAY);
 
-  const opts = { tempMaxAgeMs: 3 * 24 * 3600 * 1000, tempKeepNewest: 1, planKeepNewest: 4, logMaxBytes: 1 * 1024 * 1024, logTailBytes: 64 * 1024 };
-  const r = cachegc.run({ cacheDir, logDir, logger: () => {}, ...opts });
+  // 日志：一个 12 分钟没动的大文件（可截尾）、一个刚写的大文件（正在写，跳过）
+  const quietLog = path.join(logDir, 'dlhub.log');
+  fs.writeFileSync(quietLog, `head\n${'x'.repeat(2 * 1024 * 1024)}`);
+  fs.utimesSync(quietLog, at(12 * 60 * 1000), at(12 * 60 * 1000));
+  const busyLog = path.join(logDir, 'node.log');
+  fs.writeFileSync(busyLog, `head\n${'x'.repeat(2 * 1024 * 1024)}`);
 
-  assert.ok(!fs.existsSync(path.join(cacheDir, 'pkg-old1')));
-  assert.ok(!fs.existsSync(path.join(cacheDir, 'item-123')));
-  assert.ok(fs.existsSync(path.join(planRoot, 'id11')), '最新的续转目录要留着');
+  const r = cachegc.run({
+    cacheDir, logDir, logger: () => {},
+    tempMaxAgeMs: 3 * DAY, tempKeepNewest: 1,
+    itemMaxAgeMs: 30 * DAY, itemKeepNewest: 20,
+    planKeepNewest: 8, planEvictMinAgeMs: 3 * DAY,
+    logMaxBytes: 1 * 1024 * 1024, logTailBytes: 64 * 1024, logQuietMs: 10 * 60 * 1000,
+  });
+
+  assert.ok(!fs.existsSync(path.join(cacheDir, 'pkg-old')), '12 天前的临时目录要删');
+  assert.ok(fs.existsSync(path.join(cacheDir, 'pkg-new')), '1 小时前的临时目录算在用，保留');
+  assert.ok(fs.existsSync(itemDir), '着色器 blob 缓存 5 天不该按临时目录删');
+  for (let i = 0; i < 8; i++) assert.ok(fs.existsSync(path.join(planRoot, `new${i}`)), '名额内的新计划都要留');
+  for (let i = 0; i < 4; i++) assert.ok(!fs.existsSync(path.join(planRoot, `stale${i}`)), '名额外的陈旧计划要清');
+  assert.ok(fs.existsSync(path.join(planRoot, 'keepByStamp')), '指纹还新鲜的计划不能只看目录 mtime 就删');
   const left = fs.readdirSync(planRoot).length;
-  assert.ok(left <= 4, `pack-plan 应保留 4 份，实际 ${left}`);
-  const logSize = fs.statSync(bigLog).size;
-  assert.ok(logSize < 1024 * 1024, `日志应被截断，实际 ${logSize}`);
-  assert.ok(r.cache.removed >= 2, '应清掉过期临时目录');
+  assert.strictEqual(left, 9, `pack-plan 应剩 9 份（8 新 + 1 靠指纹保住），实际 ${left}`);
+  assert.ok(fs.statSync(quietLog).size < 1024 * 1024, '静默的大日志应被截尾');
+  assert.strictEqual(fs.statSync(busyLog).size, 2 * 1024 * 1024 + 5, '正在写的日志不能动');
+  assert.strictEqual(r.logs.skipped, 1, '正在写的日志应记为跳过');
 });
 
 
