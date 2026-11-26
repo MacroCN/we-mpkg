@@ -1,0 +1,21 @@
+we-mpkg 2.4.9-beta.2
+====================
+
+测试版，只发布安卓 APK。修复 beta.1 反馈的三个问题。
+
+1. 页面内返回失效（返回键直接退出应用）
+   - 根因：targetSdk 36 默认启用预测性返回，系统不再调用 onBackPressed，直接 finish 掉 Activity
+   - 修复：API 33+ 注册 OnBackInvokedCallback 接管返回键，清单补 enableOnBackInvokedCallback；
+     旧版本仍走 onBackPressed 兜底。返回键优先级不变：下载浮层 → 网页弹窗/抽屉 → 网页历史 → 启动页 → 退到后台
+
+2. 详情页关闭按钮被状态栏遮挡
+   - 根因：WebView 会忽略自身 padding（渲染面覆盖整个 view），之前的 insets 加在了 WebView 上，等于没生效
+   - 修复：insets padding 改加到 content 根容器，页面真正落在状态栏/手势区之内
+   - 另加：详情抽屉增加半透明遮罩，点遮罩任意位置即关闭（✕ 不再是唯一出口），下拉/返回键照旧
+
+3. 代理设置 127.0.0.1 访问正常（无需改动，已在 beta.1 验证通过）
+
+其他：
+- compileSdk/targetSdk 维持 36，minSdk 24
+- 全量测试 121 通过 / 0 失败 / 1 跳过
+- assets 已重新打包（buildId aa803fe5…），前端修复已进 APK

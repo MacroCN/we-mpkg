@@ -104,6 +104,16 @@ public class MainActivity extends Activity {
         });
         web.setBackgroundColor(0xFF0F1720);
 
+        // targetSdk 36 默认启用预测性返回，onBackPressed 不再被调用，必须注册 OnBackInvokedCallback，
+        // 否则返回键会直接交给系统 finish 掉 Activity（页面内返回失效）
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT,
+                    new android.window.OnBackInvokedCallback() {
+                        @Override public void onBackInvoked() { handleBack(); }
+                    });
+        }
+
         // WebView 不认 env(safe-area-inset-*)，用原生 insets 把页面挤到刘海/挖孔和底部手势区之内
         final View root = findViewById(android.R.id.content);
         root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
@@ -118,7 +128,9 @@ public class MainActivity extends Activity {
                     top = insets.getSystemWindowInsetTop();
                     bottom = insets.getSystemWindowInsetBottom();
                 }
-                web.setPadding(0, top, 0, bottom);
+                // 注意：WebView 会忽略自身的 padding（渲染面覆盖整个 view），
+                // 必须把 insets 加在 content 根容器上，才能真正把页面挤到状态栏/手势区之内
+                v.setPadding(0, top, 0, bottom);
                 return insets;
             }
         });
@@ -675,6 +687,11 @@ public class MainActivity extends Activity {
      */
     @Override
     public void onBackPressed() {
+        // API 33+ 已注册 OnBackInvokedCallback，系统不会再调用这里；保留是给旧版本兜底
+        handleBack();
+    }
+
+    private void handleBack() {
         if (downloadsOpen) {
             web.evaluateJavascript("window.WE_DLC && window.WE_DLC.close()", null);
             downloadsOpen = false;

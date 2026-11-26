@@ -790,6 +790,7 @@ function setDownloadLabel() {
 
 function openDetail(id, seed) {
   state.current = { id, seed };
+  if ($('drawerMask')) $('drawerMask').classList.remove('hidden');
   $('drawer').classList.remove('hidden');
   document.body.style.overflow = 'hidden';
   $('d-title').textContent = seed.title || id;
@@ -820,6 +821,7 @@ function openDetail(id, seed) {
 }
 
 function closeDetail() {
+  if ($('drawerMask')) $('drawerMask').classList.add('hidden');
   $('drawer').classList.add('hidden');
   document.body.style.overflow = '';
   if (state.poll) clearTimeout(state.poll);
@@ -1491,6 +1493,9 @@ function wire() {
 
   // 点击遮罩关闭
   $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeSettings(); });
+
+  // 详情抽屉：点遮罩（关闭按钮以外的任何位置）直接关闭，避免顶部 ✕ 被状态栏挡住够不到
+  if ($('drawerMask')) $('drawerMask').addEventListener('click', closeDetail);
 
   // 手机：下拉返回键 / 侧滑关闭抽屉
   window.addEventListener('popstate', () => { if (!$('drawer').classList.contains('hidden')) closeDetail(); });
