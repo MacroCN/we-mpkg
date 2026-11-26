@@ -15,6 +15,7 @@ const packer = require('./pack');
 const packjob = require('./packjob');
 const dlhub = require('./dlhub');
 const cdn = require('./cdn');
+const guard = require('./guard');
 
 function redactProxy(raw) {
   if (!raw) return '';
@@ -59,6 +60,17 @@ function requestToken(req, u) {
  * @returns {boolean} true 表示已经响应并应结束
  */
 function guardRequest(req, res, u, pn) {
+  // Host 白名单：DNS rebinding 下 Origin 可以和 Host 完全相同，只有 Host 本身能判断。
+  // 本机服务只认 localhost / IP 字面量（远程模式的局域网 IP 也是 IP 字面量，照样能进）。
+  const hc = guard.checkHost(req.headers.host);
+  if (!hc.ok) {
+    if (pn.startsWith('/api/')) json(res, 403, { error: `拒绝请求：${hc.reason}` });
+    else {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`拒绝请求：${hc.reason}`);
+    }
+    return true;
+  }
   const remote = !isLoopbackAddress(req.socket && req.socket.remoteAddress);
   if (remote) {
     if (!config.REMOTE_TOKEN) {
@@ -464,8 +476,8 @@ const server = http.createServer(async (req, res) => {
       }
     }
     if (pn === '/api/item') {
-      const id = u.searchParams.get('id');
-      if (!id) return json(res, 400, { error: '缺少 id' });
+      let id;
+      try { id = guard.assertItemId(u.searchParams.get('id')); } catch (e) { return json(res, 400, { error: e.message }); }
       const item = await workshop.getItemDetail(id);
       return json(res, 200, item);
     }
@@ -479,6 +491,8 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       const body = JSON.parse(raw || '{}');
       if (!body.id) return json(res, 400, { error: '缺少 id' });
+      // id 会被拼进 downloads/js-<id>：必须纯数字，否则 "../evil" 能写到下载目录之外
+      try { body.id = guard.assertItemId(body.id); } catch (e) { return json(res, 400, { error: e.message }); }
       try {
         const h = await hub();
         const r = await dlhub.hubJson(h.port, 'POST', '/api/hub/jobs', {
@@ -522,6 +536,7 @@ const server = http.createServer(async (req, res) => {
     if (pn.startsWith('/api/jobs/')) {
       const jobId = pn.split('/')[3];
       const action = pn.split('/')[4];
+      if (!guard.isValidJobId(jobId)) return json(res, 400, { error: '任务 id 不合法' });
       try {
         const h = await hub();
         const pathname = action ? `/api/hub/jobs/${encodeURIComponent(jobId)}/${action}` : `/api/hub/jobs/${encodeURIComponent(jobId)}`;
@@ -534,6 +549,7 @@ const server = http.createServer(async (req, res) => {
     // 成品下载：直接流式转发下载中心的文件接口（不在主服务里读整文件）
     if (pn.startsWith('/api/file/')) {
       const jobId = pn.split('/')[3];
+      if (!guard.isValidJobId(jobId)) { res.writeHead(400); return res.end('Bad job id'); }
       try {
         const h = await hub();
         const target = new URL(`/api/hub/file/${encodeURIComponent(jobId)}`, h.url);

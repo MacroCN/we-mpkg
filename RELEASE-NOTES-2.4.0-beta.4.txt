@@ -1,0 +1,15 @@
+we-mpkg v2.4.0-beta.4（Beta 测试版，不合并主线）
+
+音频策略简化
+- 删掉「保留壁纸自带音频」勾选项
+- 勾选「下载原始资源」：原始音频原样保留
+- 不勾选（打包 mpkg）：默认剥离音频；场景里检测到音频交互（频谱 / 音频响应，含写在 JSON 属性里的绑定）时自动保留，避免频谱层整层空白
+- CLI 仍可用 --keep-audio 强制保留
+
+安全加固
+- 防 DNS rebinding：主服务与下载中心（3091）都校验 Host 白名单，只接受 localhost / IP 字面量；自定义域名用环境变量 WE_MPKG_ALLOW_HOST 放行
+- 下载中心写接口必须 Content-Type: application/json，堵掉 text/plain 简单请求免预检建任务
+- 条目 id 全入口数字校验（/api/jobs、/api/item、下载中心、packjob、workshop、CLI），堵住 id="../evil" 目录穿越
+- 任务 id 同样校验格式，非法请求返回 400
+
+测试：113 通过 / 0 失败 / 1 跳过

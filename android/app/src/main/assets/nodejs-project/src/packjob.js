@@ -63,15 +63,17 @@ async function getSharedClient(onLog) {
 async function downloadWithEngine(itemId, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const onProgress = opts.onProgress || (() => {});
+  // 再兜一层：itemId 会拼成 downloads/js-<id>，非数字可能穿越到下载目录之外
+  const safeId = require('./guard').assertItemId(itemId);
   onLog('[engine] steamjs');
   const steamjs = require('./steamjs');
   const cdn = require('./cdn');
   const token = steamjs.readToken();
   if (!token || !token.refreshToken) throw new Error(noLoginMessage());
-  const outDir = path.join(config.DOWNLOAD_DIR, `js-${itemId}`);
+  const outDir = path.join(config.DOWNLOAD_DIR, `js-${safeId}`);
   const client = await getSharedClient(onLog);
   try {
-    const r = await steamjs.downloadItem({ id: itemId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress, isCancelled: opts.isCancelled, isPaused: opts.isPaused });
+    const r = await steamjs.downloadItem({ id: safeId, outDir, refreshToken: token.refreshToken, client, onLog, onProgress, isCancelled: opts.isCancelled, isPaused: opts.isPaused });
     return { ok: true, dir: r.dir };
   } catch (e) {
     if (e instanceof CancelledError || e.name === 'CancelledError') throw e;

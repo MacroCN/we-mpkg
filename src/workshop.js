@@ -233,7 +233,8 @@ function parseBrowseHtml(html) {
 
 /** 批量取详情（无需 API key） */
 async function getFileDetails(ids) {
-  const uniq = Array.from(new Set((ids || []).map((v) => String(v).trim()).filter(Boolean)));
+  // 只会拼进表单参数，但仍统一按数字过滤：避免调用方把任意串塞进请求
+  const uniq = Array.from(new Set((ids || []).map((v) => String(v).trim()).filter(require('./guard').isValidItemId)));
   if (!uniq.length) return [];
   const parts = [`itemcount=${uniq.length}`];
   uniq.forEach((id, i) => parts.push(`publishedfileids[${i}]=${id}`));
@@ -268,6 +269,8 @@ function normalizeDetail(d, hint = {}) {
 
 /** 单条详情（含社区页面上的描述/作者） */
 async function getItemDetail(id) {
+  // id 会被拼进社区页 URL，只接受纯数字
+  id = require('./guard').assertItemId(id);
   await ensureWebLogin();
   let base = null;
   try {

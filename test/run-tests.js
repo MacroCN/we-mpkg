@@ -894,15 +894,16 @@ test('--drop-audio-layers 可强制移除音频频谱层', () => {
   assert.ok(r.removed[0].reason.includes('手动'));
 });
 
-test('场景用到音频频谱时默认保留音频（否则监听器收不到数据）', () => {
+test('有音频交互时保留音频，否则剥离', () => {
   const dir = makeLayerProject('audioKeep', 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
   fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
     objects: [{ id: 1, image: 'models/util/solidlayer.json', effects: [{ file: 'effects/bar/effect.json' }] }],
   }));
   assert.ok(packer.sceneUsesAudioSpectrum(dir));
-  const kept = packer.stripAudio(dir, {});
-  assert.strictEqual(kept.removed, 0);
-  assert.strictEqual(kept.keptForAudioReactive, true);
+  assert.ok(packer.sceneHasAudioReactive(dir));
+  const keptAudio = packer.stripAudio(dir, {});
+  assert.strictEqual(keptAudio.removed, 0);
+  assert.strictEqual(keptAudio.keptForAudioReactive, true);
   assert.ok(fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
 
   const dir2 = makeLayerProject('audioStrip', 'void main(){}\n');
@@ -911,6 +912,20 @@ test('场景用到音频频谱时默认保留音频（否则监听器收不到�
   }));
   const removed = packer.stripAudio(dir2, {});
   assert.strictEqual(removed.removed, 1);
+});
+
+test('音频交互写在 JSON 属性里也算（同样保留音频）', () => {
+  const dir = makeLayerProject('audioJson', 'void main(){}\n');
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [{ id: 1, image: 'models/util/solidlayer.json', effects: [{ file: 'effects/plain/effect.json' }] }],
+    audioSpectrum: true,
+  }));
+  assert.ok(!packer.sceneUsesAudioSpectrum(dir));
+  assert.ok(packer.sceneHasAudioReactive(dir));
+  const r = packer.stripAudio(dir, {});
+  assert.strictEqual(r.removed, 0);
+  assert.strictEqual(r.keptForAudioReactive, true);
+  assert.ok(fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
 });
 
 test('默认剥离音频，preserveAudio 时保留', () => {
@@ -1052,12 +1067,12 @@ await testAsync('历史超过 20 条会裁剪，运行中也能 forget（先取�
   let n = 0;
   const fastRunner = () => Promise.resolve({ result: { outFile: `/tmp/x${++n}.mpkg`, size: 1, type: 'scene' } });
   const hub = dlhub.createHub({ runner: fastRunner, file: path.join(tmp('hub6'), 'state.json'), maxConcurrent: 3 });
-  for (let i = 0; i < 27; i++) hub.add({ id: `h${i}` });
+  for (let i = 0; i < 27; i++) hub.add({ id: String(100 + i) });
   await sleepMs(200);
   assert.ok(hub.list().length <= 23, `历史应被裁剪到 20 条左右，实际 ${hub.list().length}`);
   const doneId = hub.list().find((j) => j.state === 'done').id;
   assert.strictEqual(hub.forget(doneId), true, '已完成任务可移除');
-  const queued = hub.add({ id: 'still-running' });
+  const queued = hub.add({ id: '999' });
   assert.strictEqual(hub.forget(queued.id), true, '排队中的也应能移除');
   assert.strictEqual(hub.get(queued.id), null, '移除后记录立刻消失');
   assert.strictEqual(queued.cancelRequested, true, '移除排队任务要同时发取消信号');
@@ -1067,7 +1082,7 @@ await testAsync('历史超过 20 条会裁剪，运行中也能 forget（先取�
 await testAsync('暂停 / 继续：只在下载中生效，暂停可被取消打断', async () => {
   const d = deferredRunner();
   const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6b'), 'state.json'), maxConcurrent: 3 });
-  const job = hub.add({ id: 'p1' });
+  const job = hub.add({ id: '7001' });
   await sleepMs(10);
   assert.strictEqual(job.state, 'downloading');
   assert.strictEqual(hub.pause(job.id), true);
@@ -1091,7 +1106,7 @@ await testAsync('暂停 / 继续：只在下载中生效，暂停可被取消打
 await testAsync('暂停成功后结束：不能把「已暂停」留在 done 卡片上', async () => {
   const d = deferredRunner();
   const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6c'), 'state.json'), maxConcurrent: 3 });
-  const job = hub.add({ id: 'p2' });
+  const job = hub.add({ id: '7002' });
   await sleepMs(10);
   hub.pause(job.id);
   assert.strictEqual(job.paused, true);
@@ -1107,7 +1122,7 @@ await testAsync('暂停成功后结束：不能把「已暂停」留在 done 卡
 await testAsync('暂停中失败 → 重试不应继承暂停（否则一进下载就卡住）', async () => {
   const d = deferredRunner();
   const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6d'), 'state.json'), maxConcurrent: 3 });
-  const job = hub.add({ id: 'p3' });
+  const job = hub.add({ id: '7003' });
   await sleepMs(10);
   hub.pause(job.id);
   d.calls[0].reject(new Error('网络断了'));
@@ -1127,19 +1142,19 @@ await testAsync('暂停中失败 → 重试不应继承暂停（否则一进下�
 await testAsync('移除运行中任务：立刻从列表消失，但记录等停下来才删；同条目重下会被拒', async () => {
   const d = deferredRunner();
   const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub6e'), 'state.json'), maxConcurrent: 3 });
-  const job = hub.add({ id: 'same-item' });
+  const job = hub.add({ id: '8001' });
   await sleepMs(10);
   assert.strictEqual(job.state, 'downloading');
   assert.strictEqual(hub.forget(job.id), true);
   assert.strictEqual(hub.list().some((j) => j.id === job.id), false, '列表里应立刻看不到');
   assert.ok(hub.get(job.id), '记录要留到 runner 真正退出');
   assert.strictEqual(job.cancelRequested, true);
-  assert.throws(() => hub.add({ id: 'same-item' }), /已有任务在跑/, '同条目不能并发写同一个下载目录');
+  assert.throws(() => hub.add({ id: '8001' }), /已有任务在跑/, '同条目不能并发写同一个下载目录');
   d.calls[0].reject(new (require('../src/packjob').CancelledError)());
   await sleepMs(30);
   assert.strictEqual(hub.get(job.id), null, '停止后记录应自动删掉');
   // 现在可以重新下了
-  const again = hub.add({ id: 'same-item' });
+  const again = hub.add({ id: '8001' });
   assert.ok(again.id);
   hub.stop();
 });
@@ -1858,6 +1873,77 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(!dlc.includes("createElement('div');\n    pill"), '右下角小药丸应由顶栏任务条取代');
     assert.ok(dlc.includes("api('api/cdn/test'"), '换节点重试前应强制重新测速');
   });
+
+  console.log('\n[23] 安全：Host 白名单 / id 数字校验 / JSON Content-Type');
+
+test('Host 白名单：rebinding 域名一律拒，回环与 IP 字面量放行', () => {
+  const guard = require('../src/guard');
+  assert.strictEqual(guard.checkHost('127.0.0.1:3090').ok, true);
+  assert.strictEqual(guard.checkHost('localhost:3091').ok, true);
+  assert.strictEqual(guard.checkHost('[::1]:3090').ok, true);
+  assert.strictEqual(guard.checkHost('192.168.1.20:3091').ok, true, '局域网 IP 字面量（远程模式）要放行');
+  assert.strictEqual(guard.checkHost('r.evil.com:3091').ok, false, 'rebinding 的 Host 是域名，必须拒');
+  assert.strictEqual(guard.checkHost('evil.com').ok, false);
+  assert.strictEqual(guard.checkHost('').ok, false, '没有 Host 也要拒');
+  assert.strictEqual(guard.hostNameOf('[::1]:3090'), '::1');
+  assert.strictEqual(guard.hostNameOf('127.0.0.1:3090'), '127.0.0.1');
+  const old = process.env.WE_MPKG_ALLOW_HOST;
+  process.env.WE_MPKG_ALLOW_HOST = 'wempkg.example.com';
+  try {
+    assert.strictEqual(guard.checkHost('wempkg.example.com:3091').ok, true, 'WE_MPKG_ALLOW_HOST 是逃生口');
+  } finally {
+    if (old === undefined) delete process.env.WE_MPKG_ALLOW_HOST; else process.env.WE_MPKG_ALLOW_HOST = old;
+  }
+});
+
+test('条目 id 只接受纯数字，目录穿越写法抛 400', () => {
+  const guard = require('../src/guard');
+  assert.strictEqual(guard.assertItemId(' 12345 '), '12345');
+  assert.strictEqual(guard.isValidItemId(12345), true);
+  for (const bad of ['../evil', '12/34', 'a1', '', '-1', '1e3', null, '1'.repeat(21), '../..', '12%2F34', '..\\evil']) {
+    assert.strictEqual(guard.isValidItemId(bad), false, `应拒绝 id=${bad}`);
+    assert.throws(() => guard.assertItemId(bad), (e) => e.statusCode === 400 && e.code === 'BAD_ITEM_ID');
+  }
+  assert.strictEqual(guard.isValidJobId('d123'), true);
+  assert.strictEqual(guard.isValidJobId('123'), false);
+  assert.throws(() => guard.assertJobId('../x'), (e) => e.code === 'BAD_JOB_ID');
+});
+
+test('写接口必须 application/json（text/plain 简单请求拦掉）', () => {
+  const guard = require('../src/guard');
+  const req = (method, headers) => ({ method, headers });
+  assert.strictEqual(guard.jsonBodyOk(req('GET', {})), true);
+  assert.strictEqual(guard.jsonBodyOk(req('POST', { 'content-type': 'application/json' })), true);
+  assert.strictEqual(guard.jsonBodyOk(req('POST', { 'content-type': 'application/json; charset=utf-8', 'content-length': '3' })), true);
+  assert.strictEqual(guard.jsonBodyOk(req('POST', { 'content-type': 'text/plain', 'content-length': '3' })), false);
+  assert.strictEqual(guard.jsonBodyOk(req('POST', { 'content-type': 'application/x-www-form-urlencoded', 'content-length': '3' })), false);
+  assert.strictEqual(guard.jsonBodyOk(req('POST', { 'content-type': 'text/plain', 'transfer-encoding': 'chunked' })), false);
+  assert.strictEqual(guard.jsonBodyOk(req('POST', {})), true, '空 body 的 POST（pause/resume）要放行');
+});
+
+test('所有入口都接了 guard（server / dlhub / packjob / workshop / CLI / 前端）', () => {
+  const root = path.join(__dirname, '..');
+  const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+  const srv = read('src/server.js');
+  assert.ok(srv.includes("require('./guard')"));
+  assert.ok(/guard\.checkHost|guard\.assertItemId|guard\.isValidJobId/.test(srv));
+  const dl = read('src/dlhub.js');
+  assert.ok(dl.includes("require('./guard')"));
+  assert.ok(dl.includes('jsonBodyOk'));
+  const pj = read('src/packjob.js');
+  assert.ok(pj.includes('assertItemId'), '下载目录 js-<id> 前必须校验 id');
+  const ws = read('src/workshop.js');
+  assert.ok(ws.includes('assertItemId') && ws.includes('isValidItemId'));
+  const cli = read('bin/wempkg.js');
+  assert.ok(cli.includes("require('../src/guard')"));
+  const php = read('public/index.html');
+  assert.ok(!php.includes('d-audio'), '「保留音频」勾选项应已删除');
+  const js = read('public/app.js');
+  assert.ok(!js.includes('d-audio') && !js.includes('keepAudio,'), '前端不应再读音频勾选项');
+  assert.ok(js.includes('preserveAudio: isWebItem(it)') && js.includes('preserveAudio: rawMode'), '音频由 raw 模式决定');
+  const pack = read('src/pack.js');
+  assert.ok(pack.includes('sceneHasAudioReactive'), '有音频交互时要自动保留音频');
+});
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);
   if (failed) {

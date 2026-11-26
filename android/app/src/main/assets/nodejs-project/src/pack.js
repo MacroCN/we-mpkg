@@ -258,6 +258,39 @@ function sceneUsesAudioSpectrum(projectDir) {
   return false;
 }
 
+/**
+ * 是否有音频交互（音频频谱 / 音频响应）。
+ * 除了 shader 里的 g_AudioSpectrum*，有些壁纸把音频绑定写在 scene/effect 的 JSON 属性里
+ * （audiospectrum、audioresponsive 等），这些也要算。
+ */
+function sceneHasAudioReactive(projectDir) {
+  if (sceneUsesAudioSpectrum(projectDir)) return true;
+  const AUDIO_BIND_RE = /audio\s*spec(?:trum)?|audio\s*resp|audioresp/i;
+  const MAX_TEXT = 2 * 1024 * 1024; // 只看小文本文件，跳过贴图/视频
+  const scan = (d, depth) => {
+    if (depth > 6) return false;
+    let ents = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return false; }
+    for (const ent of ents) {
+      const abs = path.join(d, ent.name);
+      if (ent.isDirectory()) {
+        const name = ent.name.toLowerCase();
+        if (name === 'materials' || name === 'models' || name === 'textures' || name === 'sound' || name === 'audio') continue;
+        if (scan(abs, depth + 1)) return true;
+        continue;
+      }
+      const ext = path.extname(ent.name).toLowerCase();
+      if (ext !== '.json' && ext !== '.scene' && ext !== '.txt' && ext !== '.js' && ext !== '.vert' && ext !== '.frag' && ext !== '.vsfrag' && ext !== '.vs' && ext !== '.fs') continue;
+      try {
+        if (fs.statSync(abs).size > MAX_TEXT) continue;
+        if (AUDIO_BIND_RE.test(fs.readFileSync(abs, 'utf8'))) return true;
+      } catch { /* 读不到就跳过 */ }
+    }
+    return false;
+  };
+  return scan(projectDir, 0);
+}
+
 function repairSceneCompat(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const scene = readScene(projectDir);
@@ -617,11 +650,12 @@ function stripAudio(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
   const result = { removed: 0, bytes: 0, files: [], keptForAudioReactive: false };
   if (opts.preserveAudio) return result;
-  // 音频频谱可视化层：手机端频谱数据来自音频管线（引擎侧 sendAudioData / g_AudioSpectrum*），
-  // 把音频删了监听器就是一条平线、整层什么都画不出来 —— 这类场景默认保留音频。
-  if (opts.autoKeepAudioReactive !== false && sceneUsesAudioSpectrum(projectDir)) {
+  // 壁纸里有音频交互（频谱/音频响应）时保留音频：删掉监听器就收不到数据，相关层会整层空掉。
+  // 其余情况（只有一段 BGM）照旧剥离，官方导出手机版也不带。
+  const audioReactive = opts.autoKeepAudioReactive !== false && sceneHasAudioReactive(projectDir);
+  if (audioReactive) {
     result.keptForAudioReactive = true;
-    onLog('  音频保留：场景里有音频频谱可视化效果，删掉音频后频谱监听器收不到数据');
+    onLog('  音频保留：检测到音频交互（频谱/音频响应），删掉音频后相关效果收不到数据');
     return result;
   }
   const walk = (d) => {
@@ -976,6 +1010,6 @@ function analyze(inputPath) {
 module.exports = {
   packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
   detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
-  stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum,
+  stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum, sceneHasAudioReactive,
 };
 

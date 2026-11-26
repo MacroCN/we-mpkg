@@ -18,6 +18,7 @@ const path = require('path');
 const { config, ensureDirs } = require('../src/config');
 const workshop = require('../src/workshop');
 const steamjs = require('../src/steamjs');
+const guard = require('../src/guard');
 const packer = require('../src/pack');
 
 function parseArgs(argv) {
@@ -145,8 +146,8 @@ async function cmdInfo(args) {
 }
 
 async function cmdFetch(args) {
-  const id = args._[0];
-  if (!id) throw new Error('用法: fetch <id> [--user 账号 --pass 密码 | --interactive]');
+  if (!args._[0]) throw new Error('用法: fetch <id> [--user 账号 --pass 密码 | --interactive]');
+  const id = guard.assertItemId(args._[0]);
   const res = await downloadToDir(id, args, path.join(config.DOWNLOAD_DIR, `js-${id}`), (l) => console.log(`[js] ${l}`));
   ensureDirs();
   const dest = path.join(config.DOWNLOAD_DIR, String(id));
@@ -162,8 +163,8 @@ async function cmdFetch(args) {
 }
 
 async function cmdGet(args) {
-  const id = args._[0];
-  if (!id) throw new Error('用法: get <id> [--title 名称] [--ref 参考.mpkg] [--user 账号 --pass 密码 | --interactive]');
+  if (!args._[0]) throw new Error('用法: get <id> [--title 名称] [--ref 参考.mpkg] [--user 账号 --pass 密码 | --interactive]');
+  const id = guard.assertItemId(args._[0]);
   const detail = await workshop.getItemDetail(id).catch(() => ({ title: `wallpaper_${id}` }));
   console.log(`\n条目: ${detail.title || id}`);
   const res = await downloadToDir(id, args, path.join(config.DOWNLOAD_DIR, `js-${id}`), (l) => console.log(`[js] ${l}`));
@@ -329,8 +330,8 @@ async function cmdSteamjs(args) {
   }
 
   if (sub === 'get' || sub === 'download') {
-    const id = args._[0];
-    if (!id) throw new Error('用法: steamjs get <创意工坊id> [--title 名称] [--ref 参考.mpkg]');
+    if (!args._[0]) throw new Error('用法: steamjs get <创意工坊id> [--title 名称] [--ref 参考.mpkg]');
+    const id = guard.assertItemId(args._[0]);
     const token = steamjs.readToken();
     if (!token) throw new Error('还没有登录凭据，先执行: run.bat steamjs login');
 

@@ -11,7 +11,7 @@ const I18N = {
     filters: '筛选', clearFilters: '清空', prev: '上一页', next: '下一页',
     downloadPack: '下载并打包为 MPKG', steamPage: 'Steam 页面', saveMpkg: '保存 .mpkg', importWe: '导入壁纸引擎',
     rawDownload: '下载原始资源',
-    rawDownloadTip: '不打包 mpkg：video / 场景 / 网页都直接导出原始资源并压成 zip（场景先解包 scene.pkg，网页附带触屏适配与 PWA）',
+    rawDownloadTip: '不打包 mpkg：video / 场景 / 网页都直接导出原始资源并压成 zip（场景先解包 scene.pkg，网页附带触屏适配与 PWA），原始音频原样保留',
     rawDownloadBtn: '下载原始资源（打包 zip）',
     saveRaw: '保存原始资源 .zip', openFile: '打开文件',
     webNoMpkg: 'Web 类型不支持下载 MPKG（勾选「下载原始资源」可导出网页）',
@@ -38,7 +38,6 @@ const I18N = {
     updateTitle: '版本更新', updateCheck: '检查更新', updateDownload: '打开下载页', updateDownloadApk: '直接下载 APK',
     updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
     updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
-    keepAudio: '保留壁纸自带音频',
     exitApp: '退出程序（关闭后台服务）',
     exitConfirm: '确定退出？后台服务会被关闭，本页随即失效。',
     exitDone: '已退出，后台服务已关闭，可以关掉这个页面了。',
@@ -82,7 +81,7 @@ const I18N = {
     filters: 'Filters', clearFilters: 'Clear', prev: 'Prev', next: 'Next',
     downloadPack: 'Download & pack MPKG', steamPage: 'Steam page', saveMpkg: 'Save .mpkg', importWe: 'Import to Wallpaper Engine',
     rawDownload: 'Download raw assets',
-    rawDownloadTip: 'No mpkg: video / scene / web items are exported as a zip of the original assets (scene.pkg is unpacked first; web gets touch support + PWA)',
+    rawDownloadTip: 'No mpkg: video / scene / web items are exported as a zip of the original assets (scene.pkg is unpacked first; web gets touch support + PWA); original audio is kept',
     rawDownloadBtn: 'Download raw assets (zip)',
     saveRaw: 'Save raw assets .zip', openFile: 'Open file',
     webNoMpkg: 'Web wallpapers cannot be packed as MPKG (tick “Download raw assets” to export the page)',
@@ -109,7 +108,6 @@ const I18N = {
     updateTitle: 'Updates', updateCheck: 'Check for updates', updateDownload: 'Open download page', updateDownloadApk: 'Download APK',
     updateChecking: 'Checking the latest GitHub release…', updateLatest: 'You are up to date ({v})',
     updateFound: 'New version {v} available (current {c})', updateFail: 'Check failed: ',
-    keepAudio: 'Keep wallpaper audio',
     exitApp: 'Quit (stop background service)',
     exitConfirm: 'Quit now? The background service will be stopped and this page will stop working.',
     exitDone: 'Quit. The service is stopped — you can close this page.',
@@ -501,7 +499,8 @@ async function quickDownload(it, btn) {
         // Web 条目没有 mpkg，直接按原始资源导出（卡片上没法勾选，这里替用户决定）
         raw: isWebItem(it),
         preset,
-        preserveAudio: false,
+        // 原始资源原样保留音频；打包 mpkg 默认去音频（有音频交互的场景后端会自动保留）
+        preserveAudio: isWebItem(it),
       }),
     });
     $('status').className = 'status';
@@ -561,7 +560,7 @@ async function startBatch() {
           title: it.title,
           raw: isWebItem(it),
           preset,
-          preserveAudio: !!($('d-audio') && $('d-audio').checked),
+          preserveAudio: isWebItem(it),
         }),
       });
       ok++;
@@ -878,7 +877,8 @@ async function startDownload() {
         // 勾选后不打包 mpkg，而是把原始资源（scene 解包 / web 离线包）压成 zip
         raw: rawMode,
         preset: ($('d-quality') || {}).value || 'high',
-        preserveAudio: !!($('d-audio') && $('d-audio').checked),
+        // 原始资源原样保留音频；打包 mpkg 默认去音频（有音频交互的场景后端会自动保留）
+        preserveAudio: rawMode,
       }),
     });
     // 任务跑在独立进程（下载中心）里：网页关掉也会继续下，进度在浮层里看

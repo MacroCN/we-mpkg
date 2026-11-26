@@ -17,6 +17,7 @@ const { spawn } = require('child_process');
 
 const configMod = require('./config');
 const { config, ensureDirs } = configMod;
+const guard = require('./guard');
 
 const DEFAULT_PORT = parseInt(String(process.env.WE_MPKG_DLHUB_PORT || '').trim() || '3091', 10);
 const MAX_CONCURRENT = 3;
@@ -255,7 +256,8 @@ function createHub(opts = {}) {
 
   function add(req = {}) {
     if (!req.id) throw new Error('缺少 id');
-    const itemId = String(req.id);
+    // 这个值会拼成 downloads/js-<id>，必须纯数字（防 "../evil" 写到下载目录之外）
+    const itemId = guard.assertItemId(req.id);
     const job = {
       id: `d${++seq}`,
       itemId,
@@ -533,6 +535,11 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
     const u = new URL(req.url, 'http://localhost');
     const pn = u.pathname;
     try {
+      // Host 白名单：下载中心只监听回环，rebinding 过来的请求 Host 是攻击者域名，这里直接拒
+      const hc = guard.checkHost(req.headers.host);
+      if (!hc.ok) return json(res, 403, { error: `拒绝请求：${hc.reason}` });
+      // 写请求必须是 application/json：text/plain 之类是「简单请求」，浏览器不预检
+      if (!guard.jsonBodyOk(req)) return json(res, 415, { error: '写请求必须使用 application/json' });
       if (pn.startsWith('/api/') && !sameOriginRequest(req)) {
         return json(res, 403, { error: '拒绝跨站请求' });
       }
@@ -558,6 +565,7 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
         const parts = pn.split('/').filter(Boolean); // api hub jobs <id> [action]
         const id = parts[3];
         const action = parts[4];
+        if (!guard.isValidJobId(id)) return json(res, 400, { error: '任务 id 不合法' });
         if (action === 'cancel' && req.method === 'POST') {
           const ok = hub.cancel(id);
           return json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '任务不存在或已结束' });
@@ -584,6 +592,7 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
       }
       if (pn.startsWith('/api/hub/file/')) {
         const id = pn.split('/')[4];
+        if (!guard.isValidJobId(id)) { res.writeHead(400); return res.end('Bad job id'); }
         const job = hub.get(id);
         if (!job || !job.result || !job.result.outFile) { res.writeHead(404); return res.end('Not Found'); }
         return sendFile(res, job.result.outFile);
