@@ -23,6 +23,8 @@ jobs:
   portable:
     name: Portable (Windows)
     runs-on: windows-latest
+    # beta 版本（tag 里带 beta）只出安卓 APK，跳过 Windows 绿色版和源码包
+    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, 'beta') }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -113,7 +115,7 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager -type f | head -1)
           echo "sdkmanager: $SDKMANAGER"
           yes | "$SDKMANAGER" --licenses > /dev/null || true
-          "$SDKMANAGER" "ndk;${ANDROID_NDK_VERSION}" "build-tools;${ANDROID_BUILD_TOOLS}" "platforms;android-34"
+          "$SDKMANAGER" "ndk;${ANDROID_NDK_VERSION}" "build-tools;${ANDROID_BUILD_TOOLS}" "platforms;android-36"
 
       - name: Resolve version
         run: |
@@ -200,6 +202,8 @@ jobs:
     name: Publish release
     runs-on: ubuntu-latest
     needs: [portable, android]
+    # beta 时 portable 会被跳过，只要没失败就继续发布
+    if: ${{ needs.android.result == 'success' && needs.portable.result != 'failure' && needs.portable.result != 'cancelled' }}
     steps:
       # 需要仓库里的 RELEASE-NOTES-<版本>.txt 作正文，所以要先 checkout（只取这一个文件也够，但没必要省）
       - uses: actions/checkout@v5
@@ -221,6 +225,7 @@ jobs:
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+          case "$tag" in *beta*) echo "IS_BETA=1" >> "$GITHUB_ENV" ;; *) echo "IS_BETA=0" >> "$GITHUB_ENV" ;; esac
 
       - name: Prepare release body
         run: |
@@ -240,14 +245,20 @@ jobs:
           fi
           {
             printf '\n## 下载\n\n'
-            printf -- '- 绿色版：解压 `we-mpkg-portable-%s.zip`，双击 `start.bat`\n' "$VERSION"
-            printf -- '- 安卓：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n' "$VERSION"
-            printf -- '- 源码：`we-mpkg-src-%s.zip`\n\n' "$VERSION"
+            # beta 版本只构建安卓 APK，不列绿色版/源码包的下载项
+            if [ "$IS_BETA" = "1" ]; then
+              printf -- '- 安卓（测试版）：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n\n' "$VERSION"
+            else
+              printf -- '- 绿色版：解压 `we-mpkg-portable-%s.zip`，双击 `start.bat`\n' "$VERSION"
+              printf -- '- 安卓：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n' "$VERSION"
+              printf -- '- 源码：`we-mpkg-src-%s.zip`\n\n' "$VERSION"
+            fi
             printf '构建提交：%s\n' "$GITHUB_SHA"
           } >> dist/release-body.md
           echo "正文前几行："; head -n 5 dist/release-body.md
 
       - uses: softprops/action-gh-release@v3
+        if: ${{ env.IS_BETA == '0' }}
         with:
           tag_name: ${{ env.TAG }}
           name: we-mpkg ${{ env.VERSION }}
@@ -260,5 +271,19 @@ jobs:
             dist/we-mpkg-portable-*.zip
             dist/we-mpkg-android-*.apk
             dist/we-mpkg-src-*.zip
+            dist/RELEASE-NOTES-*.txt
+          fail_on_unmatched_files: true
+
+      # beta 版本只构建安卓 APK：单独一步，避免 fail_on_unmatched_files 因为缺少绿色版/源码包报错
+      - uses: softprops/action-gh-release@v3
+        if: ${{ env.IS_BETA == '1' }}
+        with:
+          tag_name: ${{ env.TAG }}
+          name: we-mpkg ${{ env.VERSION }}
+          prerelease: true
+          make_latest: 'false'
+          body_path: dist/release-body.md
+          files: |
+            dist/we-mpkg-android-*.apk
             dist/RELEASE-NOTES-*.txt
           fail_on_unmatched_files: true

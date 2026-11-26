@@ -1,0 +1,24 @@
+we-mpkg 2.4.9-beta.1
+====================
+
+测试版，只发布安卓 APK（绿色版/源码包不构建）。
+
+本次改动：targetSdk 34 → 36（Android 16），compileSdk 同步到 36。
+
+- compileSdk 36 / targetSdk 36，AGP 8.13.2 + Gradle 8.14.8 保持不变（AGP 8.13 最高支持 API 36）
+- minSdk 24、buildTools 35.0.0、abiFilters arm64-v8a 均未变动
+- CI 增加安装 platforms;android-36；beta tag（带 beta）只跑安卓 job，发布为预发布
+- 16 KB 页对齐已复核：libnode / libffmpeg / libc++_shared / libwempkg-node 的 LOAD 段 p_align 均为 16384
+
+升级到 target 36 会带进这些系统行为，请在真机上重点回归：
+
+1. 首启加载：WebView 连 127.0.0.1 本地服务是否正常（edge-to-edge 强制后状态栏/导航栏/手势条是否压住页面）
+2. 下载与打包：dataSync 前台服务在 Android 15+ 有每天 6 小时上限，长任务是否会被掐断
+3. 返回键：预测性返回默认启用，页面内返回是否正常、是否有异常动画
+4. 导入壁纸引擎、代理设置、大屏/横屏布局
+
+已知未处理（留到 2.4.9 正式版或单独提交）：
+- KeepAliveService 的 onTimeout 兜底（6 小时上限触发时落盘断点）
+- onBackPressed → OnBackInvokedCallback 迁移
+
+构建提交：见 Release 页面。
