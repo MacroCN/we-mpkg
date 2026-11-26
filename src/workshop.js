@@ -599,13 +599,53 @@ const LABEL_RETRY_MS = 5 * 60 * 1000;
  * 用它生成「英文名 → 官方中文名」对照表：译名来自官方，不依赖机翻，也不用维护词表。
  * 只用于显示；请求筛选时仍然传英文原名（requiredtags[] 只认规范 tag 名）。
  */
+function sharedTagIds(a, b) {
+  const ids = new Set(((a && a.tags) || []).filter((t) => t && t.id).map((t) => String(t.id)));
+  if (!ids.size) return 0;
+  let n = 0;
+  for (const t of ((b && b.tags) || [])) {
+    if (t && t.id && ids.has(String(t.id))) n++;
+  }
+  return n;
+}
+
+/**
+ * 把英、中两组分组配对：优先按「共同 tag id 数量」找最佳匹配，不依赖两边顺序；
+ * 完全没有 id 交集的分组退回按剩余顺序配对。
+ * 之前按下标硬对齐，中文页分组数量/顺序一变，后面的分组（Asset Type / Asset Genre /
+ * Script Type 这几个排在最后的）就整体错位，标签全部对不上。
+ */
+function pairGroups(enGroups, zhGroups) {
+  const pairs = [];
+  const usedZh = new Set();
+  for (const en of enGroups) {
+    let pick = -1;
+    let best = 0;
+    zhGroups.forEach((zh, i) => {
+      if (usedZh.has(i)) return;
+      const score = sharedTagIds(en, zh);
+      if (score > best) { best = score; pick = i; }
+    });
+    if (pick >= 0 && best > 0) {
+      usedZh.add(pick);
+      pairs.push([en, zhGroups[pick]]);
+    } else {
+      pairs.push([en, null]);
+    }
+  }
+  for (const p of pairs) {
+    if (p[1]) continue;
+    const idx = zhGroups.findIndex((_, i) => !usedZh.has(i));
+    if (idx >= 0) { usedZh.add(idx); p[1] = zhGroups[idx]; }
+  }
+  return pairs;
+}
+
 function buildFilterLabels(enGroups, zhGroups) {
   if (!Array.isArray(enGroups) || !Array.isArray(zhGroups) || !enGroups.length || !zhGroups.length) return null;
   const groups = {};
   const tags = {};
-  for (let i = 0; i < enGroups.length; i++) {
-    const en = enGroups[i];
-    const zh = zhGroups[i];
+  for (const [en, zh] of pairGroups(enGroups, zhGroups)) {
     if (!en || !zh) continue;
     if (en.name && zh.name && en.name !== zh.name) groups[en.name] = zh.name;
     const enTags = en.tags || [];

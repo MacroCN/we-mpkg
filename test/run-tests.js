@@ -2300,6 +2300,24 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
   // 结构不对时返回 null，前端退回内置词表
   assert.strictEqual(workshop.buildFilterLabels(en, null), null);
   assert.strictEqual(workshop.buildFilterLabels([], []), null);
+
+  // 分组顺序/数量不一致时按 tag id 交集配对（不下标硬对齐），排在后面的分组也能对上
+  const en2 = [
+    { name: 'Type', tags: [{ name: 'Scene', id: '100' }, { name: 'Video', id: '101' }] },
+    { name: 'Asset Type', tags: [{ name: 'Scene', id: '200' }, { name: 'Web', id: '201' }] },
+    { name: 'Script Type', tags: [{ name: 'JS', id: '300' }, { name: 'Lua', id: '301' }] },
+  ];
+  const zh2 = [
+    { name: '脚本类型', tags: [{ name: 'JS 脚本', id: '300' }, { name: 'Lua 脚本', id: '301' }] },
+    { name: '类型', tags: [{ name: '场景', id: '100' }, { name: '视频', id: '101' }] },
+    { name: '素材类型', tags: [{ name: '场景', id: '200' }, { name: '网页', id: '201' }] },
+  ];
+  const shifted = workshop.buildFilterLabels(en2, zh2);
+  assert.strictEqual(shifted.groups['Asset Type'], '素材类型', '顺序打乱也要对上');
+  assert.strictEqual(shifted.tags['JS'], 'JS 脚本');
+  assert.strictEqual(shifted.tags['Web'], '网页');
+  // 同名标签在多个分组里出现时共用一条译名（取值都是「场景」）
+  assert.strictEqual(shifted.tags['Scene'], '场景');
 });
 
 
