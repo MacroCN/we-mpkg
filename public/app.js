@@ -21,6 +21,9 @@ const I18N = {
     tabAccount: '账号', tabNetwork: '网络', tabOutput: '输出', tabAbout: '关于',
     outputTip: 'mpkg 和「下载原始资源」的 zip 都存到这里。',
     aboutMeta: 'AppID 431960 · PKGM0020 · 壁纸来源 Wallpaper Engine 创意工坊',
+    projectTitle: '项目', projectIssues: '问题反馈 / Issues',
+    projectDesc: '开源 MIT 许可。抓取创意工坊 → 纯 JS 分块下载 → 转成安卓可用的 .mpkg；安卓端内置 Node 运行时，离线也能在手机上打包。',
+    ptrPull: '下拉刷新', ptrRelease: '松开刷新', ptrBusy: '刷新中…',
     recommended: '推荐', quickAdd: '＋ 加选', quickPicked: '✓ 已选',
     quickDownload: '⬇ 直接下载', quickDownloadTip: '按推荐画质（{q}）直接加入下载中心，不用打开详情',
     quickQueued: '已加入下载中心：{t}（{q}）', quickBusy: '这个条目已有任务在跑',
@@ -91,6 +94,9 @@ const I18N = {
     tabAccount: 'Account', tabNetwork: 'Network', tabOutput: 'Output', tabAbout: 'About',
     outputTip: 'Both .mpkg files and raw-asset .zip files are saved here.',
     aboutMeta: 'AppID 431960 · PKGM0020 · Wallpapers from the Wallpaper Engine Workshop',
+    projectTitle: 'Project', projectIssues: 'Issues / Feedback',
+    projectDesc: 'Open source, MIT licensed. Workshop crawl → pure-JS chunked download → Android-ready .mpkg; ships a bundled Node runtime so packing works fully offline.',
+    ptrPull: 'Pull to refresh', ptrRelease: 'Release to refresh', ptrBusy: 'Refreshing…',
     recommended: 'Recommended', quickAdd: '＋ Select', quickPicked: '✓ Selected',
     quickDownload: '⬇ Download', quickDownloadTip: 'Queue it at the recommended quality ({q}) without opening the details',
     quickQueued: 'Queued: {t} ({q})', quickBusy: 'This item already has a running task',
@@ -581,6 +587,83 @@ async function startBatch() {
     $('status').className = 'status';
     $('status').textContent = tr('batchQueued', { n: ok });
   }
+}
+
+/** 滚动收放：上滑（内容往下走）隐藏顶栏和搜索栏，下滑回来再出现 */
+function wireAutoHideHead() {
+  let lastY = window.scrollY;
+  let acc = 0;
+  let hidden = false;
+  const setHidden = (v) => {
+    if (hidden === v) return;
+    hidden = v;
+    document.body.classList.toggle('head-hidden', v);
+  };
+  window.addEventListener('scroll', () => {
+    const y = window.scrollY;
+    if (y < 8) { setHidden(false); lastY = y; acc = 0; return; }
+    const d = y - lastY;
+    lastY = y;
+    if (Math.abs(d) < 6) return;
+    // 同方向累计一段距离再切，避免列表抖动时架子来回跳
+    acc += d;
+    if (acc > 24 && !hidden) { setHidden(true); acc = 0; }
+    else if (acc < -24 && hidden) { setHidden(false); acc = 0; }
+  }, { passive: true });
+  // 点输入框时一定把头部放出来，否则搜不了
+  const search = $('search');
+  if (search) search.addEventListener('focus', () => { setHidden(false); acc = 0; });
+}
+
+/** 首页下拉刷新：列表已在顶部时继续下拉，松手刷新当前筛选 */
+function wirePullToRefresh() {
+  const ptr = $('ptr');
+  const label = $('ptrLabel');
+  if (!ptr) return;
+  let startY = null;
+  let dy = 0;
+  let armed = false;
+  let busy = false;
+  const OPEN = 44;
+  const THRESHOLD = 72;
+  const setY = (v) => {
+    ptr.style.transform = `translateY(${v}px)`;
+    ptr.style.opacity = v > 0 ? '1' : '0';
+  };
+  const reset = () => { startY = null; dy = 0; armed = false; setY(-OPEN); };
+
+  window.addEventListener('touchstart', (e) => {
+    if (busy || e.touches.length !== 1) return;
+    if (window.scrollY > 0) return;
+    if (!$('drawer').classList.contains('hidden') || !$('modal').classList.contains('hidden')) return;
+    startY = e.touches[0].clientY;
+    dy = 0;
+    armed = false;
+  }, { passive: true });
+
+  window.addEventListener('touchmove', (e) => {
+    if (startY == null || busy) return;
+    dy = e.touches[0].clientY - startY;
+    if (dy <= 0 || window.scrollY > 0) { reset(); return; }
+    if (e.cancelable) e.preventDefault();   // 顶部下拉时不要触发系统的 overscroll
+    armed = dy >= THRESHOLD;
+    const pull = Math.min(dy * 0.6, 96);
+    label.textContent = armed ? tr('ptrRelease') : tr('ptrPull');
+    setY(pull);
+  }, { passive: false });
+
+  window.addEventListener('touchend', async () => {
+    if (startY == null) return;
+    const trigger = armed;
+    startY = null;
+    armed = false;
+    if (!trigger) { setY(-OPEN); return; }
+    busy = true;
+    label.textContent = tr('ptrBusy');
+    setY(46);
+    try { await load(); } finally { busy = false; setTimeout(() => setY(-OPEN), 600); }
+  });
+  window.addEventListener('touchcancel', reset);
 }
 
 async function load() {
@@ -1490,6 +1573,9 @@ function wire() {
       $('exitHint').textContent = e.message;
     }
   };
+
+  wireAutoHideHead();
+  wirePullToRefresh();
 
   // 点击遮罩关闭
   $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeSettings(); });

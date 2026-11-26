@@ -48,6 +48,23 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        // 沉浸式状态栏：透明底 + 浅色图标。ROM 默认主题经常给状态栏刷白色，
+        // 这里显式清掉浅色图标标记，让状态栏跟着深色页面走
+        android.view.Window win = getWindow();
+        win.setStatusBarColor(android.graphics.Color.TRANSPARENT);
+        win.setNavigationBarColor(android.graphics.Color.TRANSPARENT);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            win.setDecorFitsSystemWindows(false);
+            android.view.WindowInsetsController c = win.getInsetsController();
+            if (c != null) {
+                c.setSystemBarsAppearance(0,
+                        android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            }
+        } else {
+            win.getDecorView().setSystemUiVisibility(0);
+        }
         requestNotifPermission();
         // 进页面就开始准备 JS 工程（首次/升级要解包 zip），等用户点「本地模式」时通常已经就绪
         NodeRunner.prepareInBackground(getApplicationContext());

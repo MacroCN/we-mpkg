@@ -1,0 +1,25 @@
+we-mpkg 2.4.9-beta.3
+====================
+
+测试版，只发布安卓 APK。本轮按真机反馈做四项调整。
+
+1. 沉浸式状态栏
+   - 之前清单用的是 Theme.Material.Light，状态栏被刷成浅色底，跟深色页面割裂
+   - 新增 AppTheme：透明状态栏/导航栏 + 深色 windowBackground + 关闭 windowLightStatusBar
+   - MainActivity 显式 setStatusBarColor/Transparent、API 30+ 清掉 APPEARANCE_LIGHT_* 标记，兼容各家 ROM 默认值
+
+2. 搜索栏随滚动收放
+   - 上滑（看列表往下翻）隐藏顶栏与搜索栏，下滑立刻回来；回到列表顶部一定展开
+   - 累加同方向位移再切换，避免列表抖动时架子来回跳；点搜索框强制展开
+
+3. 首页下拉刷新
+   - 列表已在顶部时继续下拉，出现「下拉刷新 / 松开刷新 / 刷新中…」提示条，松手后按当前筛选重载
+   - 抽屉/设置弹窗打开时与列表未到顶部时不触发
+
+4. 设置-关于 增加项目信息
+   - 项目地址：GitHub · MacroCN/we-mpkg
+   - 问题反馈：Issues 链接
+   - 项目简介（MIT 许可、纯 JS 下载、安卓内置 Node 运行时离线打包）
+   - 保留原有版本更新检查与关于元信息
+
+其他：compileSdk/targetSdk 维持 36；全量测试 121 通过 / 0 失败 / 1 跳过；assets 已重新打包（buildId 6c58308a…）

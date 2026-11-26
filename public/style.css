@@ -16,6 +16,7 @@
 
 html, body {
   margin: 0;
+  overscroll-behavior-y: contain;
   background: var(--bg);
   color: var(--text);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
@@ -78,6 +79,32 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .primary:disabled { opacity: 0.5; }
 
 /* ---------- 搜索 ---------- */
+/* 下拉刷新：默认藏在视口上方，手指下拉时跟手露出 */
+.ptr {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  margin-top: -44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--dim);
+  background: var(--bg);
+  z-index: 13;
+  pointer-events: none;
+  transform: translateY(-44px);
+  opacity: 0;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+
+/* 滚动时收起/展开顶栏与搜索栏：上滑隐藏、下滑出现 */
+.topbar, .searchbar { transition: transform 0.18s ease; }
+body.head-hidden .topbar { transform: translateY(-100%); }
+body.head-hidden .searchbar { top: 0; transform: translateY(-100%); }
+
 .searchbar {
   display: flex;
   gap: 8px;
@@ -639,3 +666,6 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
 .tabs .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
 .tabpane { display: none; padding-top: 4px; }
 .tabpane.on { display: block; }
+
+/* 关于页的项目信息 */
+.about-title { margin-bottom: 2px; color: var(--text); }

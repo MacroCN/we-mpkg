@@ -10,6 +10,9 @@
 </head>
 <body>
 
+<!-- 下拉刷新提示（只在列表顶部下拉时露出） -->
+<div id="ptr" class="ptr" aria-hidden="true"><span id="ptrLabel">下拉刷新</span></div>
+
 <header class="topbar">
   <div class="brand">
     <span class="logo">WE</span>
@@ -242,6 +245,12 @@
           <button id="exitApp" class="ghost" data-i18n="exitApp">退出程序（关闭后台服务）</button>
         </div>
         <p id="exitHint" class="hint"></p>
+
+        <!-- 项目信息 -->
+        <p class="hint about-title" data-i18n="projectTitle">项目</p>
+        <p class="hint"><a class="link" href="https://github.com/MacroCN/we-mpkg" target="_blank" rel="noreferrer">GitHub · MacroCN/we-mpkg</a></p>
+        <p class="hint"><a class="link" href="https://github.com/MacroCN/we-mpkg/issues" target="_blank" rel="noreferrer" data-i18n="projectIssues">问题反馈 / Issues</a></p>
+        <p class="hint" data-i18n="projectDesc">开源 MIT 许可。抓取创意工坊 → 纯 JS 分块下载 → 转成安卓可用的 .mpkg；安卓端内置 Node 运行时，离线也能在手机上打包。</p>
         <p class="hint" data-i18n="aboutMeta">AppID 431960 · PKGM0020 · 壁纸来源 Wallpaper Engine 创意工坊</p>
       </div>
 
