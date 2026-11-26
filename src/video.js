@@ -97,12 +97,17 @@ function ffmpegCandidates(opts = {}) {
     process.env.WEM_FFMPEG,
     ...nativeCandidates,
     process.env.FFMPEG,
-    path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
-    path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
+    // 官方新版构建优先（.cache/toolchain/ffmpeg，9.x）。
+    // 工坊里的媒体文件不可信：2018 年那版 ffmpeg-lite 是 ≈4.1-dev，
+    // 解码七年间的已知漏洞（容器/解码器一堆 CVE）等于把风险直接暴露给用户，
+    // 所以旧版只留作「新版全都不在」时的兜底，排在最后。
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+    path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg'),
+    // 兜底：老版 ffmpeg-lite（≈4.1-dev，2018 构建）
+    path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
   ];
 }
 
@@ -272,6 +277,7 @@ module.exports = {
   videoMaxWidth,
   targetLongEdge,
   findFfmpeg,
+  ffmpegCandidates,
   probeVideoDims,
   transcodeBuffer,
   transcodeProjectVideo,

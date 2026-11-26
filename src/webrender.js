@@ -34,13 +34,15 @@ const BROWSER_CANDIDATES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ];
 
+// 顺序与 src/video.js 保持一致：官方新版（9.x）在前，2018 的 ffmpeg-lite 垫底。
+// 网页壁纸的音频解码同样要处理不受信的工坊媒体，没有理由退回七年前的老解码器。
 const FFMPEG_CANDIDATES = [
   process.env.WEM_FFMPEG,
   process.env.FFMPEG,
-  path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
-  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
   path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
+  path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
   path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
+  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
 ];
 
 function firstExisting(list, extra = []) {
@@ -671,6 +673,7 @@ module.exports = {
   captureFrames,
   encodeMp4,
   findFfmpeg,
+  FFMPEG_CANDIDATES,
   findBrowser,
   findAudioFile,
   audioShimSource,

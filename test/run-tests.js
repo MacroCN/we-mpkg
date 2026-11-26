@@ -2371,6 +2371,25 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
   }
 })();
 
+test('ffmpeg 候选：官方新版在前，2018 的 ffmpeg-lite 只做兜底', () => {
+  const video = require('../src/video');
+  const webrender = require('../src/webrender');
+  const list = video.ffmpegCandidates().filter(Boolean);
+  const iNew = list.findIndex((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg')));
+  const iLite = list.findIndex((p) => p.includes('ffmpeg-lite'));
+  assert.ok(iNew >= 0, '新版 ffmpeg 应该在候选列表里');
+  assert.ok(iLite >= 0, 'lite 仍保留为兜底');
+  assert.ok(iNew < iLite, '新版必须排在 lite 之前（旧版解码不受信媒体会引入已知漏洞）');
+  const wList = (webrender.FFMPEG_CANDIDATES || []).filter(Boolean);
+  const wNew = wList.findIndex((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg')));
+  const wLite = wList.findIndex((p) => p.includes('ffmpeg-lite'));
+  assert.ok(wNew >= 0 && wLite >= 0 && wNew < wLite, 'webrender 的音频解码路径同样要新版优先');
+  // 被删掉的 ffmpeg-installer 4.1.0（.cache/toolchain/npm-ff）不应该出现在任何候选里
+  for (const p of list.concat(wList)) {
+    assert.ok(!String(p).includes('npm-ff'), 'npm-ff（4.1.0 tarball）不应再被引用');
+  }
+});
+
 async function testAsync(name, fn) {
   try {
     await fn();
