@@ -2454,6 +2454,35 @@ test('首次登录后页面要自己刷新：不掐轮询、重取配置、重�
   assert.ok(status.includes("hasToken ? 'done' : 'idle'"), '登录状态接口要根据 token 判断已登录');
 });
 
+test('脚本里不留开发机绝对路径：node / 工具链 / 调试脚本都自动探测', () => {
+  const root = path.join(__dirname, '..');
+  const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+  // 调试脚本：相对 __dirname
+  const tw = read(path.join('tools', 'test-webrender.js'));
+  assert.ok(tw.includes('__dirname'), 'test-webrender.js 要用相对路径');
+  assert.ok(!/D:[\/]SteamCMD/.test(tw), 'test-webrender.js 不能写死开发机路径');
+  // 桌面打包脚本：node 从参数或 PATH 探测
+  const portable = read('build-portable.ps1');
+  assert.ok(!/\$NodeExe\s*=\s*'[A-Za-z]:/.test(portable), 'build-portable.ps1 的 NodeExe 不能再有绝对路径默认值');
+  assert.ok(portable.includes('Get-Command node'), 'node 要能从 PATH 探测');
+  // 安卓打包脚本：工具链 / node 都有明确来源与报错
+  const apk = read(path.join('android', 'build-apk.ps1'));
+  assert.ok(!/\$Toolchain\s*=\s*'[A-Za-z]:/.test(apk), 'build-apk.ps1 的 Toolchain 不能再默认绝对路径');
+  assert.ok(apk.includes('WE_MPKG_TOOLCHAIN'), '要支持环境变量覆盖');
+  assert.ok(apk.includes('Get-Command node'), 'node 要能从 PATH 探测');
+  const bat = read(path.join('android', 'install-and-test.bat'));
+  const tcLines = bat.split(/\r?\n/).map((l) => l.trim()).filter((l) => l.startsWith('set "TC='));
+  assert.ok(tcLines.every((l) => !/^set "TC=[A-Za-z]:/.test(l)), 'install-and-test.bat 不能无条件把某个盘符路径当默认值');
+  assert.ok(bat.includes('if exist "D:\\SteamCMD\\toolchain"'), '常见位置只能出现在“存在才用”的判断里');
+  assert.ok(bat.includes('WE_MPKG_TOOLCHAIN'), '要支持环境变量覆盖');
+  // 图标脚本：相对脚本自身
+  const icons = read(path.join('android', 'make-icons.ps1'));
+  assert.ok(!/D:\\SteamCMD/.test(icons), 'make-icons.ps1 不能写死开发机路径');
+  assert.ok(icons.includes('$PSScriptRoot'), '路径要相对脚本自身');
+  // 绿色版脚本内置的 ffmpeg 只能是新版（不能回到 lite）
+  assert.ok(!portable.includes('ffmpeg-lite'), 'build-portable.ps1 不能再用 lite');
+});
+
 async function testAsync(name, fn) {
   try {
     await fn();

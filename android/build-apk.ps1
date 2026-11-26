@@ -1,12 +1,21 @@
 ﻿# 一键构建 Android APK
 # 用法: powershell -ExecutionPolicy Bypass -File build-apk.ps1
 param(
-    [string]$Toolchain = 'D:\SteamCMD\toolchain',
+    [string]$Toolchain = '',
+    [string]$NodeExe = '',
     [ValidateSet('debug', 'release')]
     [string]$Variant = 'debug'
 )
 
 $ErrorActionPreference = 'Stop'
+
+# 工具链位置：-Toolchain > 环境变量 WE_MPKG_TOOLCHAIN > ANDROID_SDK_ROOT 的上级目录 > 明确报错。
+# 不再把某个开发机的绝对路径当默认值。
+if (-not $Toolchain) { $Toolchain = $env:WE_MPKG_TOOLCHAIN }
+if (-not $Toolchain -and $env:ANDROID_SDK_ROOT) { $Toolchain = Split-Path -Parent $env:ANDROID_SDK_ROOT }
+if (-not $Toolchain -or -not (Test-Path $Toolchain)) {
+    throw "找不到工具链目录。用 -Toolchain <目录> 指定，或设置环境变量 WE_MPKG_TOOLCHAIN（里面应有 android-sdk 与 ndk）"
+}
 $projRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $appDir = Join-Path $PSScriptRoot 'app'
 $jniDir = Join-Path $appDir 'src\main\jniLibs\arm64-v8a'
@@ -112,9 +121,9 @@ $dest = Join-Path $outDir 'we-mpkg.apk'
 
 # --- 16 KB 页对齐：.so 不压缩存储，数据区需落在 16 KB 边界，之后再签名 ---
 Write-Host "[6/6] 16 KB 对齐 + 重新签名"
-$node = 'D:\SteamCMD\nodejs\node.exe'
-if (-not (Test-Path $node)) { $node = (Get-Command node -ErrorAction SilentlyContinue).Source }
-if (-not $node) { throw "找不到 node.exe" }
+$node = $NodeExe
+if (-not $node) { $node = (Get-Command node -ErrorAction SilentlyContinue).Source }
+if (-not $node -or -not (Test-Path $node)) { throw "找不到 node.exe：用 -NodeExe <路径> 指定，或确保 node 在 PATH 里" }
 $zipalign16 = Join-Path $projRoot 'tools\zipalign16.js'
 $apksigner = Join-Path (Join-Path $Toolchain 'android-sdk\build-tools\34.0.0') 'apksigner.bat'
 $aligned = Join-Path $outDir '_aligned.apk'

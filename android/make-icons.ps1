@@ -1,8 +1,11 @@
 # 从 1536×1536 的原始图生成安卓 mipmap 图标（圆角方形 + 圆形两种）
+# 路径全部相对脚本自身，输入图默认 logs/icon-src.png，可用 -Src 指定
+param([string]$Src = '')
 Add-Type -AssemblyName System.Drawing
 
-$src = 'D:\SteamCMD\we-mpkg\logs\icon-src.png'
-$resRoot = 'D:\SteamCMD\we-mpkg\android\app\src\main\res'
+$projRoot = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$src = if ($Src) { $Src } else { Join-Path $projRoot 'logs\icon-src.png' }
+$resRoot = Join-Path $PSScriptRoot 'app\src\main\res'
 $sizes = @{ 'mdpi' = 48; 'hdpi' = 72; 'xhdpi' = 96; 'xxhdpi' = 144; 'xxxhdpi' = 192 }
 
 function New-RoundedBitmap {
@@ -52,7 +55,7 @@ foreach ($k in $sizes.Keys) {
 }
 # 512 的预览图（文档/商店用）
 $big = New-RoundedBitmap -img $img -size 512 -radiusRatio 0.18 -circle $false
-$big.Save('D:\SteamCMD\we-mpkg\assets\app-icon-512.png', [System.Drawing.Imaging.ImageFormat]::Png)
+$big.Save((Join-Path $projRoot 'assets\app-icon-512.png'), [System.Drawing.Imaging.ImageFormat]::Png)
 $big.Dispose()
 
 # ---------- 自适应图标（Android 8+）：前景 108dp 画布，内容约占 72dp ----------

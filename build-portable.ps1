@@ -9,10 +9,21 @@
 #
 param(
   [string]$Version = '1.0.0',
-  [string]$NodeExe = 'D:\SteamCMD\nodejs\node.exe'
+  [string]$NodeExe = ''
 )
 
 $ErrorActionPreference = 'Stop'
+# node.exe 从哪来：-NodeExe 参数 > PATH 里的 node（CI 就是这么用的）> 报错。
+# 以前默认值写死过某个开发机的路径，换台机器直接跑不起来。
+if (-not $NodeExe) {
+  $cmd = Get-Command node -ErrorAction SilentlyContinue
+  if ($cmd) { $NodeExe = $cmd.Source }
+}
+if (-not $NodeExe -or -not (Test-Path $NodeExe)) {
+  throw '找不到 node.exe：用 -NodeExe <路径> 指定，或确保 node 在 PATH 里'
+}
+Write-Host "==> node: $NodeExe"
+
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $dst = Join-Path $root 'dist\we-mpkg-portable'
 $robocopy = Join-Path $env:SystemRoot 'System32\robocopy.exe'

@@ -7,7 +7,7 @@ rem 1) node already on PATH
 where node >nul 2>nul
 if not errorlevel 1 set "NODE_EXE=node"
 
-rem 2) portable build shipped next to this project: D:\SteamCMD\nodejs\node.exe
+rem 2) portable build: put node.exe anywhere and pass -NodeExe, or just have node on PATH
 if not defined NODE_EXE if exist "%~dp0..\nodejs\node.exe" set "NODE_EXE=%~dp0..\nodejs\node.exe"
 
 rem 3) common install locations
