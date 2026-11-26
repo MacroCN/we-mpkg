@@ -210,7 +210,7 @@ async function getPublishedFileDetails(client, ids) {
  * steam-user 自带的 downloadFile 用 'w' 打开文件（会截断）且每次都把所有 chunk 重下一遍，
  * 意外退出后只能从头再来。这里改成：
  *   - 文件按 r+ 打开、ftruncate 到完整大小，chunk 按自己的 offset 直接写进去；
- *   - 每下完一个 chunk 把它的 sha 记到 <文件>.part.json，下次启动只补缺的 chunk；
+ *   - 每下完一个 chunk 把它的 offset 记到 <文件>.part.json，下次启动只补缺的 chunk；
  *   - 全部下完后按 manifest 的 sha1 校验整个文件，再删掉 .part.json。
  */
 async function downloadFileResumable(client, fileManifest, target, opts = {}) {
