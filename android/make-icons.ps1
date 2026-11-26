@@ -1,4 +1,4 @@
-# 从 1536×1536 的原始图生成安卓 mipmap 图标（圆角方形 + 圆形两种）
+﻿# 从 1536×1536 的原始图生成安卓 mipmap 图标（圆角方形 + 圆形两种）
 # 路径全部相对脚本自身，输入图默认 logs/icon-src.png，可用 -Src 指定
 param([string]$Src = '')
 Add-Type -AssemblyName System.Drawing

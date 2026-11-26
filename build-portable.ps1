@@ -1,4 +1,4 @@
-# 打绿色版（免安装、自带 Node 运行时）
+﻿# 打绿色版（免安装、自带 Node 运行时）
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\build-portable.ps1
 #   powershell ... -File .\build-portable.ps1 -Version 1.1.0

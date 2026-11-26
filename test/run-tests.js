@@ -2483,6 +2483,21 @@ test('脚本里不留开发机绝对路径：node / 工具链 / 调试脚本都�
   assert.ok(!portable.includes('ffmpeg-lite'), 'build-portable.ps1 不能再用 lite');
 });
 
+test('PowerShell 脚本必须带 UTF-8 BOM（否则 Windows PowerShell 5.1 会把中文注释解成乱码并报语法错）', () => {
+  const root = path.join(__dirname, '..');
+  const files = [];
+  for (const dir of ['', 'android']) {
+    for (const f of fs.readdirSync(path.join(root, dir))) {
+      if (f.endsWith('.ps1')) files.push(path.join(dir, f));
+    }
+  }
+  assert.ok(files.length >= 3, '应该能找到几个 ps1 脚本');
+  for (const f of files) {
+    const head = fs.readFileSync(path.join(root, f)).subarray(0, 3);
+    assert.ok(head[0] === 0xEF && head[1] === 0xBB && head[2] === 0xBF, `${f} 缺少 UTF-8 BOM`);
+  }
+});
+
 async function testAsync(name, fn) {
   try {
     await fn();
