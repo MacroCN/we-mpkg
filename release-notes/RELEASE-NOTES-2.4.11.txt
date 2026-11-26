@@ -1,0 +1,29 @@
+we-mpkg 2.4.11
+==============
+
+正式版。桌面端的 ffmpeg 策略变了：不再内置/回退 2018 年的旧版本，缺的时候直接告诉你去哪下、放哪儿。
+
+## 为什么删掉旧版
+工坊里的媒体文件是不可信的（谁都能上传），2018 年那版 ffmpeg 是 ≈4.1-dev 构建，
+用它解 2026 年的文件，等于把七年里累积的容器/解码器漏洞全部暴露给用户。
+以前的候选顺序会把旧版排在新版前面，导致明明装了 9.x 也照样命中老解码器。
+
+## 现在怎么找 ffmpeg
+只认新版，顺序：WEM_FFMPEG → FFMPEG → .cache\toolchain\ffmpeg\bin\ffmpeg.exe
+→ tools\ffmpeg\ffmpeg.exe（绿色版内置）→ bin → PATH。
+视频纹理转码（统一下降到目标尺寸）与网页壁纸音频解码（getUserMedia 假麦克风）共用这套顺序。
+
+## 缺 ffmpeg 时怎么提示
+不再静默降级成“原样保留”，而是一条能照做的指引，出现在打包警告、日志、以及“编 mp4 失败”的错误里：
+  1. 下载 https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+     （其它平台：https://ffmpeg.org/download.html）
+  2. 解压取 bin\ffmpeg.exe
+  3. 放到 <项目>\.cache\toolchain\ffmpeg\bin\ffmpeg.exe（绿色版放 <解压目录>\tools\ffmpeg\ffmpeg.exe），
+     或设环境变量 WEM_FFMPEG=<完整路径>
+  4. 重启 we-mpkg
+脱离原样保留的仍是老规矩：不假装成功，打包结果里明确写“原样保留 + 手机端可能读不出画面”。
+
+## 其它
+- 绿色版构建只从 .cache\toolchain\ffmpeg\bin 取官方新版，CI 缓存目录从 ffmpeg-lite 改成 ffmpeg/bin
+- 发版说明统一迁到仓库 release-notes/ 目录（不影响已发布 Release 的正文）
+- 测试 128 通过 / 0 失败 / 1 跳过（新增：候选里不得再出现 ffmpeg-lite、缺失提示必须含下载地址与路径、根目录不得散落 RELEASE-NOTES）
