@@ -345,10 +345,13 @@ function renderFilters() {
 
     const head = document.createElement('div');
     head.className = 'fgroup-head';
-    // 筛选一律用 Steam 的原始英文名：翻译过的标签名拿去请求会筛不到东西
-    const label = g.name;
+    // 只改显示：分组名走 GROUP_LABEL_KEY 翻译，标签走 tagLabel；
+    // 请求里仍然用 Steam 原始英文名（g.name / t.name），翻译过的名字发过去会筛不到东西
+    const label = state.lang === 'zh' && GROUP_LABEL_KEY[g.name]
+      ? tr(GROUP_LABEL_KEY[g.name]) : g.name;
     const cnt = set.size;
-    head.innerHTML = `<span>${esc(label)}${cnt ? `<span class="cnt">${esc(Array.from(set).join(' / '))}</span>` : ''}</span><span class="caret">›</span>`;
+    const picked = Array.from(set).map(tagLabel).join(' / ');
+    head.innerHTML = `<span>${esc(label)}${cnt ? `<span class="cnt">${esc(picked)}</span>` : ''}</span><span class="caret">›</span>`;
     head.onclick = () => {
       if (state.openGroups.has(g.name)) state.openGroups.delete(g.name);
       else state.openGroups.add(g.name);
@@ -360,7 +363,7 @@ function renderFilters() {
     for (const t of g.tags) {
       const chip = document.createElement('span');
       chip.className = 'chip' + (set.has(t.name) ? ' on' : '');
-      chip.textContent = t.name;
+      chip.textContent = tagLabel(t.name);
       chip.onclick = () => {
         if (set.has(t.name)) set.delete(t.name);
         else set.add(t.name);

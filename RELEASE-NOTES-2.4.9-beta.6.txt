@@ -1,0 +1,15 @@
+we-mpkg 2.4.9-beta.6
+====================
+
+测试版，只发布安卓 APK。
+
+筛选栏中文化
+- 分组名（Age Rating / Genre / Resolution / Category / Asset Type / Asset Genre / Script Type / Type）
+  改用 GROUP_LABEL_KEY 的中文译名显示：年龄分级 / 类型 / 分辨率 / 类别 / 素材类型 / 素材题材 / 脚本类型 / 类型
+- 标签 chip（Everyone / Questionable / Mature / Anime / Sci-Fi / Ultrawide 等）走 tagLabel 统一翻译
+- 已选标签在分组标题后的计数提示也一起中文化
+- 只改显示层：请求 /api/browse 时 groups 里传的仍是 Steam 官方原始英文名（g.name / t.name），
+  组内「或」、组间「与」的语义不变，筛选结果与官方网页一致
+- 英文界面（EN）不受影响，仍显示原始英文名
+
+其他：compileSdk/targetSdk 维持 36；全量测试 121 通过 / 0 失败 / 1 跳过；assets 已重打（buildId 9a4d6da1…）
