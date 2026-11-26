@@ -52,13 +52,33 @@ function isAndroidRuntime(ffmpeg) {
     || /libffmpeg\.so$/.test(String(ffmpeg || ''));
 }
 
+function nativeLibDebug() {
+  const dir = process.env.WEM_NATIVE_LIB_DIR || nativeLibDirFromMaps();
+  if (!dir) return 'nativeLibraryDir=未知';
+  let names = '';
+  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.so')).join(','); } catch { names = '不可读'; }
+  return `${dir} [${names}]`;
+}
+
+function nativeLibDirFromMaps() {
+  try {
+    // Android 上 libnode.so / libwempkg-node.so 一定被映射进进程，
+    // 从 /proc/self/maps 反推 nativeLibraryDir，避免只依赖 JNI 传进来的环境变量。
+    const maps = fs.readFileSync('/proc/self/maps', 'utf8');
+    const m = maps.match(/(\/[^\s]+)\/lib(?:node|wempkg-node)\.so/);
+    return m ? path.dirname(m[1]) : null;
+  } catch {
+    return null;
+  }
+}
+
 function ffmpegCandidates(opts = {}) {
-  const nativeDir = process.env.WEM_NATIVE_LIB_DIR;
+  const nativeDir = process.env.WEM_NATIVE_LIB_DIR || nativeLibDirFromMaps();
   return [
     opts.ffmpeg,
     process.env.WEM_FFMPEG,
-    process.env.FFMPEG,
     nativeDir ? path.join(nativeDir, 'libffmpeg.so') : null,
+    process.env.FFMPEG,
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
@@ -187,7 +207,10 @@ function transcodeProjectVideo(projectDir, preset, opts = {}) {
 
   const ffmpeg = opts.ffmpeg || findFfmpeg(opts);
   if (!ffmpeg) {
-    warnings.push(`video 类型视频需要降分辨率，但本机没找到 ffmpeg，原样保留: ${rel}`);
+    const hint = process.env.WEM_FFMPEG
+      ? `WEM_FFMPEG=${process.env.WEM_FFMPEG}`
+      : `nativeLibraryDir=${nativeLibDebug()}`;
+    warnings.push(`video 类型视频需要降分辨率，但本机没找到 ffmpeg，原样保留: ${rel}（${hint}）`);
     return { changed: false, warnings };
   }
   const dims = probeVideoDims(ffmpeg, src, opts);
