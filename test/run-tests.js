@@ -2099,6 +2099,14 @@ await testAsync('cachegc：临时目录 / 着色器缓存 / 续转计划 / 日�
   for (let i = 0; i < 4; i++) mkPlan(`stale${i}`, 5 * DAY, null);
   // 双条件用例：目录 40 天没动，但指纹是 2 天前更新的 → 说明源条目后来又续转过，不能删
   mkPlan('keepByStamp', 40 * DAY, 2 * DAY);
+  // 名额外的计划：目录 5 天、指纹 4 天 —— 两个都超过 3 天线，应当清掉（旧的 30 天指纹门槛会漏删）
+  mkPlan('evictByShortStamp', 5 * DAY, 4 * DAY);
+
+  // 主打包临时目录 pack-<ts>-xxx 属于临时残骸；pack-plan 目录本身不能被误清
+  const packTmp = path.join(cacheDir, 'pack-1700000000-abcd');
+  fs.mkdirSync(packTmp, { recursive: true });
+  fs.writeFileSync(path.join(packTmp, 'scene.json'), '{}');
+  fs.utimesSync(packTmp, at(12 * DAY), at(12 * DAY));
 
   // 日志：一个 12 分钟没动的大文件（可截尾）、一个刚写的大文件（正在写，跳过）
   const quietLog = path.join(logDir, 'dlhub.log');
@@ -2117,10 +2125,13 @@ await testAsync('cachegc：临时目录 / 着色器缓存 / 续转计划 / 日�
 
   assert.ok(!fs.existsSync(path.join(cacheDir, 'pkg-old')), '12 天前的临时目录要删');
   assert.ok(fs.existsSync(path.join(cacheDir, 'pkg-new')), '1 小时前的临时目录算在用，保留');
+  assert.ok(!fs.existsSync(packTmp), '12 天前的 pack- 临时目录（主打包残骸）也要清');
+  assert.ok(fs.existsSync(planRoot), 'pack-plan 目录不能被临时前缀规则误清');
   assert.ok(fs.existsSync(itemDir), '着色器 blob 缓存 5 天不该按临时目录删');
   for (let i = 0; i < 8; i++) assert.ok(fs.existsSync(path.join(planRoot, `new${i}`)), '名额内的新计划都要留');
   for (let i = 0; i < 4; i++) assert.ok(!fs.existsSync(path.join(planRoot, `stale${i}`)), '名额外的陈旧计划要清');
   assert.ok(fs.existsSync(path.join(planRoot, 'keepByStamp')), '指纹还新鲜的计划不能只看目录 mtime 就删');
+  assert.ok(!fs.existsSync(path.join(planRoot, 'evictByShortStamp')), '名额外的计划：指纹超 3 天就该清，不受 30 天线约束');
   const left = fs.readdirSync(planRoot).length;
   assert.strictEqual(left, 9, `pack-plan 应剩 9 份（8 新 + 1 靠指纹保住），实际 ${left}`);
   assert.ok(fs.statSync(quietLog).size < 1024 * 1024, '静默的大日志应被截尾');

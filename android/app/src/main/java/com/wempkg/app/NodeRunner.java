@@ -269,8 +269,9 @@ public final class NodeRunner {
             while ((e = zin.getNextEntry()) != null) {
                 String name = e.getName();
                 File out = new File(dest, name);
-                // 防御 zip-slip：条目名里不许出现 ..
-                if (!out.getCanonicalPath().startsWith(dest.getCanonicalPath())) {
+                // 防御 zip-slip：条目必须落在 dest 目录内（带分隔符比较，避免 prefix 兄弟目录被误放行）
+                String destRoot = dest.getCanonicalPath() + File.separator;
+                if (!out.getCanonicalPath().startsWith(destRoot)) {
                     throw new IOException("非法的 zip 条目: " + name);
                 }
                 if (e.isDirectory()) {

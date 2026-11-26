@@ -20,7 +20,7 @@ const DAY = 24 * 3600 * 1000;
 
 const DEFAULT = {
   // 临时目录（打包 / 渲染中间产物）
-  tempPrefixes: ['pkg-', 'webrender'],
+  tempPrefixes: ['pkg-', 'pack-', 'webrender'],
   tempMaxAgeMs: 3 * DAY,
   tempKeepNewest: 2,
   tempActiveMs: 30 * 60 * 1000,
@@ -109,7 +109,8 @@ function pruneCache(cacheDir, opts = {}) {
   };
 
   // 1) 打包 / 渲染临时目录
-  sweep(listDirs(cacheDir, (n) => o.tempPrefixes.some((p) => n.startsWith(p))), {
+  // 注意排除 pack-plan：它是续转计划目录，不是 pack-<ts>-xxx 临时目录，不能被当临时残骸清掉
+  sweep(listDirs(cacheDir, (n) => n !== 'pack-plan' && o.tempPrefixes.some((p) => n.startsWith(p))), {
     activeMs: o.tempActiveMs,
     maxAgeMs: o.tempMaxAgeMs,
     keepNewest: o.tempKeepNewest,
@@ -135,9 +136,11 @@ function pruneCache(cacheDir, opts = {}) {
     const stampAge = p.stampAt ? now - p.stampAt : Infinity;
     // 名额内：只有 30 天没动且指纹也过期才删
     // 名额外的：3 天没动 + 指纹过期就清
-    const needDirAge = rank < o.planKeepNewest ? o.planDirMaxAgeMs : o.planEvictMinAgeMs;
+    const inQuota = rank < o.planKeepNewest;
+    const needDirAge = inQuota ? o.planDirMaxAgeMs : o.planEvictMinAgeMs;
+    const needStampAge = inQuota ? o.planDirMaxAgeMs : o.planEvictMinAgeMs;
     if (age < needDirAge) return;
-    if (stampAge < o.planDirMaxAgeMs) return;
+    if (stampAge < needStampAge) return;
     const bytes = dirSize(p.abs);
     if (rmDir(p.abs)) { result.removed++; result.bytes += bytes; }
   });
