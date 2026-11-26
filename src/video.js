@@ -101,7 +101,13 @@ function probeVideoDims(ffmpeg, file, opts = {}) {
     return parseVideoDims(out);
   } catch (e) {
     // ffmpeg -i 不带输出文件时固定以 1 退出，尺寸信息在 stderr 里
-    return parseVideoDims((e && (e.stderr || e.stdout)) || '');
+    const text = (e && (e.stderr || e.stdout)) || '';
+    const dims = parseVideoDims(text);
+    if (!dims && opts.onLog) {
+      const first = String(text || e.message || '').split('\n').find((l) => l.trim()) || '无法执行 ffmpeg';
+      opts.onLog(`  ffmpeg 探测视频失败: ${first.trim().slice(0, 240)}`);
+    }
+    return dims;
   }
 }
 
@@ -180,7 +186,11 @@ function transcodeProjectVideo(projectDir, preset, opts = {}) {
   }
 
   const ffmpeg = opts.ffmpeg || findFfmpeg(opts);
-  const dims = ffmpeg ? probeVideoDims(ffmpeg, src, opts) : null;
+  if (!ffmpeg) {
+    warnings.push(`video 类型视频需要降分辨率，但本机没找到 ffmpeg，原样保留: ${rel}`);
+    return { changed: false, warnings };
+  }
+  const dims = probeVideoDims(ffmpeg, src, opts);
   const target = targetLongEdge(dims && dims.width, dims && dims.height, preset, opts);
   if (!dims) {
     warnings.push(`无法读取视频尺寸，跳过转码: ${rel}`);
@@ -188,10 +198,6 @@ function transcodeProjectVideo(projectDir, preset, opts = {}) {
   }
   if (!target) {
     onLog(`  视频 ${rel} ${dims.width}x${dims.height}，当前画质档位无需降分辨率`);
-    return { changed: false, warnings };
-  }
-  if (!ffmpeg) {
-    warnings.push(`视频 ${rel} ${dims.width}x${dims.height} 需要缩到 ${target}px，但没找到 ffmpeg，原样保留`);
     return { changed: false, warnings };
   }
 
