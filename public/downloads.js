@@ -2,111 +2,53 @@
 /**
  * 下载中心页面：轮询下载中心进程的 /api/hub/jobs，渲染进度条与操作。
  * 这个页面跑在独立端口（默认 3091）上，关掉主界面不影响任务。
+ *
+ * 任务的状态文案 / meta / 动作按钮和主界面的浮层共用 public/joblib.js，
+ * 这里只负责把 view(job) 画成这个页面自己的卡片样式。
  */
 
 const POLL_MS = 1000;
 const $ = (id) => document.getElementById(id);
+const J = window.WE_JOBS;
 
 // 手机远程连接时 localhost 会指向手机自己，必须按当前页面主机拼主界面地址
+function mainBase() {
+  return `${location.protocol === 'https:' ? 'https:' : 'http:'}//${location.hostname}:3090`;
+}
 (function fixMainLink() {
   const a = $('mainLink');
   if (!a) return;
-  const scheme = location.protocol === 'https:' ? 'https:' : 'http:';
-  a.href = `${scheme}//${location.hostname}:3090/`;
+  a.href = mainBase() + '/';
 })();
 
-const STATE_TEXT = {
-  queued: '排队中',
-  downloading: '下载中',
-  packing: '打包中',
-  done: '已完成',
-  failed: '失败',
-  cancelled: '已取消',
-};
-
-const PHASE_TEXT = {
-  prepare: '解包与检查',
-  download: '下载',
-  convert: '纹理转换',
-  shader: '着色器适配',
-  reference: '替换参考包资源',
-  write: '写入 mpkg',
-  packing: '打包中',
-  done: '完成',
-  queued: '排队中',
-};
-
-function esc(s) {
-  return String(s === undefined || s === null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-}
+function esc(s) { return J.esc(s); }
+function human(n) { return J.human(n); }
 
 /** 安卓外壳的原生桥：有它才能直接拉起壁纸引擎导入 */
-function hasBridge() {
-  return !!(window.Android && typeof window.Android.openMpkg === 'function');
+function bridge() {
+  if (!window.Android) return null;
+  if (typeof window.Android.openMpkg !== 'function' && typeof window.Android.openFile !== 'function') return null;
+  return window.Android;
 }
 
-function human(n) {
-  n = Number(n) || 0;
-  if (n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
-  if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
-  if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
-  return n + ' B';
-}
-
-function secs(n) {
-  if (n === null || n === undefined || !Number.isFinite(n)) return '';
-  if (n <= 0) return '0s';
-  if (n < 60) return Math.round(n) + 's';
-  const m = Math.floor(n / 60);
-  const s = Math.round(n % 60);
-  return m + 'm' + (s ? s + 's' : '');
-}
-
-function phaseLabel(j) {
-  const p = j.progress || {};
-  if (j.paused) return '已暂停 · 已下的分块保留，点「继续」接着下';
-  const base = PHASE_TEXT[p.phase] || STATE_TEXT[j.state] || j.state;
-  return p.detail && p.detail !== base ? `${base} · ${p.detail}` : base;
-}
-
-/** 进度条：有百分比画实心条，没有就画流动的不确定条 */
-function barHtml(percent, cls = '') {
-  if (percent === null || percent === undefined) {
-    return `<div class="bar indeterminate ${cls}"><i></i></div>`;
-  }
-  return `<div class="bar ${cls}"><i style="width:${Math.max(1, Math.min(100, percent))}%"></i></div>`;
-}
-
-function stateClass(state) {
-  return `st-${state}`;
+/** 阶段那行的文案：暂停 / 阶段名 / 明细拼一起（判定在 joblib 里） */
+function phaseLabel(v) {
+  if (v.paused) return v.state === 'downloading' ? '已暂停 · 已下的分块保留，点「继续」接着下' : '已暂停';
+  return v.phase || v.stateText;
 }
 
 function renderJob(j) {
-  const p = j.progress || {};
-  const isRun = j.state === 'downloading' || j.state === 'packing' || j.state === 'queued';
-  const percent = j.state === 'done' ? 100 : (p.percent === undefined ? null : p.percent);
-  const meta = [];
-  if (p.total) meta.push(`${human(p.bytes || 0)} / ${human(p.total)}`);
-  else if (p.bytes) meta.push(human(p.bytes));
-  if (isRun && p.speed && !j.paused) meta.push(`${human(p.speed)}/s`);
-  if (isRun && p.eta && !j.paused) meta.push(`剩 ${secs(p.eta)}`);
-  if (p.phase === 'convert' && p.total) meta.push(`${p.done || 0}/${p.total} 张`);
-  if (j.size && j.state === 'done') meta.push(human(j.size));
-  if (j.result && j.result.type) meta.push(j.result.type);
-
-  const actions = [];
-  if (isRun && j.state === 'downloading' && (!p.phase || p.phase === 'download') && (!j.engine || j.engine === 'steamjs')) {
-    actions.push(j.paused
-      ? `<button class="ghost" data-act="resume" data-id="${esc(j.id)}">继续</button>`
-      : `<button class="ghost" data-act="pause" data-id="${esc(j.id)}">暂停</button>`);
-  }
-  if (isRun) actions.push(`<button class="ghost" data-act="cancel" data-id="${esc(j.id)}">取消</button>`);
-  if (j.state === 'failed' || j.state === 'cancelled') actions.push(`<button class="ghost" data-act="retry" data-id="${esc(j.id)}">重试</button>`);
-  actions.push(`<button class="ghost" data-act="forget" data-id="${esc(j.id)}">移除</button>`);
-  if (j.state === 'done' && hasBridge() && j.outPath) actions.push(`<button class="ghost small" data-act="import" data-id="${esc(j.id)}">导入壁纸引擎</button>`);
-  else if (j.state === 'done' && j.outFile) actions.push(`<a class="download small" href="api/hub/file/${encodeURIComponent(j.id)}">保存 .mpkg</a>`);
-  if (j.state === 'done' && j.rawDir) actions.push(`<span class="dl-path" title="${esc(j.rawDir)}">已下载：${esc(j.rawDir)}</span>`);
+  const v = J.view(j, { bridge: bridge(), reveal: false, fileBase: 'api/hub/file/' });
+  const actions = v.actions.map((a) => {
+    if (a.act === 'save') {
+      return `<a class="download small" href="${a.href}" download>${esc(a.label)}</a>`;
+    }
+    return `<button class="ghost" data-act="${a.act}" data-id="${esc(j.id)}">${esc(a.label)}</button>`;
+  });
+  const err = v.error
+    ? `<div class="dl-err">✘ ${esc(v.error)}${v.errorText ? ` · ${esc(v.errorText)}` : ''}</div>` : '';
+  const warnings = v.warnings.length
+    ? `<div class="dl-warn">⚠ ${esc(v.warnings.slice(0, 3).join('；'))}${v.warnings.length > 3 ? ' …' : ''}</div>` : '';
 
   const tex = j.result && j.result.tex;
   const extra = [];
@@ -116,23 +58,19 @@ function renderJob(j) {
   if (j.result && j.result.audio && j.result.audio.removed) extra.push(`音频剥离 ${j.result.audio.removed}`);
   if (j.result && j.result.shader && j.result.shader.rewritten) extra.push(`着色器改写 ${j.result.shader.rewritten}`);
 
-  const warnings = j.result && j.result.warnings && j.result.warnings.length
-    ? `<div class="dl-warn">⚠ ${esc(j.result.warnings.slice(0, 3).join('；'))}${j.result.warnings.length > 3 ? ' …' : ''}</div>` : '';
-  const err = j.error ? `<div class="dl-err">✘ ${esc(j.error)}</div>` : '';
-
   return `
-    <article class="dl-card ${stateClass(j.state)}" data-id="${esc(j.id)}">
+    <article class="dl-card st-${esc(v.state)}" data-id="${esc(j.id)}">
       <div class="dl-card-head">
         <div class="dl-card-title">
-          <span class="st ${stateClass(j.state)}">${esc(j.paused ? '已暂停' : (STATE_TEXT[j.state] || j.state))}</span>
-          <strong>${esc(j.title)}</strong>
-          <span class="dl-sub">#${esc(j.itemId)}</span>
+          <span class="st st-${esc(v.state)}">${esc(v.badge)}</span>
+          <strong>${esc(v.title)}</strong>
+          <span class="dl-sub">#${esc(v.itemId)}</span>
         </div>
         <div class="dl-card-actions">${actions.join('')}</div>
       </div>
-      <div class="dl-phase"><span>${esc(phaseLabel(j))}</span><span class="dl-pct">${percent === null ? '' : percent + '%'}</span></div>
-      ${barHtml(percent)}
-      <div class="dl-meta">${esc(meta.join(' · '))}</div>
+      <div class="dl-phase"><span>${esc(phaseLabel(v))}</span><span class="dl-pct">${v.pct === null ? '' : v.pct + '%'}</span></div>
+      ${v.bar}
+      <div class="dl-meta">${esc(v.metaText)}</div>
       ${err}${warnings}
       ${extra.length ? `<div class="dl-meta">${esc(extra.join(' · '))}</div>` : ''}
       ${j.log && j.log.length ? `<details class="dl-log"><summary>日志（${j.log.length} 行）</summary><pre>${esc(j.log.join('\n'))}</pre></details>` : ''}
@@ -142,14 +80,6 @@ function renderJob(j) {
 let lastFingerprint = '';
 let lastJobs = [];
 
-function fingerprint(jobs) {
-  return JSON.stringify(jobs.map((j) => [
-    j.id, j.state, !!j.paused, j.progress && j.progress.percent,
-    j.progress && j.progress.bytes, j.error, j.log && j.log.length,
-    j.result && j.result.warnings && j.result.warnings.length,
-  ]));
-}
-
 async function tick() {
   try {
     const r = await fetch('api/hub/jobs', { cache: 'no-store' });
@@ -157,7 +87,7 @@ async function tick() {
     const data = await r.json();
     const jobs = data.jobs || [];
     lastJobs = jobs;
-    const fp = fingerprint(jobs);
+    const fp = J.fingerprint(jobs);
     $('dl-stat').textContent = `${data.running}/${data.maxConcurrent} 并发 · 共 ${jobs.length} 条`;
     $('dl-empty').classList.toggle('hidden', jobs.length > 0);
     if (fp !== lastFingerprint) {
@@ -182,9 +112,9 @@ async function loadOutputs() {
     const d = await r.json();
     $('dl-out-dir').textContent = d.dir || '';
     const files = d.files || [];
-    const mainBase = `${location.protocol === 'https:' ? 'https:' : 'http:'}//${location.hostname}:3090`;
+    const base = `${location.protocol === 'https:' ? 'https:' : 'http:'}//${location.hostname}:3090`;
     $('dl-out-list').innerHTML = files.length
-      ? files.slice(0, 30).map((f) => `<a class="dl-out" href="${mainBase}/api/download-local/${encodeURIComponent(f.name)}" title="${esc(f.name)}">${esc(f.name)}<span>${human(f.size)}</span></a>`).join('')
+      ? files.slice(0, 30).map((f) => `<a class="dl-out" href="${base}/api/download-local/${encodeURIComponent(f.name)}" title="${esc(f.name)}">${esc(f.name)}<span>${human(f.size)}</span></a>`).join('')
       : '<span class="dl-sub">暂无成品</span>';
   } catch { /* ignore */ }
 }
@@ -192,21 +122,48 @@ async function loadOutputs() {
 $('dl-list').addEventListener('click', async (ev) => {
   const btn = ev.target.closest('button[data-act]');
   if (!btn) return;
-  const { act, id } = btn.dataset;
+  let act = btn.dataset.act;
+  const id = btn.dataset.id;
+  const job = (lastJobs || []).find((x) => x.id === id);
+  const b = bridge();
   if (act === 'import') {
     // 安卓外壳里：直接把成品绝对路径交给原生，用 content:// 拉起壁纸引擎
-    const job = (lastJobs || []).find((x) => x.id === id);
-    if (!job || !job.outPath) return;
+    if (!job || !job.outPath || !b) return;
     try {
-      const msg = window.Android.openMpkg(job.outPath);
+      const msg = b.openMpkg(job.outPath);
       $('dl-stat').textContent = msg || '正在打开壁纸引擎…';
     } catch (e) {
       $('dl-stat').textContent = '拉起壁纸引擎失败：' + e.message;
     }
     return;
   }
+  if (act === 'openfile') {
+    if (!job || !job.outPath || !b || typeof b.openFile !== 'function') return;
+    try {
+      const msg = b.openFile(job.outPath);
+      $('dl-stat').textContent = msg || '已请求系统打开';
+    } catch (e) {
+      $('dl-stat').textContent = '打开文件失败：' + e.message;
+    }
+    return;
+  }
+  if (act === 'relogin') {
+    // 这个页面拿不到主界面的设置弹窗，直接把用户送过去
+    $('dl-stat').textContent = '需要重新登录：已打开主界面的设置入口';
+    window.open(mainBase() + '/?settings=account', '_blank');
+    return;
+  }
+  if (act === 'reveal') {
+    $('dl-stat').textContent = '「打开所在文件夹」只能在主界面里用';
+    return;
+  }
   btn.disabled = true;
   try {
+    if (act === 'retry-node') {
+      $('dl-stat').textContent = '正在重新测速…';
+      try { await fetch('api/hub/cdn/test', { method: 'POST' }); } catch { /* 测速失败也照样重试 */ }
+      act = 'retry';
+    }
     const r = await fetch(`api/hub/jobs/${encodeURIComponent(id)}/${act}`, { method: 'POST' });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));

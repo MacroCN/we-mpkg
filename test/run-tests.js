@@ -1811,7 +1811,52 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(js.includes('openFile'), '安卓端应改成打开文件');
     const dlc = fs.readFileSync(path.join(__dirname, '..', 'public', 'dlcenter.js'), 'utf8');
     assert.ok(dlc.includes("act === 'openfile'"), '下载中心也应有打开文件动作');
-    assert.ok(dlc.includes('result.rawExport'), '下载中心应按原始资源包切换按钮');
+    // 原始资源判定已收进共用模块 joblib.js（dlcenter 与 downloads 页面都读它）
+    const jl = fs.readFileSync(path.join(__dirname, '..', 'public', 'joblib.js'), 'utf8');
+    assert.ok(jl.includes('result.rawExport'), '原始资源判定应在 joblib 里');
+    assert.ok(dlc.includes('J.view'), '浮层应复用 joblib 的任务视图');
+    const dlpage = fs.readFileSync(path.join(__dirname, '..', 'public', 'downloads.js'), 'utf8');
+    assert.ok(dlpage.includes('J.view'), '独立下载中心页也应复用同一份任务视图');
+  });
+
+  test('任务视图统一：状态/阶段/动作/指纹只在 joblib 里维护', () => {
+    const jl = fs.readFileSync(path.join(__dirname, '..', 'public', 'joblib.js'), 'utf8');
+    for (const q of ['function view(', 'function aggregate(', 'function fingerprint(', "act: 'retry-node'", "act: 'relogin'", "act: 'reveal'", 'function errorKind(']) {
+      assert.ok(jl.includes(q), `joblib 缺少 ${q}`);
+    }
+    // 两套 UI 不能再各自维护一份状态文案表（那正是暂停指纹漏判的来源）
+    const dlc = fs.readFileSync(path.join(__dirname, '..', 'public', 'dlcenter.js'), 'utf8');
+    const dlpage = fs.readFileSync(path.join(__dirname, '..', 'public', 'downloads.js'), 'utf8');
+    assert.ok(!dlc.includes('STATE_TEXT = {') && !dlpage.includes('STATE_TEXT = {'), '状态文案表不该再复制一份');
+    assert.ok(!dlc.includes('PHASE_TEXT = {') && !dlpage.includes('PHASE_TEXT = {'), '阶段文案表不该再复制一份');
+  });
+
+  test('前端 8 项：顶栏任务条 / 卡片直达 / 类型徽标 / 设置分 tab / 打开文件夹', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    for (const id of ['hubCount', 'hubPct', 'hubBar', 'settingsTabs']) {
+      assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
+    }
+    for (const tab of ['account', 'network', 'output', 'about']) {
+      assert.ok(html.includes(`data-tab="${tab}"`), `缺少设置 tab ${tab}`);
+      assert.ok(html.includes(`id="tab-${tab}"`), `缺少设置面板 tab-${tab}`);
+    }
+    // 设置弹窗里重复的 <hr> 已经删掉：账号/网络/输出/关于之间靠 tab 分隔
+    const hrs = (html.match(/<hr \/>/g) || []).length;
+    assert.strictEqual(hrs, 1, '设置弹窗里只应保留网络页里的那一条分隔线');
+
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    for (const q of ['function typeOf(', 'type-badge', 'data-act="quickdl"', 'async function quickDownload', 'function switchSettingsTab', 'function syncQualitySelect', 'function setCardPicked']) {
+      assert.ok(js.includes(q), `app.js 缺少 ${q}`);
+    }
+
+    const srv = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+    assert.ok(srv.includes("'/api/reveal'"), '后端应提供 /api/reveal');
+    assert.ok(srv.includes('只能打开输出目录里的文件'), 'reveal 必须限制在输出/下载目录内');
+
+    const dlc = fs.readFileSync(path.join(__dirname, '..', 'public', 'dlcenter.js'), 'utf8');
+    assert.ok(dlc.includes('renderPill'), '顶栏任务条应由浮层模块更新');
+    assert.ok(!dlc.includes("createElement('div');\n    pill"), '右下角小药丸应由顶栏任务条取代');
+    assert.ok(dlc.includes("api('api/cdn/test'"), '换节点重试前应强制重新测速');
   });
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);

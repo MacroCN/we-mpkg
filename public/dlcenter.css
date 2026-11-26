@@ -1,45 +1,9 @@
-/* 下载中心浮层（App 内悬浮窗）：不跳页，可拖动、可折叠 */
-#dlc-pill,
+/* 下载中心浮层（App 内悬浮窗）：不跳页，可拖动；收起后的入口是顶栏常驻任务条 */
 #dlc-panel {
   position: fixed;
   z-index: 1200;
   font-family: inherit;
 }
-
-/* 折叠态：右下角的小圆角药丸 */
-#dlc-pill {
-  right: 14px;
-  bottom: calc(14px + env(safe-area-inset-bottom));
-  display: none;
-  align-items: center;
-  gap: 8px;
-  padding: 9px 14px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: rgba(22, 33, 44, 0.94);
-  color: var(--text);
-  box-shadow: 0 8px 26px rgba(0, 0, 0, 0.42);
-  cursor: pointer;
-  -webkit-backdrop-filter: blur(8px);
-  backdrop-filter: blur(8px);
-  font-size: 12px;
-}
-#dlc-pill.on { display: inline-flex; }
-#dlc-pill:active { transform: scale(0.97); }
-#dlc-pill .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.55);
-  animation: dlcPulse 1.6s ease-out infinite;
-}
-#dlc-pill.idle .dot { animation: none; background: var(--dim); box-shadow: none; }
-@keyframes dlcPulse {
-  0%   { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.55); }
-  70%  { box-shadow: 0 0 0 7px rgba(45, 212, 191, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0); }
-}
-#dlc-pill .n { font-variant-numeric: tabular-nums; }
-#dlc-pill .n b { color: var(--accent); font-weight: 600; }
 
 /* 展开态：悬浮卡片 */
 #dlc-panel {
@@ -166,6 +130,7 @@
   margin-top: 8px;
 }
 .dlc-acts .grow { flex: 1; }
+.dlc-acts .grow-end { margin-left: auto; }
 .dlc-acts button,
 .dlc-acts a {
   display: inline-flex; align-items: center;

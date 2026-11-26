@@ -6,6 +6,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawn } = require('child_process');
 const { URL } = require('url');
 const configMod = require('./config');
 const { config, ensureDirs } = configMod;
@@ -555,6 +556,31 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         res.writeHead(502);
         return res.end(`下载中心不可用：${e.message}`);
+      }
+    }
+    // 桌面端「打开所在文件夹」：只允许在输出/下载目录里定位，避免被当成任意路径打开器
+    if (pn === '/api/reveal' && req.method === 'POST') {
+      const body = JSON.parse((await readBody(req)) || '{}');
+      if (!body.path) return json(res, 400, { error: '缺少 path' });
+      const target = path.resolve(String(body.path));
+      const roots = [config.OUTPUT_DIR, config.DOWNLOAD_DIR].map((p) => path.resolve(p));
+      const inside = roots.some((r) => target === r || target.startsWith(r + path.sep));
+      if (!inside) return json(res, 403, { error: '只能打开输出目录里的文件' });
+      if (!fs.existsSync(target)) return json(res, 404, { error: '文件不存在（可能已被移动或清理）' });
+      const isDir = fs.statSync(target).isDirectory();
+      try {
+        if (process.platform === 'win32') {
+          // explorer 的 /select 参数必须是一个整体字符串，指向文件时会在资源管理器里选中它
+          const args = isDir ? [target] : [`/select,${target}`];
+          spawn('explorer.exe', args, { detached: true, stdio: 'ignore' }).unref();
+        } else if (process.platform === 'darwin') {
+          spawn('open', isDir ? [target] : ['-R', target], { detached: true, stdio: 'ignore' }).unref();
+        } else {
+          spawn('xdg-open', [isDir ? target : path.dirname(target)], { detached: true, stdio: 'ignore' }).unref();
+        }
+        return json(res, 200, { ok: true, dir: isDir ? target : path.dirname(target) });
+      } catch (e) {
+        return json(res, 500, { error: `打开文件夹失败：${e.message}` });
       }
     }
     if (pn === '/api/outputs') {

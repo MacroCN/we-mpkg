@@ -18,6 +18,14 @@ const I18N = {
     needLogin: '先登录再下载', notLogged: '未登录，点右上角 ⚙ 登录',
     hub: '下载中心', openHub: '在下载中心查看（独立进程，关页面也不中断）', cancelTask: '取消任务',
     hubHint: '独立进程运行，关掉本页面任务也会继续',
+    tabAccount: '账号', tabNetwork: '网络', tabOutput: '输出', tabAbout: '关于',
+    outputTip: 'mpkg 和「下载原始资源」的 zip 都存到这里。',
+    aboutMeta: 'AppID 431960 · PKGM0020 · 壁纸来源 Wallpaper Engine 创意工坊',
+    recommended: '推荐', quickAdd: '＋ 加选', quickPicked: '✓ 已选',
+    quickDownload: '⬇ 直接下载', quickDownloadTip: '按推荐画质（{q}）直接加入下载中心，不用打开详情',
+    quickQueued: '已加入下载中心：{t}（{q}）', quickBusy: '这个条目已有任务在跑',
+    typeWeb: '网页', typeVideo: '视频', typeScene: '场景', typeApp: '应用', typeOther: '壁纸',
+    typeTip: '类型：{t}',
     openSetup: '启动页：本地 / 远程 / 导入凭据', setupHint: '想切换本地 / 远程服务，或粘贴电脑上的凭据导入，点这个按钮回启动页（页面状态不会丢）。',
     quality: '画质', qHigh: '高画质（原尺寸）', qBalanced: '均衡（1/2 尺寸）', qSmooth: '流畅（1/4 尺寸）',
     pickedN: '已选 {n} 项', batchStart: '打包下载', batchClear: '清空', batchConfirm: '把选中的 {n} 条加入下载中心？',
@@ -81,6 +89,14 @@ const I18N = {
     needLogin: 'Sign in first', notLogged: 'Not signed in — tap ⚙ to sign in',
     hub: 'Downloads', openHub: 'Open download center (separate process, closing this page won\'t stop it)',
     cancelTask: 'Cancel task', hubHint: 'runs in a separate process, safe to close this page',
+    tabAccount: 'Account', tabNetwork: 'Network', tabOutput: 'Output', tabAbout: 'About',
+    outputTip: 'Both .mpkg files and raw-asset .zip files are saved here.',
+    aboutMeta: 'AppID 431960 · PKGM0020 · Wallpapers from the Wallpaper Engine Workshop',
+    recommended: 'Recommended', quickAdd: '＋ Select', quickPicked: '✓ Selected',
+    quickDownload: '⬇ Download', quickDownloadTip: 'Queue it at the recommended quality ({q}) without opening the details',
+    quickQueued: 'Queued: {t} ({q})', quickBusy: 'This item already has a running task',
+    typeWeb: 'Web', typeVideo: 'Video', typeScene: 'Scene', typeApp: 'App', typeOther: 'Wallpaper',
+    typeTip: 'Type: {t}',
     openSetup: 'Launcher: local / remote / import credential', setupHint: 'Use this to switch local / remote service or paste a desktop credential; page state is kept.',
     quality: 'Quality', qHigh: 'High (native size)', qBalanced: 'Balanced (1/2)', qSmooth: 'Smooth (1/4)',
     pickedN: '{n} selected', batchStart: 'Download selected', batchClear: 'Clear', batchConfirm: 'Queue {n} selected wallpapers?',
@@ -188,6 +204,9 @@ function applyLang() {
   }
   $('pageinfo').textContent = tr('pageN', { p: state.page });
   setDownloadLabel();
+  // 画质选项的「推荐」标记是动态拼出来的，切语言后要重拼
+  syncQualityOptions();
+  if (state.device) applyDeviceHint();
 }
 
 // ---------------- 状态 ----------------
@@ -388,33 +407,63 @@ function skeleton(n) {
   }
 }
 
+/** 卡片右上角的类型徽标：浏览时就能分清 静态 / 视频 / 网页，不必点进详情 */
+const TYPE_META = {
+  web: { key: 'typeWeb', cls: 't-web' },
+  video: { key: 'typeVideo', cls: 't-video' },
+  scene: { key: 'typeScene', cls: 't-scene' },
+  app: { key: 'typeApp', cls: 't-app' },
+  other: { key: 'typeOther', cls: 't-other' },
+};
+
+function typeOf(item) {
+  const tags = (item && item.tags) || [];
+  const names = tags.map((t) => String(t && (t.label || t.name) ? (t.label || t.name) : t).trim().toLowerCase());
+  if (names.some((n) => /^(web|网页)$/.test(n))) return TYPE_META.web;
+  if (names.some((n) => /^(video|视频|视频纹理)$/.test(n))) return TYPE_META.video;
+  if (names.some((n) => /^(scene|场景)$/.test(n))) return TYPE_META.scene;
+  if (names.some((n) => /^(application|应用|程序)$/.test(n))) return TYPE_META.app;
+  return TYPE_META.other;
+}
+
 function renderItems(items) {
   const grid = $('grid');
   grid.innerHTML = '';
+  // 退出登录后会再调一次（不传列表），这种情况只清空、不报「没有结果」
+  if (!Array.isArray(items)) return;
   if (!items.length) {
     grid.innerHTML = `<p class="status err">${esc(tr('empty'))}</p>`;
     return;
   }
   for (const it of items) {
+    const id = String(it.id);
+    const picked = state.picked.has(id);
+    const type = typeOf(it);
     const card = document.createElement('div');
-    card.className = 'card';
-    card.dataset.id = it.id;
+    card.className = 'card' + (picked ? ' selected' : '');
+    card.dataset.id = id;
     const img = it.preview
       ? `<img class="thumb" src="${esc(it.preview)}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.visibility='hidden'">`
       : '<div class="thumb"></div>';
     card.innerHTML = `${img}
-      <label class="pick" title="选择">
-        <input type="checkbox" ${state.picked.has(String(it.id)) ? 'checked' : ''} aria-label="选择" />
-      </label>
+      <span class="type-badge ${type.cls}" title="${esc(tr('typeTip', { t: tr(type.key) }))}">${esc(tr(type.key))}</span>
       <div class="card-body">
         <div class="card-title">${esc(it.title || it.id)}</div>
         <div class="card-meta"><span>${esc((it.tags || []).slice(0, 2).map(tagLabel).join(' · ') || '—')}</span><span>${human(it.fileSize)}</span></div>
+        <div class="card-quick">
+          <button type="button" class="qbtn pick-btn${picked ? ' on' : ''}" data-act="pick">${esc(picked ? tr('quickPicked') : tr('quickAdd'))}</button>
+          <button type="button" class="qbtn dl-btn" data-act="quickdl" title="${esc(tr('quickDownloadTip', { q: tr(QUALITY_KEY[state.device ? state.device.preset : 'high']) }))}">${esc(tr('quickDownload'))}</button>
+        </div>
       </div>`;
-    if (state.picked.has(String(it.id))) card.classList.add('selected');
-    const box = card.querySelector('input[type=checkbox]');
-    box.onclick = (ev) => {
+    card.querySelector('[data-act="pick"]').onclick = (ev) => {
       ev.stopPropagation();
-      togglePick(it, box.checked);
+      ev.preventDefault();
+      togglePick(it, !state.picked.has(id));
+    };
+    card.querySelector('[data-act="quickdl"]').onclick = (ev) => {
+      ev.stopPropagation();
+      ev.preventDefault();
+      quickDownload(it, ev.currentTarget);
     };
     card.onclick = () => openDetail(it.id, it);
     grid.appendChild(card);
@@ -422,12 +471,56 @@ function renderItems(items) {
   updateBatchBar();
 }
 
+/** 卡片的加选按钮同时当选中态指示灯，批量栏清空时也要跟着复位 */
+function setCardPicked(card, on) {
+  if (!card) return;
+  card.classList.toggle('selected', on);
+  const btn = card.querySelector('[data-act="pick"]');
+  if (btn) {
+    btn.classList.toggle('on', on);
+    btn.textContent = on ? tr('quickPicked') : tr('quickAdd');
+  }
+}
+
+/** 卡片上的「直接下载」：按设备推荐画质入队，不必先打开详情抽屉 */
+async function quickDownload(it, btn) {
+  if (!state.loggedIn) {
+    openSettings('account');
+    $('loginHint').textContent = tr('notLogged');
+    return;
+  }
+  const preset = state.device ? state.device.preset : 'high';
+  if (btn) btn.disabled = true;
+  try {
+    await api('/api/jobs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: it.id,
+        title: it.title,
+        // Web 条目没有 mpkg，直接按原始资源导出（卡片上没法勾选，这里替用户决定）
+        raw: isWebItem(it),
+        preset,
+        preserveAudio: false,
+      }),
+    });
+    $('status').className = 'status';
+    $('status').textContent = tr('quickQueued', { t: it.title || it.id, q: qualityShort(preset) });
+    if (window.WE_DLC && typeof window.WE_DLC.notifyQueued === 'function') window.WE_DLC.notifyQueued();
+    else if (window.WE_DLC) window.WE_DLC.refresh();
+  } catch (e) {
+    $('status').className = 'status err';
+    $('status').textContent = tr('batchFail') + e.message;
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 function togglePick(it, on) {
   const id = String(it.id);
   if (on) state.picked.set(id, it);
   else state.picked.delete(id);
-  const card = document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
-  if (card) card.classList.toggle('selected', on);
+  setCardPicked(document.querySelector(`.card[data-id="${CSS.escape(id)}"]`), on);
   updateBatchBar();
 }
 
@@ -448,7 +541,7 @@ async function startBatch() {
     return;
   }
   if (!state.loggedIn) {
-    openSettings();
+    openSettings('account');
     $('loginHint').textContent = tr('notLogged');
     return;
   }
@@ -479,11 +572,7 @@ async function startBatch() {
   state.batchBusy = false;
   $('batchStart').disabled = false;
   state.picked.clear();
-  document.querySelectorAll('.card').forEach((c) => {
-    c.classList.remove('selected');
-    const b = c.querySelector('input[type=checkbox]');
-    if (b) b.checked = false;
-  });
+  document.querySelectorAll('.card').forEach((c) => setCardPicked(c, false));
   updateBatchBar();
   if (window.WE_DLC) window.WE_DLC.notifyJobAdded();
   if (errors.length) {
@@ -611,6 +700,34 @@ function detectDevice() {
 }
 
 const QUALITY_LABEL = { high: '高画质', balanced: '均衡', smooth: '流畅' };
+const QUALITY_KEY = { high: 'qHigh', balanced: 'qBalanced', smooth: 'qSmooth' };
+const QUALITY_SHORT = { high: '高', balanced: '均衡', smooth: '流畅' };
+const QUALITY_SHORT_EN = { high: 'High', balanced: 'Balanced', smooth: 'Smooth' };
+
+function qualityShort(preset) {
+  return state.lang === 'zh' ? (QUALITY_SHORT[preset] || preset) : (QUALITY_SHORT_EN[preset] || preset);
+}
+
+/** 画质下拉：默认落在设备推荐档，并把「推荐」标在对应选项上（少一次选择） */
+function syncQualitySelect(sel, saved) {
+  if (!sel) return;
+  const rec = state.device ? state.device.preset : 'high';
+  for (const opt of sel.options) {
+    const base = tr(QUALITY_KEY[opt.value] || 'qHigh');
+    opt.textContent = base + (opt.value === rec ? ` · ${tr('recommended')}` : '');
+  }
+  const want = saved || rec;
+  if (Array.from(sel.options).some((o) => o.value === want)) sel.value = want;
+}
+
+function syncQualityOptions() {
+  let override = null;
+  try { override = localStorage.getItem('qualityOverride'); } catch { /* ignore */ }
+  syncQualitySelect($('d-quality'), override);
+  let batchPref = null;
+  try { batchPref = localStorage.getItem('batchQuality'); } catch { /* ignore */ }
+  syncQualitySelect($('batchQuality'), batchPref);
+}
 
 function applyDeviceHint() {
   if (!state.device) state.device = detectDevice();
@@ -618,12 +735,7 @@ function applyDeviceHint() {
   if (!hint) return;
   hint.textContent = tr('deviceRec', { q: QUALITY_LABEL[state.device.preset] || state.device.preset, d: state.device.desc });
   hint.title = tr('deviceHint');
-  const sel = $('d-quality');
-  const override = localStorage.getItem('qualityOverride');
-  if (sel) {
-    if (override) sel.value = override;
-    else sel.value = state.device.preset;
-  }
+  syncQualityOptions();
 }
 
 function renderCompat(c) {
@@ -647,8 +759,7 @@ function renderCompat(c) {
 // ---------------- 详情 ----------------
 /** 条目标签里带 Type=Web 的，就是网页壁纸（手机端没有 Web 引擎，只能导原始资源） */
 function isWebItem(item) {
-  const tags = (item && item.tags) || [];
-  return tags.some((t) => /^(web|网页)$/i.test(String(t && t.label ? t.label : t).trim()));
+  return typeOf(item) === TYPE_META.web;
 }
 
 function rawExportChecked() {
@@ -737,7 +848,7 @@ async function startDownload() {
   if (!cur) return;
   if (!state.loggedIn) {
     // 没登录就直接把用户带去登录，不要先建一个必然失败的任务
-    openSettings();
+    openSettings('account');
     $('loginHint').textContent = tr('notLogged');
     return;
   }
@@ -931,9 +1042,34 @@ async function cancelCurrentJob() {
 }
 
 // ---------------- 设置 / 登录 ----------------
-async function openSettings() {
+const SETTINGS_TABS = ['account', 'network', 'output', 'about'];
+
+function savedSettingsTab() {
+  try {
+    const v = localStorage.getItem('settingsTab');
+    return SETTINGS_TABS.includes(v) ? v : 'account';
+  } catch {
+    return 'account';
+  }
+}
+
+/** 设置弹窗分 tab：账号 / 网络 / 输出 / 关于，手机上不用滚一长页找东西 */
+function switchSettingsTab(name) {
+  if (!SETTINGS_TABS.includes(name)) name = 'account';
+  document.querySelectorAll('#settingsTabs .tab').forEach((b) => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('on', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
+  document.querySelectorAll('.tabpane').forEach((p) => p.classList.toggle('on', p.id === `tab-${name}`));
+  state.settingsTab = name;
+  try { localStorage.setItem('settingsTab', name); } catch { /* ignore */ }
+}
+
+async function openSettings(tab) {
   $('modal').classList.remove('hidden');
   document.body.classList.add('modal-open');
+  switchSettingsTab(tab || savedSettingsTab());
   // 安卓壳里才有「回启动页」入口（本地/远程、导入凭据都在那边）
   const hasSetup = !!(window.Android && typeof window.Android.openSetup === 'function');
   if ($('setupRow')) $('setupRow').classList.toggle('hidden', !hasSetup);
@@ -1223,7 +1359,8 @@ async function logout() {
   $('loginHint').textContent = tr('loginIdle');
   setDownloadLabel();
   if ($('batchBar')) $('batchBar').classList.add('hidden');
-  renderItems();
+  // 退出后按匿名范围重新取一遍列表（不打这批卡片就一直是旧状态）
+  load();
 }
 
 // ---------------- 事件绑定 ----------------
@@ -1261,19 +1398,22 @@ function wire() {
   if ($('batchStart')) $('batchStart').onclick = startBatch;
   if ($('batchClear')) $('batchClear').onclick = () => {
     state.picked.clear();
-    document.querySelectorAll('.card').forEach((c) => {
-      c.classList.remove('selected');
-      const b = c.querySelector('input[type=checkbox]');
-      if (b) b.checked = false;
-    });
+    document.querySelectorAll('.card').forEach((c) => setCardPicked(c, false));
     updateBatchBar();
+  };
+  if ($('batchQuality')) $('batchQuality').onchange = (e) => {
+    try { localStorage.setItem('batchQuality', e.target.value); } catch { /* ignore */ }
+    syncQualityOptions();
   };
   if ($('d-quality')) $('d-quality').onchange = (e) => localStorage.setItem('qualityOverride', e.target.value);
   if ($('p-cancel')) $('p-cancel').onclick = cancelCurrentJob;
   // 下载中心改成页内浮层：不跳页、不重载主界面
-  const openDlCenter = () => { if (window.WE_DLC) window.WE_DLC.open(); };
-  if ($('hubBtn')) $('hubBtn').onclick = openDlCenter;
-  if ($('p-hub')) $('p-hub').onclick = openDlCenter;
+  // 顶栏任务条（#hubBtn）的点击由 dlcenter.js 绑定，这里不要再抢一遍，
+  // 否则一次点击会「打开→立刻收起」。
+  if ($('p-hub')) $('p-hub').onclick = () => { if (window.WE_DLC) window.WE_DLC.open(); };
+  document.querySelectorAll('#settingsTabs .tab').forEach((b) => {
+    b.onclick = () => switchSettingsTab(b.dataset.tab);
+  });
   $('filterToggle').onclick = () => {
     state.filtersOpen = !state.filtersOpen;
     applyFiltersOpen();
@@ -1371,6 +1511,7 @@ async function init() {
   applyLang();
   watchStickyLayout();
   state.device = detectDevice();
+  syncQualityOptions();
   // 恢复上次的抓取深度与时间窗
   state.pages = Math.max(1, Math.min(5, parseInt(localStorage.getItem('depth') || '1', 10) || 1));
   state.days = parseInt(localStorage.getItem('days') || '7', 10) || 7;
@@ -1396,6 +1537,11 @@ async function init() {
   setDownloadLabel();
   load();
   loadFilters();
+  // 下载中心页面上的「重新登录」会带 ?settings=account 跳回主界面，直接落在对应 tab
+  const wantTab = new URLSearchParams(location.search).get('settings');
+  if (wantTab) openSettings(wantTab);
+  // 供浮层/其它页面复用：打开设置并落到指定 tab
+  window.WE_APP = { openSettings: (tab) => openSettings(tab) };
 }
 
 init();

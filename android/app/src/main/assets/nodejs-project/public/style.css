@@ -381,8 +381,7 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
   .modal-card { border-radius: 18px; }
 }
 
-/* 详情抽屉里的打包选项（2.0：画质档位 + 音频开关） */
-.packopts {
+/* 详情抽屉里的打包选项（2.0：画质档位 + 音频开关） */.packopts {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
@@ -495,3 +494,139 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
 .compat ul { margin: 4px 0 0 16px; padding: 0; }
 .compat li { margin: 2px 0; color: #d7e3f1; }
 .compat .meta { color: #9fb3c8; }
+
+/* ---------- 顶栏常驻任务条（关掉浮层也能看到在跑什么） ---------- */
+.hub-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px 9px;
+  min-width: 40px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  overflow: hidden;
+}
+.hub-pill.busy { border-color: rgba(45, 212, 191, 0.65); background: rgba(45, 212, 191, 0.1); }
+.hub-pill .hp-dot {
+  width: 7px; height: 7px; flex: none;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.hub-pill.busy .hp-dot {
+  background: var(--accent);
+  animation: hubPulse 1.6s ease-out infinite;
+}
+@keyframes hubPulse {
+  0% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0.55); }
+  70% { box-shadow: 0 0 0 6px rgba(45, 212, 191, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(45, 212, 191, 0); }
+}
+.hub-pill .hp-label { white-space: nowrap; }
+.hub-pill .hp-count {
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(45, 212, 191, 0.22);
+  color: #b8f6ee;
+  font-size: 11px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.hub-pill .hp-pct { color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+.hub-pill .hp-track {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.hub-pill.busy .hp-track { opacity: 1; }
+.hub-pill .hp-track > i {
+  display: block; height: 100%; width: 0;
+  background: linear-gradient(90deg, #22d3ee, #34d399);
+  transition: width 0.35s ease;
+}
+.hub-pill .hp-track.indeterminate > i {
+  width: 34% !important;
+  animation: barSlide 1.2s ease-in-out infinite;
+}
+@media (max-width: 640px) {
+  .hub-pill { padding: 6px 10px 8px; font-size: 12px; gap: 5px; }
+  .hub-pill .hp-pct { display: none; }
+}
+
+/* ---------- 卡片：类型徽标 + 快捷操作 ---------- */
+.type-badge {
+  position: absolute;
+  top: 8px; right: 8px;
+  z-index: 2;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #cbd5e1;
+  background: rgba(15, 23, 32, 0.78);
+  border: 1px solid var(--line);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+}
+.type-badge.t-web { color: #c4b5fd; border-color: rgba(167, 139, 250, 0.6); }
+.type-badge.t-video { color: #93c5fd; border-color: rgba(96, 165, 250, 0.55); }
+.type-badge.t-scene { color: #86efac; border-color: rgba(52, 211, 153, 0.5); }
+.type-badge.t-app { color: #fcd34d; border-color: rgba(245, 158, 11, 0.5); }
+.type-badge.t-other { color: var(--dim); }
+
+.card-quick { display: flex; gap: 6px; margin-top: 8px; }
+.qbtn {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--bg-3);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.qbtn:hover { border-color: var(--accent); }
+.qbtn:disabled { opacity: 0.45; cursor: default; }
+.qbtn.on { border-color: #6ee7ff; color: #bfe9ff; background: rgba(110, 231, 255, 0.12); }
+.card-quick .dl-btn { border-color: rgba(45, 212, 191, 0.4); color: #b8f6ee; }
+@media (max-width: 640px) {
+  .card-quick .qbtn { height: 26px; font-size: 11px; padding: 0 5px; }
+}
+
+/* ---------- 设置弹窗分 tab ---------- */
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 16px 0;
+  border-bottom: 1px solid var(--line);
+}
+.tabs .tab {
+  flex: 1 1 0;
+  padding: 9px 4px 8px;
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--dim);
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tabs .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabpane { display: none; padding-top: 4px; }
+.tabpane.on { display: block; }
