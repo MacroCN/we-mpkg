@@ -51,6 +51,70 @@ const DEFAULT_PROXY = env('WE_MPKG_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_P
   || readWindowsSystemProxy()
   || '';
 
+// ---------------- 安卓：跟随系统代理 / VPN ----------------
+/**
+ * 安卓外壳（SystemProxy.java）把系统当前代理写到 .cache/net.json：
+ *   { proxy: "http://host:port" | "", vpn: bool, transport: "vpn|wifi|cellular|ethernet", at }
+ * - VPN(TUN) 模式下 proxy 为空 → 直连就由系统路由进 VPN，不需要代理
+ * - 「系统代理 / 允许局域网」模式下 proxy 有值 → Node 走它
+ * 每次请求都按 mtime 判断，切 VPN、开关代理立刻生效，不绑死任何端口。
+ */
+const NET_FILE = path.join(ROOT, '.cache', 'net.json');
+let netCache = { at: 0, data: null, checked: 0 };
+
+function readAndroidNet() {
+  if (process.platform !== 'android') return null;
+  const now = Date.now();
+  if (netCache.data && now - netCache.checked < 2000) return netCache.data;
+  netCache.checked = now;
+  try {
+    const st = fs.statSync(NET_FILE);
+    if (netCache.data && netCache.at === st.mtimeMs) return netCache.data;
+    const data = JSON.parse(fs.readFileSync(NET_FILE, 'utf8')) || {};
+    netCache = { at: st.mtimeMs, data, checked: now };
+    return data;
+  } catch {
+    netCache = { at: 0, data: null, checked: now };
+    return null;
+  }
+}
+
+/**
+ * net.json → 代理地址（纯函数，方便单测）
+ * proxy 只认 http://host:port；PAC 脚本在 Node 里跑不了，按「无代理」处理
+ */
+function systemProxyFromNet(net) {
+  if (!net || !net.proxy) return '';
+  const v = String(net.proxy).trim();
+  if (!v) return '';
+  const withScheme = /^\w+:\/\//.test(v) ? v : `http://${v}`;
+  if (!/^http:\/\//i.test(withScheme)) return '';
+  try {
+    if (!new URL(withScheme).hostname) return '';
+  } catch { return ''; }
+  return withScheme;
+}
+
+/** 系统层面的代理地址（安卓读 net.json；其它平台就是启动时算出来的默认值） */
+function systemProxy() {
+  if (process.platform === 'android') return systemProxyFromNet(readAndroidNet());
+  return DEFAULT_PROXY;
+}
+
+/** 网络状态（给设置页展示：是否在 VPN 上、走的是 Wi-Fi 还是移动网络） */
+function systemNetInfo() {
+  if (process.platform === 'android') {
+    const net = readAndroidNet() || {};
+    return { proxy: net.proxy || '', vpn: !!net.vpn, transport: net.transport || '', at: net.at || 0 };
+  }
+  return { proxy: DEFAULT_PROXY, vpn: false, transport: '', at: 0 };
+}
+
+/** 实际生效的代理：手动填的优先，没填就用系统（空串 = 直连） */
+function effectiveProxy() {
+  return config.PROXY || systemProxy();
+}
+
 /**
  * 安卓端的默认输出目录：内置存储的 Download/mpkg。
  * 没拿到「所有文件访问」权限时写不进去，那就退回应用私有目录（网页里可以再改）。
@@ -154,9 +218,9 @@ function normalizeProxy(raw) {
   if (!v) return '';
   const withScheme = /^\w+:\/\//.test(v) ? v : `http://${v}`;
   let u;
-  try { u = new URL(withScheme); } catch { throw new Error('代理格式不对，示例：http://127.0.0.1:7890'); }
-  if (!u.hostname) throw new Error('代理格式不对，示例：http://127.0.0.1:7890');
-  if (!/^http:\/\//i.test(withScheme)) throw new Error('只支持 http:// 代理，例如 http://127.0.0.1:7890');
+  try { u = new URL(withScheme); } catch { throw new Error('代理格式不对，示例：http://127.0.0.1:7890（一般留空跟随系统即可）'); }
+  if (!u.hostname) throw new Error('代理格式不对，示例：http://127.0.0.1:7890（一般留空跟随系统即可）');
+  if (!/^http:\/\//i.test(withScheme)) throw new Error('只支持 http:// 代理（SOCKS 请让代理软件开 TUN/系统代理），例如 http://127.0.0.1:7890');
   return withScheme;
 }
 
@@ -210,4 +274,4 @@ function tempDir(prefix = 'run') {
   return dir;
 }
 
-module.exports = { config, ensureDirs, tempDir, env, os, setOutputDir, setProxy, normalizeProxy, readSettings, writeSettings, SETTINGS_FILE, DEFAULT_OUTPUT_DIR, DEFAULT_PROXY };
+module.exports = { config, ensureDirs, tempDir, env, os, setOutputDir, setProxy, normalizeProxy, readSettings, writeSettings, SETTINGS_FILE, DEFAULT_OUTPUT_DIR, DEFAULT_PROXY, systemProxy, systemProxyFromNet, systemNetInfo, effectiveProxy, readAndroidNet, NET_FILE };

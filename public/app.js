@@ -61,8 +61,10 @@ const I18N = {
     pageN: '第 {p} 页', failed: '加载失败：', noDownload: '当前平台不能下载',
     vpnHint: '一直加载不出来？先打开加速器（VPN / 游戏加速器）再点搜索。',
     dirSaved: '已保存：{d}', dirFail: '保存失败：', dirDefault: '默认目录：{d}',
-    proxyField: '代理（留空 = 跟随系统；下载时先直连，连不上才走它）',
-    proxyTest: '测试连通性', proxySaved: '已保存：{p}', proxyDefault: '跟随系统：{p}', proxyNone: '当前直连，没有配置代理',
+    proxyField: '代理（留空 = 自动跟随系统代理/VPN，不用填端口）',
+    proxyTest: '测试连通性', proxySaved: '已保存：{p}', proxyDefault: '自动跟随系统：{p}',
+    proxyNone: '自动：未检测到系统代理，直连（VPN 模式下流量由系统路由进 VPN）',
+    proxyVpn: '自动：已检测到 VPN，直连即走 VPN',
     proxyTesting: '测试中…', proxyOk: '代理可用：HTTP {s}，{m} ms', proxyFail: '代理不可用：', proxyCleared: '已恢复为跟随系统',
     loginWaiting: '已打开 Steam，请在 Steam App 里确认登录…',
     loginDone: '已登录：{a}', loginFailed: '登录失败：', loginIdle: '未登录（可先用电脑导入凭据）',
@@ -133,8 +135,10 @@ const I18N = {
     pageN: 'Page {p}', failed: 'Failed: ', noDownload: 'Download not available on this platform',
     vpnHint: 'Still empty? Turn on a VPN / game accelerator, then search again.',
     dirSaved: 'Saved: {d}', dirFail: 'Failed: ', dirDefault: 'Default: {d}',
-    proxyField: 'Proxy (blank = follow system; downloads try direct first, then fall back to it)',
-    proxyTest: 'Test connection', proxySaved: 'Saved: {p}', proxyDefault: 'System proxy: {p}', proxyNone: 'Direct, no proxy configured',
+    proxyField: 'Proxy (blank = follow the system proxy / VPN automatically, no port needed)',
+    proxyTest: 'Test connection', proxySaved: 'Saved: {p}', proxyDefault: 'Follow system: {p}',
+    proxyNone: 'Auto: no system proxy detected, direct (VPN mode routes traffic into the VPN)',
+    proxyVpn: 'Auto: VPN detected, direct connections go through it',
     proxyTesting: 'Testing…', proxyOk: 'Proxy OK: HTTP {s}, {m} ms', proxyFail: 'Proxy failed: ', proxyCleared: 'Reset to follow system',
     loginWaiting: 'Waiting for confirmation in the Steam app…',
     loginDone: 'Signed in: {a}', loginFailed: 'Login failed: ', loginIdle: 'Not signed in', logout: 'Sign out',    groupMisc: 'Miscellaneous', groupType: 'Type', groupAge: 'Age Rating', groupGenre: 'Genre',
@@ -1234,15 +1238,26 @@ async function openSettings(tab) {
     $('loginHint').textContent = s.accountName ? tr('loginDone', { a: s.accountName }) : tr('loginIdle');
     if ($('proxyInput')) {
       $('proxyInput').value = s.proxy || '';
-      $('proxyInput').placeholder = s.defaultProxy || 'http://127.0.0.1:7890';
-      $('proxyHint').textContent = s.proxy
-        ? tr('proxySaved', { p: s.proxy })
-        : (s.defaultProxy ? tr('proxyDefault', { p: s.defaultProxy }) : tr('proxyNone'));
+      $('proxyInput').placeholder = '自动跟随系统';
+      $('proxyHint').textContent = proxyHintText(s);
     }
   } catch (e) {
     $('dirHint').textContent = e.message;
   }
   loadCdnNodes();
+}
+
+/**
+ * 代理提示：手动代理 > 系统代理（安卓外壳读 LinkProperties/VPN）> 直连
+ * 不再引导用户去填 7890 这类固定端口——不同代理软件端口不一样。
+ */
+function proxyHintText(s) {
+  if (!s) return tr('proxyNone');
+  if (s.proxy) return tr('proxySaved', { p: s.proxy });
+  const net = s.systemNet || {};
+  if (s.defaultProxy) return tr('proxyDefault', { p: s.defaultProxy });
+  if (net.vpn || net.transport === 'vpn') return tr('proxyVpn');
+  return tr('proxyNone');
 }
 
 function closeSettings() {

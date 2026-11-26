@@ -1516,6 +1516,49 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.match(errors.humanizeMessage('account banned'), /封禁/);
     assert.strictEqual(errors.eresultOf('eresult: 84'), 84);
   });
+  test('安卓系统代理：net.json 解析只认 http，PAC/空值退回直连', () => {
+    const config = require('../src/config');
+    assert.strictEqual(config.systemProxyFromNet(null), '');
+    assert.strictEqual(config.systemProxyFromNet({}), '');
+    assert.strictEqual(config.systemProxyFromNet({ proxy: '' }), '');
+    assert.strictEqual(config.systemProxyFromNet({ proxy: '127.0.0.1:7891' }), 'http://127.0.0.1:7891');
+    assert.strictEqual(config.systemProxyFromNet({ proxy: 'http://192.168.1.5:8080' }), 'http://192.168.1.5:8080');
+    // 只支持 HTTP 代理：SOCKS 交给代理软件的 TUN 去接管，不让 Node 误当 HTTP 用
+    assert.strictEqual(config.systemProxyFromNet({ proxy: 'socks5://127.0.0.1:1080' }), '');
+    // 空代理 + VPN 标记 = 直连（系统路由进 VPN）
+    const info = config.systemNetInfo();
+    assert.strictEqual(typeof info.vpn, 'boolean');
+    assert.strictEqual(typeof info.proxy, 'string');
+  });
+
+  test('不再写死 7890：代理提示跟随系统 / VPN', () => {
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    const srv = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+    assert.ok(!/placeholder="http:\/\/127\.0\.0\.1:7890"/.test(html), '输入框不能再把 7890 当默认值');
+    assert.ok(js.includes('function proxyHintText'), '设置页提示应该按「手动 / 系统代理 / VPN / 直连」区分');
+    assert.ok(js.includes('proxyVpn'), 'VPN 已连接时要有对应文案');
+    assert.ok(!/'http:\/\/127\.0\.0\.1:7890'/.test(srv.split('hint:')[1].slice(0, 200)), '检索失败提示不该让用户去填固定端口');
+    assert.ok(srv.includes('defaultProxy: redactProxy(configMod.effectiveProxy())'), '设置接口要返回「实际生效的代理」');
+    assert.ok(srv.includes('systemNet: configMod.systemNetInfo()'));
+  });
+
+  test('安卓外壳把系统代理/VPN 状态写给 Node', () => {
+    const dir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app');
+    const sp = fs.readFileSync(path.join(dir, 'SystemProxy.java'), 'utf8');
+    assert.ok(sp.includes('registerDefaultNetworkCallback'), '要监听默认网络变化（VPN 连上/断开）');
+    assert.ok(sp.includes('getHttpProxy'), '系统代理要从 LinkProperties 读，不能写死端口');
+    assert.ok(sp.includes('TRANSPORT_VPN'), '要识别 VPN 传输');
+    assert.ok(sp.includes('net.json'), '结果写进 .cache/net.json 给 Node');
+    assert.ok(sp.includes('onLinkPropertiesChanged'), '代理改端口后要重新采样');
+    const ma = fs.readFileSync(path.join(dir, 'MainActivity.java'), 'utf8');
+    assert.ok(ma.includes('SystemProxy.watch'), '启动时要开始监听');
+    const nr = fs.readFileSync(path.join(dir, 'NodeRunner.java'), 'utf8');
+    assert.ok(nr.includes('SystemProxy.writeNow'), '起 Node 前要再采样一次');
+    const manifest = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+    assert.ok(manifest.includes('ACCESS_NETWORK_STATE'), '读网络状态需要权限');
+  });
+
   test('设置页必须有代理输入 / 测试按钮，后端有 /api/proxy/test', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     assert.ok(html.includes('id="proxyInput"'));

@@ -87,6 +87,8 @@ public final class NodeRunner {
             w.write(json);
         }
         Log.i(TAG, "download cache dir = " + dir);
+        // 解包完成、进程马上起 Node：确保 net.json 是当前系统代理状态
+        SystemProxy.writeNow(ctx);
     }
 
     /**

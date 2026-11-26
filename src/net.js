@@ -13,7 +13,7 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { URL } = require('url');
-const { config } = require('./config');
+const { config, effectiveProxy } = require('./config');
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
@@ -38,9 +38,13 @@ function parseProxy(raw) {
   }
 }
 
-/** 每次请求时读取当前代理，设置页改完立即生效 */
+/**
+ * 每次请求时读取当前代理，设置页改完立即生效。
+ * 手动填了就用手动；没填就跟随系统（安卓读外壳写下的系统代理 / VPN 状态，
+ * VPN TUN 模式下这里是空的，直连由系统路由进 VPN，不需要任何端口）。
+ */
 function currentProxy() {
-  return parseProxy(config.PROXY);
+  return parseProxy(effectiveProxy());
 }
 
 /**
@@ -298,6 +302,17 @@ async function request(urlStr, opts = {}) {
     lastErr = new Error(`HTTP ${cur.status} ${urlStr}`);
     if (cur.status >= 400 && cur.status < 500) break;
   }
+  // 安卓上代理软件换了端口/关了系统代理时，显式代理会直接连不上：
+  // 自动退一次直连（VPN TUN 模式下直连本来就能走），避免被写死的端口卡死。
+  if (proxy && process.platform === 'android' && !opts._directRetry) {
+    try {
+      const res = await requestOnce(urlStr, opts, null);
+      if (res.status >= 200 && res.status < 300) return res;
+      lastErr = new Error(`HTTP ${res.status} ${urlStr}`);
+    } catch (e) {
+      lastErr = lastErr || e;
+    }
+  }
   throw lastErr || new Error(`request failed: ${urlStr}`);
 }
 
@@ -338,7 +353,7 @@ async function postForm(url, fields, opts = {}) {
 /** 只走指定代理做一次连通性测试（不自动回退直连） */
 async function testProxy(raw, url = 'https://api.steampowered.com/ISteamWebAPIUtil/GetServerInfo/v1/', timeout = 10000) {
   const p = parseProxy(raw);
-  if (!p) throw new Error('代理地址为空或格式不对，示例：http://127.0.0.1:7890');
+  if (!p) throw new Error('没有可用的代理：留空会跟随系统代理/VPN，但要确认系统代理或 VPN 已经开着');
   const t0 = Date.now();
   try {
     const res = await requestOnce(url, { timeout }, p);

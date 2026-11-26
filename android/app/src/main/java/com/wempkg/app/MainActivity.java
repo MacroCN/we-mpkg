@@ -75,6 +75,8 @@ public class MainActivity extends Activity {
         requestNotifPermission();
         // 进页面就开始准备 JS 工程（首次/升级要解包 zip），等用户点「本地模式」时通常已经就绪
         NodeRunner.prepareInBackground(getApplicationContext());
+        // 系统代理/VPN 状态同步给 Node（不写死端口：VPN 走系统路由，系统代理读 LinkProperties）
+        SystemProxy.watch(getApplicationContext());
 
         web = findViewById(R.id.web);
         setupPanel = findViewById(R.id.setupPanel);

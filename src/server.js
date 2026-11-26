@@ -293,7 +293,9 @@ const server = http.createServer(async (req, res) => {
         outputDir: config.OUTPUT_DIR,
         defaultOutputDir: configMod.DEFAULT_OUTPUT_DIR,
         proxy: redactProxy(config.PROXY),
-        defaultProxy: redactProxy(config.PROXY_DEFAULT),
+        // 留空 = 跟随系统：安卓读外壳写的 net.json（系统代理/VPN），其它平台是环境变量/注册表
+        defaultProxy: redactProxy(configMod.effectiveProxy()),
+        systemNet: configMod.systemNetInfo(),
         accountName: token ? token.accountName || null : null,
         hasToken: !!token,
         platform: `${process.platform}/${process.arch}`,
@@ -304,7 +306,7 @@ const server = http.createServer(async (req, res) => {
     if (pn === '/api/proxy/test' && req.method === 'POST') {
       const body = await readJsonBody(req);
       try {
-        const r = await require('./net').testProxy(body.proxy || config.PROXY, undefined, 10000);
+        const r = await require('./net').testProxy(body.proxy || configMod.effectiveProxy(), undefined, 10000);
         return json(res, 200, { ok: true, status: r.status, ms: r.ms });
       } catch (e) {
         return json(res, 200, { ok: false, error: e.message });
@@ -490,7 +492,7 @@ const server = http.createServer(async (req, res) => {
       } catch (e) {
         return json(res, 502, {
           error: `创意工坊检索失败：${e.message}`,
-          hint: 'steamcommunity.com 在国内常被阻断。请设置代理（WE_MPKG_PROXY=http://127.0.0.1:7890）后重启，或配置 STEAM_API_KEY 走 api.steampowered.com。',
+          hint: 'steamcommunity.com 在国内常被阻断。开着 VPN/系统代理时应用会自动跟随（设置页可看检测结果），也可手动填代理地址；或配置 STEAM_API_KEY 走 api.steampowered.com。',
         });
       }
     }
