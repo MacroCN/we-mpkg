@@ -197,6 +197,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: [portable, android]
     steps:
+      # 需要仓库里的 RELEASE-NOTES-<版本>.txt 作正文，所以要先 checkout（只取这一个文件也够，但没必要省）
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
