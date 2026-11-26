@@ -385,7 +385,18 @@ const server = http.createServer(async (req, res) => {
     if (pn === '/api/login/status') {
       const steamjs = require('./steamjs');
       const token = steamjs.readToken();
-      return json(res, 200, pendingLogin || { state: 'idle', url: null, accountName: token ? token.accountName : null });
+      const hasToken = !!(token && token.refreshToken);
+      // 没有进行中的登录时以磁盘上的凭据为准：页面刚打开、服务重启过、或登录很快就完成
+      // 而前端还没开始轮询，这几种情况下 pendingLogin 是 null，不能一律回 idle。
+      if (!pendingLogin) {
+        return json(res, 200, {
+          state: hasToken ? 'done' : 'idle',
+          url: null,
+          accountName: token ? token.accountName : null,
+          hasToken,
+        });
+      }
+      return json(res, 200, Object.assign({ hasToken }, pendingLogin));
     }
     if (pn === '/api/logout' && req.method === 'POST') {
       require('./steamjs').clearToken();

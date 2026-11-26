@@ -527,11 +527,7 @@ function setCardPicked(card, on) {
 
 /** 卡片上的「直接下载」：按设备推荐画质入队，不必先打开详情抽屉 */
 async function quickDownload(it, btn) {
-  if (!state.loggedIn) {
-    openSettings('account');
-    $('loginHint').textContent = tr('notLogged');
-    return;
-  }
+  if (!state.loggedIn && !(await ensureLoggedIn())) return;
   const preset = state.device ? state.device.preset : 'high';
   if (btn) btn.disabled = true;
   try {
@@ -584,11 +580,7 @@ async function startBatch() {
     $('status').textContent = tr('batchNone');
     return;
   }
-  if (!state.loggedIn) {
-    openSettings('account');
-    $('loginHint').textContent = tr('notLogged');
-    return;
-  }
+  if (!state.loggedIn && !(await ensureLoggedIn())) return;
   if (!confirm(tr('batchConfirm', { n: items.length }))) return;
   state.batchBusy = true;
   $('batchStart').disabled = true;
@@ -1000,10 +992,8 @@ window.__androidBack = function () {
 async function startDownload() {
   const cur = state.current;
   if (!cur) return;
-  if (!state.loggedIn) {
+  if (!state.loggedIn && !(await ensureLoggedIn())) {
     // 没登录就直接把用户带去登录，不要先建一个必然失败的任务
-    openSettings('account');
-    $('loginHint').textContent = tr('notLogged');
     return;
   }
   const rawMode = rawExportChecked();
@@ -1260,12 +1250,68 @@ function proxyHintText(s) {
   return tr('proxyNone');
 }
 
+/** 把 /api/config 的结果应用到页面状态（启动、登录后、切回前台都要走这里） */
+function applyConfig(cfg) {
+  if (!cfg) return null;
+  state.canDownload = cfg.canDownload !== false;
+  state.canDownloadReason = cfg.canDownloadReason || '';
+  state.loggedIn = !!cfg.loggedIn;
+  state.webLogin = cfg.webLogin || null;
+  if (!state.canDownload) {
+    $('cfg').textContent = '⚠ ' + cfg.platform + ' — ' + state.canDownloadReason;
+  } else {
+    $('cfg').textContent = state.loggedIn ? `${cfg.engine} · ${cfg.outputDir}` : tr('notLogged');
+  }
+  setDownloadLabel();
+  return cfg;
+}
+
+async function refreshAuthState() {
+  return applyConfig(await api('/api/config'));
+}
+
+/**
+ * 登录成功后的收尾：先把本地状态摆正（否则用户点下载又被弹回登录页），
+ * 再等服务端把 web 登录态换回来（它要连一次 steamcommunity，是异步的），
+ * 最后用「账号范围」重抓一次列表 —— 首次登录后列表不该还是匿名内容。
+ */
+async function afterLoginDone(accountName) {
+  $('loginHint').textContent = tr('loginDone', { a: accountName || '?' });
+  $('loginAccount').value = accountName || '';
+  state.loggedIn = true;
+  state.canDownload = true;
+  state.canDownloadReason = '';
+  setDownloadLabel();
+  let got = false;
+  for (let i = 0; i < 4 && !got; i++) {
+    try {
+      const cfg = await refreshAuthState();
+      got = !!(cfg && cfg.webLogin && cfg.webLogin.loggedIn);
+    } catch { /* 网络抖动就再试一次 */ }
+    if (!got) await new Promise((r) => setTimeout(r, 1200));
+  }
+  load();
+}
+
+/** 点下载前的最后一道确认：页面里的 loggedIn 可能是旧的快照 */
+async function ensureLoggedIn() {
+  try {
+    const cfg = await refreshAuthState();
+    if (cfg && cfg.loggedIn) {
+      load();
+      return true;
+    }
+  } catch { /* 服务没响应就按未登录处理 */ }
+  openSettings('account');
+  $('loginHint').textContent = tr('notLogged');
+  return false;
+}
+
 function closeSettings() {
   $('modal').classList.add('hidden');
   document.body.classList.remove('modal-open');
-  if (state.loginPoll) clearTimeout(state.loginPoll);
-  state.loginPoll = null;
-  state.loginPollSeq++;
+  // 登录轮询不能在关闭设置页时掐掉：手机上「点登录 → 顺手关掉抽屉」太常见了，
+  // 掐掉就会变成「后台已登录、主界面还显示未登录」。轮询自己会在 done/failed 时停。
 }
 
 /** 调起系统目录选择器（安卓端），选完由原生回填 __folderPicked */
@@ -1484,14 +1530,8 @@ function pollLogin() {
       const s = await api('/api/login/status');
       if (seq !== state.loginPollSeq) return;
       if (s.state === 'done') {
-        $('loginHint').textContent = tr('loginDone', { a: s.accountName || '?' });
-        $('loginAccount').value = s.accountName || '';
-        state.canDownload = true;
-        state.loggedIn = true;
-        setDownloadLabel();
-        api('/api/config').then((cfg) => {
-          if (seq === state.loginPollSeq) $('cfg').textContent = `${cfg.engine} · ${cfg.outputDir}`;
-        }).catch(() => {});
+        state.loginPoll = null;
+        await afterLoginDone(s.accountName);
         return;
       }
       if (s.state === 'needCode') {
@@ -1678,6 +1718,12 @@ function wire() {
   }, { passive: true });
 }
 
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  // 从后台回来（去 Steam App 确认完登录 / 切了窗口）：登录态可能已经变了
+  refreshAuthState().catch(() => {});
+});
+
 async function init() {
   state.lang = localStorage.getItem('lang') || (/^zh/i.test(navigator.language || '') ? 'zh' : 'en');
   state.filtersOpen = window.innerWidth > 640;
@@ -1693,18 +1739,7 @@ async function init() {
   if ($('days')) $('days').value = String(state.days);
   toggleDays();
   try {
-    const cfg = await api('/api/config');
-    state.canDownload = cfg.canDownload !== false;
-    state.canDownloadReason = cfg.canDownloadReason || '';
-    state.loggedIn = !!cfg.loggedIn;
-    state.webLogin = cfg.webLogin || null;
-    $('cfg').textContent = state.loggedIn
-      ? `${cfg.engine} · ${cfg.outputDir}`
-      : tr('notLogged');
-    if (!state.canDownload) {
-      $('cfg').textContent = '⚠ ' + cfg.platform + ' — ' + state.canDownloadReason;
-    }
-    setDownloadLabel();
+    applyConfig(await api('/api/config'));
   } catch (e) {
     $('cfg').textContent = e.message;
   }

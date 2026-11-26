@@ -2431,6 +2431,29 @@ test('发版说明集中在 release-notes/，根目录不再散落', () => {
   assert.ok(!ci.includes('[ -f "RELEASE-NOTES-${VERSION}.txt" ]'), '不能再从根目录取');
 });
 
+test('首次登录后页面要自己刷新：不掐轮询、重取配置、重抓列表', () => {
+  const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+  // 关设置页不能把登录轮询掐掉（手机上点完登录就关抽屉是常态）
+  const close = js.slice(js.indexOf('function closeSettings()'), js.indexOf('function closeSettings()') + 400);
+  assert.ok(!close.includes('clearTimeout(state.loginPoll)'), '关闭设置页不应中断登录轮询');
+  // 登录完成后的收尾
+  assert.ok(js.includes('async function afterLoginDone'), '登录完成要有统一的收尾函数');
+  const after = js.slice(js.indexOf('async function afterLoginDone'), js.indexOf('async function afterLoginDone') + 1200);
+  assert.ok(after.includes('refreshAuthState'), '要重新拉 /api/config 而不是只改本地变量');
+  assert.ok(after.includes('load()'), '登录后要用账号范围重抓列表');
+  // 点下载前再确认一次，避免「后台已登录、页面还显示未登录」
+  assert.ok(js.includes('async function ensureLoggedIn'), '点下载前要问一次服务端登录态');
+  for (const fn of ['async function quickDownload', 'async function startBatch', 'async function startDownload']) {
+    const body = js.slice(js.indexOf(fn), js.indexOf(fn) + 900);
+    assert.ok(body.includes('ensureLoggedIn'), `${fn} 要先确认登录态`);
+  }
+  assert.ok(js.includes("addEventListener('visibilitychange'"), '从后台回来要刷新登录态');
+  // 服务端：没有进行中的登录时按磁盘凭据回答，别一律 idle
+  const srv = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  const status = srv.slice(srv.indexOf("'/api/login/status'"), srv.indexOf("'/api/login/status'") + 900);
+  assert.ok(status.includes("hasToken ? 'done' : 'idle'"), '登录状态接口要根据 token 判断已登录');
+});
+
 async function testAsync(name, fn) {
   try {
     await fn();
