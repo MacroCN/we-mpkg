@@ -744,20 +744,14 @@ async function packFromItemDir(itemDir, opts = {}) {
     onLog(`  ⚠ 兼容性预检失败: ${e.message}`);
   }
 
-  let mobileDir = prepared.projectDir;
-  let webInfo = null;
+  // web 类型没有可用的手机端渲染引擎，官方客户端也不认网页资源：不再"转视频"糊过去，
+  // 直接拒绝打包 mpkg，引导用户改用「下载原始资源」
   if (prepared.type === 'web') {
-    const web = await adaptWebToVideo(prepared.projectDir, {
-      seconds: opts.webSeconds,
-      fps: opts.webFps,
-      width: opts.webWidth,
-      height: opts.webHeight,
-      layout: opts.webLayout,
-    }, onLog);
-    mobileDir = web.projectDir;
-    webInfo = web.info;
-    warnings.push(...web.warnings);
+    const e = new Error('Web 类型壁纸不支持打包 MPKG：请在详情页勾选「下载原始资源」，导出网页原始文件');
+    e.code = 'WEB_NO_MPKG';
+    throw e;
   }
+  const mobileDir = prepared.projectDir;
 
   // 音频：默认剥离（官方导出手机版也不带），--keep-audio 可保留
   const audio = stripAudio(mobileDir, { preserveAudio: opts.preserveAudio, onLog });
@@ -829,7 +823,7 @@ async function packFromItemDir(itemDir, opts = {}) {
     tex: adapted.tex,
     shader: adapted.shader,
     audio,
-    web: webInfo,
+    web: null,
     compat,
     plan: summarizePlan(plan),
     planFile: keepWorkDir ? planFile : null,

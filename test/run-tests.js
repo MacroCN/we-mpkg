@@ -1743,14 +1743,75 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(err.code, 'NOT_WEB');
   });
 
-  test('前端有「导出离线网页包」选项，且会带上 mode=web', () => {
+  test('原始资源：video 类型原样打成 zip（mp4 与 project.json 都在）', () => {
+    const re = require('../src/rawexport');
+    const dir = tmp('rawvideo');
+    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({ type: 'video', file: 'a.mp4', title: 'v' }));
+    fs.writeFileSync(path.join(dir, 'a.mp4'), Buffer.alloc(2048, 7));
+    const out = re.exportRaw(dir, { id: '1001', title: '视频 测试', outDir: path.join(dir, 'out') });
+    assert.ok(out.rawExport, '应标记为原始资源包');
+    assert.strictEqual(out.type, 'video');
+    assert.ok(out.outFile.endsWith('_1001_raw.zip'), '命名应为 _raw.zip');
+    assert.ok(fs.existsSync(out.outFile));
+    assert.strictEqual(out.entries, 2, '应包含 mp4 与 project.json');
+  });
+
+  test('原始资源：scene 类型先解包 scene.pkg 再打包', () => {
+    const re = require('../src/rawexport');
+    const pkgformat = require('../src/pkgformat');
+    const dir = tmp('rawscene');
+    const src = path.join(dir, 'inner');
+    fs.mkdirSync(path.join(src, 'materials'), { recursive: true });
+    fs.writeFileSync(path.join(src, 'materials', 'a.tex'), 'tex-bytes');
+    fs.writeFileSync(path.join(src, 'shader.vert'), 'void main(){}');
+    const built = pkgformat.packDirToBuffer(src, pkgformat.MAGIC_PC);
+    fs.writeFileSync(path.join(dir, 'scene.pkg'), built.buffer);
+    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({ type: 'scene', file: 'scene.pkg', title: 's' }));
+    const out = re.exportRaw(dir, { id: '1002', title: '场景测试', outDir: path.join(dir, 'out') });
+    assert.strictEqual(out.type, 'scene');
+    assert.strictEqual(out.unpacked, 2, '应解出 2 个文件');
+    assert.strictEqual(out.entries, 2, 'zip 里应只有解包出来的文件');
+    assert.ok(out.warnings.some((w) => /scene\.pkg/.test(w)));
+  });
+
+  test('原始资源：web 类型走离线网页包，并统一命名 _raw.zip', () => {
+    const re = require('../src/rawexport');
+    const dir = tmp('rawweb');
+    fs.writeFileSync(path.join(dir, 'index.html'), '<html><head></head><body>hi</body></html>');
+    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({ type: 'web', file: 'index.html' }));
+    const out = re.exportRaw(dir, { id: '1003', title: '网页测试', outDir: path.join(dir, 'out') });
+    assert.strictEqual(out.type, 'web');
+    assert.ok(out.rawExport && out.webExport, 'web 包同时应带 webExport 标记');
+    assert.ok(out.outFile.endsWith('_1003_raw.zip'));
+    assert.strictEqual(out.entry, 'index.html');
+  });
+
+  await testAsync('web 类型打包 mpkg 直接报错，不再转视频', async () => {
+    const dir = tmp('webpack');
+    fs.writeFileSync(path.join(dir, 'index.html'), '<html><body>x</body></html>');
+    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({ type: 'web', file: 'index.html', title: 'w' }));
+    let err = null;
+    try {
+      await packer.packFromItemDir(dir, { id: '9', title: 'w', onLog: () => {} });
+    } catch (e) { err = e; }
+    assert.ok(err, '应抛错');
+    assert.strictEqual(err.code, 'WEB_NO_MPKG');
+  });
+
+  test('前端「下载原始资源」：Web 按钮置灰，结果走打开文件；设置页旧选项已移除', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
-    assert.ok(html.includes('id="d-webexport"'), '缺少导出离线包勾选项');
+    assert.ok(html.includes('id="d-raw"'), '缺少「下载原始资源」勾选项');
+    assert.ok(!html.includes('id="rawOnly"'), '设置页的「只下载原始文件」应已删除');
     const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
-    assert.ok(js.includes("mode: webMode ? 'web'"), '提交任务时应带上 mode=web');
-    assert.ok(js.includes('raw: !webMode && state.rawOnly'), '导出与只下载模式应互斥');
-    assert.ok(js.includes('result.webExport'), '结果区应能识别离线包');
-    assert.ok(js.includes('shareFile'), '安卓端应能分享离线包');
+    assert.ok(js.includes('function isWebItem'), '应能按 tags 识别 web 条目');
+    assert.ok(js.includes("tr('webNoMpkg')"), 'Web 条目应提示不支持 mpkg');
+    assert.ok(js.includes('raw: rawMode'), '提交任务时应带上 raw 开关');
+    assert.ok(!js.includes("mode: webMode"), '旧的 mode=web 分支应已移除');
+    assert.ok(js.includes('result.rawExport'), '结果区应能识别原始资源包');
+    assert.ok(js.includes('openFile'), '安卓端应改成打开文件');
+    const dlc = fs.readFileSync(path.join(__dirname, '..', 'public', 'dlcenter.js'), 'utf8');
+    assert.ok(dlc.includes("act === 'openfile'"), '下载中心也应有打开文件动作');
+    assert.ok(dlc.includes('result.rawExport'), '下载中心应按原始资源包切换按钮');
   });
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);

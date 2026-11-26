@@ -390,7 +390,8 @@ function exportWebProject(srcDir, opts = {}) {
   fs.writeFileSync(path.join(pkgDir, SW_FILE), buildServiceWorker(swList), 'utf8');
 
   onProgress({ phase: 'webexport', percent: null, detail: '压缩成 zip' });
-  const outFile = path.join(outDir, `${safeName(title)}_${id}_web.zip`);
+  const suffix = opts.nameSuffix || 'web';
+  const outFile = path.join(outDir, `${safeName(title)}_${id}_${suffix}.zip`);
   fs.rmSync(outFile, { force: true });
   const zipped = zip.zipDirToFile(pkgDir, outFile);
   const totalBytes = zip.listFiles(pkgDir).reduce((n, f) => n + fs.statSync(f.abs).size, 0);

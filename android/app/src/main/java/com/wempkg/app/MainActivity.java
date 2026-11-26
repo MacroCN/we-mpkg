@@ -163,6 +163,31 @@ public class MainActivity extends Activity {
                 return sendToWallpaperEngine(f.getAbsolutePath());
             }
 
+            /** 用系统默认应用打开产出的文件（原始资源包是 zip，交给文件管理器/解压工具） */
+            @android.webkit.JavascriptInterface
+            public String openFile(String path) {
+                if (!canUseBridge()) return "✘ 页面来源未授权";
+                if (path == null || path.trim().isEmpty()) return "✘ 没有拿到文件路径";
+                File f = new File(path.trim());
+                if (!MpkgProvider.isAllowedExportFile(MainActivity.this, f)) {
+                    return "✘ 只允许打开产出目录里的文件";
+                }
+                Uri uri = MpkgProvider.uriFor(f);
+                String mime = MpkgProvider.mimeOf(f.getName());
+                try {
+                    Intent it = new Intent(Intent.ACTION_VIEW);
+                    it.setDataAndType(uri, mime);
+                    it.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(it);
+                    return "已请求系统打开：" + f.getName();
+                } catch (ActivityNotFoundException e) {
+                    // 没有能直接打开的应用时，退回分享面板让用户自己选
+                    return shareFile(f.getAbsolutePath());
+                } catch (Exception e) {
+                    return "✘ 打开失败: " + e.getMessage();
+                }
+            }
+
             /** 把刚导出的离线网页包（zip）分享出去：微信 / QQ / 文件管理器都能收 */
             @android.webkit.JavascriptInterface
             public String shareFile(String path) {

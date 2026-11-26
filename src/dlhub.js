@@ -84,6 +84,7 @@ function createHub(opts = {}) {
         rawDir: j.result.rawDir, raw: !!j.result.raw,
         files: j.result.raw ? (j.result.files || []).length : undefined,
         webExport: !!j.result.webExport, mode: j.result.mode || null,
+        rawExport: !!j.result.rawExport, unpacked: j.result.unpacked,
         entry: j.result.entry, htmlCount: j.result.htmlCount,
       } : null,
       createdAt: j.createdAt, startedAt: j.startedAt, finishedAt: j.finishedAt,
@@ -405,14 +406,19 @@ function createHub(opts = {}) {
       size: j.result ? j.result.size : null,
       type: j.result ? j.result.type : null,
       rawDir: j.result && j.result.raw ? j.result.rawDir : null,
-      result: j.result ? (j.result.raw ? { raw: true, files: (j.result.files || []).length } : {
+      result: j.result ? (j.result.raw ? { raw: true, files: (j.result.files || []).length } : (j.result.rawExport ? {
+        type: j.result.type, size: j.result.size, rawExport: true, entries: j.result.entries,
+        unpacked: j.result.unpacked, warnings: j.result.warnings,
+        outPath: j.result.outFile || null,
+        outFile: j.result.outFile ? path.basename(j.result.outFile) : null,
+      } : {
         type: j.result.type, size: j.result.size, magic: j.result.magic,
         preset: j.result.preset, tex: j.result.tex, shader: j.result.shader, audio: j.result.audio,
         warnings: j.result.warnings, entryCount: j.result.entryCount,
         // 详情抽屉直接读 result.outPath 决定「保存 .mpkg」还是「导入壁纸引擎」
         outPath: j.result.outFile || null,
         outFile: j.result.outFile ? path.basename(j.result.outFile) : null,
-      }) : null,
+      })) : null,
     };
     if (logs) base.log = j.log.slice(-120);
     return base;

@@ -120,10 +120,10 @@
         <span data-i18n="keepAudio">保留壁纸自带音频</span>
       </label>
       <label class="check">
-        <input id="d-webexport" type="checkbox" />
-        <span data-i18n="webExport">导出为离线网页包（PWA）</span>
+        <input id="d-raw" type="checkbox" />
+        <span data-i18n="rawDownload">下载原始资源</span>
       </label>
-      <p class="hint" data-i18n="webExportTip">仅 Web 类型壁纸有效：产出 zip，解压后用 Kiwi / Firefox 打开 index.html，交互全部保留（不做 mpkg）</p>
+      <p class="hint" data-i18n="rawDownloadTip">不打包 mpkg：video / 场景 / 网页都直接导出原始资源并压成 zip（场景先解包 scene.pkg，网页附带触屏适配与 PWA）</p>
     </div>
     <p id="d-device" class="hint"></p>
     <div id="d-compat" class="compat hidden"></div>
@@ -184,12 +184,6 @@
       <p id="cdnHint" class="hint" data-i18n="cdnHint">启动时会自动测一次；下载按这里的延迟顺序走，节点失败自动换下一台。</p>
       <p id="cdnGeo" class="hint"></p>
       <div id="cdnList" class="cdn-list"></div>
-
-      <label class="check">
-        <input id="rawOnly" type="checkbox" />
-        <span data-i18n="rawOnly">只下载原始文件（不打包 mpkg）</span>
-      </label>
-      <p class="hint" data-i18n="rawTip">勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。</p>
 
       <div id="setupRow" class="row hidden">
         <button id="openSetupBtn" class="ghost" data-i18n="openSetup">启动页：本地 / 远程 / 导入凭据</button>

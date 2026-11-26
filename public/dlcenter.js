@@ -64,7 +64,7 @@
   }
   function bridge() {
     if (!window.Android) return null;
-    if (typeof window.Android.openMpkg !== 'function') return null;
+    if (typeof window.Android.openMpkg !== 'function' && typeof window.Android.openFile !== 'function') return null;
     return window.Android;
   }
   function stateText(s) {
@@ -97,6 +97,7 @@
     if (run && p.eta && !j.paused) meta.push(t(`剩 ${secs(p.eta)}`, `${secs(p.eta)} left`));
     if (p.phase === 'convert' && p.total) meta.push(`${p.done || 0}/${p.total} ${t('张', 'tex')}`);
     if (j.result && j.result.type) meta.push(j.result.type);
+    if (j.result && j.result.rawExport) meta.push(t('原始资源', 'raw assets'));
     if (j.rawDir) meta.push(t('原始文件', 'raw files'));
 
     const acts = [];
@@ -111,10 +112,15 @@
     }
     if (j.state === 'done') {
       const b = bridge();
+      const isRaw = !!(j.result && j.result.rawExport);
       if (b && j.outPath) {
-        acts.push(`<button class="primary-act" data-act="import" data-id="${esc(j.id)}">${t('导入壁纸引擎', 'Import to WE')}</button>`);
+        if (isRaw && typeof b.openFile === 'function') {
+          acts.push(`<button class="primary-act" data-act="openfile" data-id="${esc(j.id)}">${t('打开文件', 'Open file')}</button>`);
+        } else {
+          acts.push(`<button class="primary-act" data-act="import" data-id="${esc(j.id)}">${t('导入壁纸引擎', 'Import to WE')}</button>`);
+        }
       } else if (j.outFile) {
-        acts.push(`<a class="primary-act" href="/api/file/${encodeURIComponent(j.id)}" download>${t('保存 .mpkg', 'Save .mpkg')}</a>`);
+        acts.push(`<a class="primary-act" href="/api/file/${encodeURIComponent(j.id)}" download>${isRaw ? t('保存原始资源 .zip', 'Save raw .zip') : t('保存 .mpkg', 'Save .mpkg')}</a>`);
       }
       if (j.outFile && !j.rawDir) acts.push(`<span class="tag">${esc(j.outFile)}</span>`);
     }
@@ -328,6 +334,21 @@
     }
   }
 
+  /** 原始资源包不是 mpkg：交给系统按文件类型打开（zip 一般是文件管理器 / 解压工具） */
+  function openFile(id) {
+    const j = jobs.find((x) => x.id === id);
+    const b = bridge();
+    if (!b || typeof b.openFile !== 'function') return;
+    const path = j && j.outPath;
+    if (!path) { toastInline(t('拿不到成品路径', 'No output path')); return; }
+    try {
+      const msg = b.openFile(path);
+      toastInline(msg || t('已请求系统打开', 'Asking the system to open it'));
+    } catch (e) {
+      toastInline(t('打开文件失败：', 'Failed to open file: ') + e.message);
+    }
+  }
+
   // 清空历史（页内二次确认，不依赖 window.confirm）
   function askClear() {
     const ended = jobs.filter(isEnded);
@@ -432,6 +453,7 @@
       if (!btn) return;
       const { act, id } = btn.dataset;
       if (act === 'import') { importMpkg(id); return; }
+      if (act === 'openfile') { openFile(id); return; }
       jobAction(id, act);
     });
 

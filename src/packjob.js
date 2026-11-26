@@ -143,28 +143,20 @@ async function runJob(job, hooks = {}) {
 
   const dlDir = dl.dir || null;
 
+  // 「下载原始资源」：不产出 mpkg，把原始资源打成 zip（scene 先解包 pkg，web 走离线网页包）
   if (job.raw) {
-    let files = [];
-    try { files = packer.analyze(dl.dir).files || []; } catch { /* ignore */ }
-    onProgress({ phase: 'done', percent: 100, detail: '已下载（未打包）' });
-    onLog(`✔ 已下载到: ${dl.dir}（未打包）`);
-    return { result: { rawDir: dl.dir, raw: true, files }, dlDir };
-  }
-
-  // 导出模式：web 类型壁纸不做 mpkg，而是导出成离线网页包（PWA），保留全部交互
-  if (job.mode === 'web') {
-    onLog('导出模式：离线网页包（PWA）');
-    const webexport = require('./webexport');
-    const res = webexport.exportWebProject(dl.dir, {
+    onLog('导出模式：下载原始资源（打包 zip）');
+    const rawexport = require('./rawexport');
+    const res = rawexport.exportRaw(dl.dir, {
       id: itemId,
       title: job.title,
       outDir: config.OUTPUT_DIR,
       onLog,
-      onProgress: (p) => onProgress(Object.assign({ phase: p.phase || 'webexport' }, p)),
+      onProgress: (p) => onProgress(Object.assign({ phase: p.phase || 'rawexport' }, p)),
     });
     if (cancelled()) {
       try { if (res.outFile) fs.rmSync(res.outFile, { force: true }); } catch { /* ignore */ }
-      throw new CancelledError('任务已取消（本次导出的离线包已删除）');
+      throw new CancelledError('任务已取消（本次导出的原始资源包已删除）');
     }
     checkpoint();
     onLog('全部完成');

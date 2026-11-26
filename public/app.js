@@ -10,12 +10,12 @@ const I18N = {
     sortTrend: '热门趋势', sortRecent: '最新发布', sortUpdated: '最近更新', sortTop: '订阅最多',
     filters: '筛选', clearFilters: '清空', prev: '上一页', next: '下一页',
     downloadPack: '下载并打包为 MPKG', steamPage: 'Steam 页面', saveMpkg: '保存 .mpkg', importWe: '导入壁纸引擎',
-    webExport: '导出为离线网页包（PWA）',
-    webExportTip: '仅 Web 类型壁纸有效：产出 zip，解压后用 Kiwi / Firefox 打开 index.html，交互全部保留（不做 mpkg）',
-    saveWeb: '保存离线包 .zip', shareWeb: '分享离线包 .zip', webDone: '解压后用 Kiwi / Firefox 打开 index.html；添加到桌面需要 http(s) 环境',
-    notWeb: '这个条目不是 Web 类型（没有 html），离线网页包不适用',
+    rawDownload: '下载原始资源',
+    rawDownloadTip: '不打包 mpkg：video / 场景 / 网页都直接导出原始资源并压成 zip（场景先解包 scene.pkg，网页附带触屏适配与 PWA）',
+    rawDownloadBtn: '下载原始资源（打包 zip）',
+    saveRaw: '保存原始资源 .zip', openFile: '打开文件',
+    webNoMpkg: 'Web 类型不支持下载 MPKG（勾选「下载原始资源」可导出网页）',
     needLogin: '先登录再下载', notLogged: '未登录，点右上角 ⚙ 登录',
-    rawOnly: '只下载原始文件（不打包 mpkg）',
     hub: '下载中心', openHub: '在下载中心查看（独立进程，关页面也不中断）', cancelTask: '取消任务',
     hubHint: '独立进程运行，关掉本页面任务也会继续',
     openSetup: '启动页：本地 / 远程 / 导入凭据', setupHint: '想切换本地 / 远程服务，或粘贴电脑上的凭据导入，点这个按钮回启动页（页面状态不会丢）。',
@@ -31,7 +31,6 @@ const I18N = {
     updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
     updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
     keepAudio: '保留壁纸自带音频',
-    rawTip: '勾上后只把条目原始文件下到「下载目录/js-条目ID」：scene.pkg、mp4 等原样保留，适合自己再转换或用其他工具处理。',
     exitApp: '退出程序（关闭后台服务）',
     exitConfirm: '确定退出？后台服务会被关闭，本页随即失效。',
     exitDone: '已退出，后台服务已关闭，可以关掉这个页面了。',
@@ -74,12 +73,12 @@ const I18N = {
     sortTrend: 'Trending', sortRecent: 'Most recent', sortUpdated: 'Recently updated', sortTop: 'Most subscribed',
     filters: 'Filters', clearFilters: 'Clear', prev: 'Prev', next: 'Next',
     downloadPack: 'Download & pack MPKG', steamPage: 'Steam page', saveMpkg: 'Save .mpkg', importWe: 'Import to Wallpaper Engine',
-    webExport: 'Export offline web package (PWA)',
-    webExportTip: 'Web-type wallpapers only: produces a zip; unzip and open index.html in Kiwi / Firefox — all interactions kept (no mpkg)',
-    saveWeb: 'Save offline .zip', shareWeb: 'Share offline .zip', webDone: 'Unzip and open index.html in Kiwi / Firefox; installing to home screen needs http(s)',
-    notWeb: 'This item is not a web wallpaper (no html) — offline web package does not apply',
+    rawDownload: 'Download raw assets',
+    rawDownloadTip: 'No mpkg: video / scene / web items are exported as a zip of the original assets (scene.pkg is unpacked first; web gets touch support + PWA)',
+    rawDownloadBtn: 'Download raw assets (zip)',
+    saveRaw: 'Save raw assets .zip', openFile: 'Open file',
+    webNoMpkg: 'Web wallpapers cannot be packed as MPKG (tick “Download raw assets” to export the page)',
     needLogin: 'Sign in first', notLogged: 'Not signed in — tap ⚙ to sign in',
-    rawOnly: 'Download raw files only (no mpkg)',
     hub: 'Downloads', openHub: 'Open download center (separate process, closing this page won\'t stop it)',
     cancelTask: 'Cancel task', hubHint: 'runs in a separate process, safe to close this page',
     openSetup: 'Launcher: local / remote / import credential', setupHint: 'Use this to switch local / remote service or paste a desktop credential; page state is kept.',
@@ -95,7 +94,6 @@ const I18N = {
     updateChecking: 'Checking the latest GitHub release…', updateLatest: 'You are up to date ({v})',
     updateFound: 'New version {v} available (current {c})', updateFail: 'Check failed: ',
     keepAudio: 'Keep wallpaper audio',
-    rawTip: 'Downloads the original files into "download dir/js-<id>" (scene.pkg, mp4, …) untouched — handy for your own conversion or other tools.',
     exitApp: 'Quit (stop background service)',
     exitConfirm: 'Quit now? The background service will be stopped and this page will stop working.',
     exitDone: 'Quit. The service is stopped — you can close this page.',
@@ -216,7 +214,6 @@ const state = {
   canDownloadReason: '',
   loggedIn: false,
   webLogin: null,          // 社区站登录态 {loggedIn,fresh,accountName}
-  rawOnly: false,
   statusText: '',
   lang: 'zh',
   loginPoll: null,
@@ -469,7 +466,7 @@ async function startBatch() {
         body: JSON.stringify({
           id: it.id,
           title: it.title,
-          raw: state.rawOnly,
+          raw: isWebItem(it),
           preset,
           preserveAudio: !!($('d-audio') && $('d-audio').checked),
         }),
@@ -648,8 +645,27 @@ function renderCompat(c) {
 }
 
 // ---------------- 详情 ----------------
+/** 条目标签里带 Type=Web 的，就是网页壁纸（手机端没有 Web 引擎，只能导原始资源） */
+function isWebItem(item) {
+  const tags = (item && item.tags) || [];
+  return tags.some((t) => /^(web|网页)$/i.test(String(t && t.label ? t.label : t).trim()));
+}
+
+function rawExportChecked() {
+  return !!($('d-raw') && $('d-raw').checked);
+}
+
 function setDownloadLabel() {
   const btn = $('d-download');
+  const cur = state.current;
+  const web = !!(cur && isWebItem(cur.seed));
+  const raw = rawExportChecked();
+  // Web 类型没有可用的手机端渲染，只能导出原始资源；不勾选就灰掉
+  if (web && !raw) {
+    btn.disabled = true;
+    btn.textContent = tr('webNoMpkg');
+    return;
+  }
   if (!state.canDownload) {
     btn.disabled = true;
     btn.textContent = tr('noDownload');
@@ -657,7 +673,9 @@ function setDownloadLabel() {
   }
   // 能下载但没登录：按钮仍然可点，点了直接引导去登录
   btn.disabled = false;
-  btn.textContent = state.loggedIn ? tr('downloadPack') : tr('needLogin');
+  btn.textContent = raw
+    ? tr('rawDownloadBtn')
+    : (state.loggedIn ? tr('downloadPack') : tr('needLogin'));
 }
 
 function openDetail(id, seed) {
@@ -685,6 +703,9 @@ function openDetail(id, seed) {
     $('d-meta').textContent = `${human(d.fileSize)} · ${d.subscriptions || 0} · ${dateStr(d.timeUpdated)}${d.author ? ' · ' + d.author : ''}`;
     $('d-tags').innerHTML = (d.tags || []).map((t) => `<span class="chip">${esc(tagLabel(t))}</span>`).join('');
     $('d-desc').textContent = d.description || '';
+    // 详情接口返回的 tags 比列表更全，用它重新判一次 Web 类型（下载按钮可能因此变灰）
+    state.current.seed = Object.assign({}, state.current.seed, d);
+    setDownloadLabel();
   }).catch(() => { /* 保留卡片信息 */ });
 }
 
@@ -720,6 +741,12 @@ async function startDownload() {
     $('loginHint').textContent = tr('notLogged');
     return;
   }
+  const rawMode = rawExportChecked();
+  if (isWebItem(cur.seed) && !rawMode) {
+    // Web 类型不能打包 mpkg，按钮本来就该是灰的；这里兜底防手改 DOM
+    setDownloadLabel();
+    return;
+  }
   const btn = $('d-download');
   btn.disabled = true;
   $('d-progress').classList.remove('hidden');
@@ -730,7 +757,6 @@ async function startDownload() {
   if ($('p-sub')) $('p-sub').textContent = '';
   if ($('p-cancel')) $('p-cancel').classList.remove('hidden');
 
-  const webMode = !!($('d-webexport') && $('d-webexport').checked);
   try {
     const { jobId } = await api('/api/jobs', {
       method: 'POST',
@@ -738,12 +764,10 @@ async function startDownload() {
       body: JSON.stringify({
         id: cur.id,
         title: cur.seed.title,
-        // 导出离线包时「只下载原始文件」没有意义，两个模式互斥
-        raw: !webMode && state.rawOnly,
+        // 勾选后不打包 mpkg，而是把原始资源（scene 解包 / web 离线包）压成 zip
+        raw: rawMode,
         preset: ($('d-quality') || {}).value || 'high',
         preserveAudio: !!($('d-audio') && $('d-audio').checked),
-        // 离线网页包（PWA）：后端只认 web 类型，其它类型会明确报错
-        mode: webMode ? 'web' : undefined,
       }),
     });
     // 任务跑在独立进程（下载中心）里：网页关掉也会继续下，进度在浮层里看
@@ -759,7 +783,8 @@ async function startDownload() {
 /** 安卓外壳里点了「保存 .mpkg」其实什么都发生不了（WebView 没有下载监听），
  *  所以原生桥在的时候改成「导入壁纸引擎」，直接把成品路径交给 App 拉起 WE。 */
 function androidBridge() {
-  if (window.Android && typeof window.Android.openMpkg === 'function') return window.Android;
+  if (!window.Android) return null;
+  if (typeof window.Android.openMpkg === 'function' || typeof window.Android.openFile === 'function') return window.Android;
   return null;
 }
 
@@ -767,30 +792,30 @@ function showResultAction(jobId, result, job) {
   const el = $('p-file');
   // 优先用任务顶层的 outPath，再退回 result 里的（两个接口字段都要能认）
   const wepath = (job && job.outPath) || (result && result.outPath);
-  // 离线网页包：产出的是 zip，不是 mpkg，动作也跟着换（安卓上分享出去，桌面直接下载）
-  if (result && result.webExport) {
-    if (androidBridge() && wepath && typeof androidBridge().shareFile === 'function') {
+  // 原始资源包：产出的是 zip，不是 mpkg；安卓上直接调系统「打开文件」，桌面端下载 zip
+  if (result && result.rawExport) {
+    if (androidBridge() && wepath && typeof androidBridge().openFile === 'function') {
       el.removeAttribute('href');
-      el.dataset.action = 'share';
+      el.dataset.action = 'openfile';
       delete el.dataset.i18n;
-      el.textContent = tr('shareWeb');
+      el.textContent = tr('openFile');
       el.onclick = (ev) => {
         ev.preventDefault();
         try {
-          const msg = androidBridge().shareFile(wepath);
+          const msg = androidBridge().openFile(wepath);
           if (msg) $('p-log').textContent += '\n' + msg;
         } catch (e) {
-          $('p-log').textContent += '\n✘ 分享失败: ' + e.message;
+          $('p-log').textContent += '\n✘ 打开文件失败: ' + e.message;
         }
       };
     } else {
       el.dataset.action = 'save';
-      el.dataset.i18n = 'saveWeb';
-      el.textContent = tr('saveWeb');
+      el.dataset.i18n = 'saveRaw';
+      el.textContent = tr('saveRaw');
       el.href = '/api/file/' + jobId;
       el.onclick = null;
     }
-    if ($('p-note')) $('p-note').textContent = tr('webDone');
+    if ($('p-note')) $('p-note').textContent = wepath || (job && job.outFile) || '';
     el.classList.remove('hidden');
     return;
   }
@@ -820,7 +845,7 @@ function showResultAction(jobId, result, job) {
 }
 
 // 任务阶段文案（下载中心返回的 phase）
-const PHASE_LABEL = { prepare: '解包检查', download: '下载', convert: '纹理转换', shader: '着色器适配', reference: '替换资源', webexport: '导出网页包', write: '写入 mpkg', done: '完成' };
+const PHASE_LABEL = { prepare: '解包检查', download: '下载', convert: '纹理转换', shader: '着色器适配', reference: '替换资源', rawexport: '导出资源', webexport: '导出网页包', write: '写入 mpkg', done: '完成' };
 
 /** 把下载中心的进度写进详情页的进度条 */
 function applyProgress(job) {
@@ -1299,11 +1324,10 @@ function wire() {
   }
   if ($('cdnTest')) $('cdnTest').onclick = testCdnNodes;
   if ($('pickDir')) $('pickDir').onclick = pickFolder;
-  $('rawOnly').checked = state.rawOnly;
-  $('rawOnly').onchange = (e) => {
-    state.rawOnly = !!e.target.checked;
-    localStorage.setItem('rawOnly', state.rawOnly ? '1' : '0');
-  };
+  if ($('d-raw')) {
+    $('d-raw').checked = false;
+    $('d-raw').onchange = () => setDownloadLabel();
+  }
   $('resetDir').onclick = async () => {
     const d = $('outputDir').dataset.default;
     if (!d) return;
@@ -1342,7 +1366,6 @@ function wire() {
 
 async function init() {
   state.lang = localStorage.getItem('lang') || (/^zh/i.test(navigator.language || '') ? 'zh' : 'en');
-  state.rawOnly = localStorage.getItem('rawOnly') === '1';
   state.filtersOpen = window.innerWidth > 640;
   wire();
   applyLang();
