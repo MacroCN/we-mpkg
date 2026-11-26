@@ -52,12 +52,30 @@ function isAndroidRuntime(ffmpeg) {
     || /libffmpeg\.so$/.test(String(ffmpeg || ''));
 }
 
+function nativeLibDirs() {
+  const dirs = [];
+  for (const d of [process.env.WEM_NATIVE_LIB_DIR, nativeLibDirFromMaps()]) {
+    if (d && !dirs.includes(d)) dirs.push(d);
+  }
+  // Android 的 nativeLibraryDir 有时给的是 .../lib 根目录，真实库在同级 arm64 子目录。
+  for (const d of [...dirs]) {
+    for (const sub of ['arm64', 'arm64-v8a', 'aarch64']) {
+      const p = path.join(d, sub);
+      if (!dirs.includes(p)) dirs.push(p);
+    }
+  }
+  return dirs;
+}
+
 function nativeLibDebug() {
-  const dir = process.env.WEM_NATIVE_LIB_DIR || nativeLibDirFromMaps();
-  if (!dir) return 'nativeLibraryDir=未知';
-  let names = '';
-  try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.so')).join(','); } catch { names = '不可读'; }
-  return `${dir} [${names}]`;
+  const all = nativeLibDirs();
+  if (!all.length) return 'nativeLibraryDir=未知';
+  const dirs = all.filter((d) => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+  return (dirs.length ? dirs : all).map((dir) => {
+    let names = '';
+    try { names = fs.readdirSync(dir).filter((f) => f.endsWith('.so')).join(','); } catch { names = '不可读'; }
+    return `${dir} [${names || '空'}]`;
+  }).join(' | ');
 }
 
 function nativeLibDirFromMaps() {
@@ -73,11 +91,11 @@ function nativeLibDirFromMaps() {
 }
 
 function ffmpegCandidates(opts = {}) {
-  const nativeDir = process.env.WEM_NATIVE_LIB_DIR || nativeLibDirFromMaps();
+  const nativeCandidates = nativeLibDirs().map((dir) => path.join(dir, 'libffmpeg.so'));
   return [
     opts.ffmpeg,
     process.env.WEM_FFMPEG,
-    nativeDir ? path.join(nativeDir, 'libffmpeg.so') : null,
+    ...nativeCandidates,
     process.env.FFMPEG,
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
