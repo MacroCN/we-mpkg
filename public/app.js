@@ -173,7 +173,7 @@ const TAG_ZH = {
 
   // 素材类型（Asset Type）：Steam 中文页不翻译这套 WE 自有术语，只能走内置词表
   Particle: '粒子', Image: '图像', Sound: '声音', Model: '模型', Text: '文字',
-  Sprite: '精灵图', Fullscreen: '全屏', Composite: '合成', Script: '脚本',
+  Sprite: '序列帧', Fullscreen: '全屏', Composite: '合成', Script: '脚本',
   Effect: '特效', 'Scripted Layer': '脚本图层', '3D Model': '3D 模型',
   'Audio Visualizer': '音频可视化',
 
@@ -185,9 +185,8 @@ const TAG_ZH = {
   Star: '星空', Ocean: '海洋', Clouds: '云', Sunset: '日落', Night: '夜晚',
   Daylight: '白天',
 
-  // 脚本类型（Script Type）
-  None: '无', 'Scene Script': '场景脚本', 'Web Script': '网页脚本',
-  JavaScript: 'JavaScript', Lua: 'Lua', Shader: '着色器',
+  // 脚本类型（Script Type）：Boolean / Number / Vec2 / Vec3 / Vec4 / String 是数据类型，保持英文不译
+  'No Animation': '无动画', Oversized: '超大尺寸',
 };
 
 function tr(key, vars) {
