@@ -2412,6 +2412,25 @@ test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级'
   assert.ok(green.includes('tools\\ffmpeg\\ffmpeg.exe'));
 });
 
+test('发版说明集中在 release-notes/，根目录不再散落', () => {
+  const root = path.join(__dirname, '..');
+  const loose = fs.readdirSync(root).filter((f) => /^RELEASE-NOTES-.*\.txt$/.test(f));
+  assert.deepStrictEqual(loose, [], '根目录不应再有 RELEASE-NOTES-*.txt，统一放到 release-notes/');
+  const dir = path.join(root, 'release-notes');
+  assert.ok(fs.existsSync(path.join(dir, 'README.md')), '目录里要有一份命名约定说明');
+  const files = fs.readdirSync(dir).filter((f) => /^RELEASE-NOTES-.*\.txt$/.test(f));
+  assert.ok(files.length > 0, '历史发版说明要留在 release-notes/');
+  for (const f of files) {
+    const body = fs.readFileSync(path.join(dir, f), 'utf8');
+    const version = f.replace(/^RELEASE-NOTES-/, '').replace(/\.txt$/, '');
+    // 老文件头部写法不统一（有的带 v 前缀），只要求第一行出现版本号
+    assert.ok(body.split(/\r?\n/)[0].includes(version), `${f} 第一行应该写出版本号 ${version}`);
+  }
+  const ci = fs.readFileSync(path.join(root, '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.ok(ci.includes('release-notes/RELEASE-NOTES-${VERSION}.txt'), 'CI 要从新目录取正文');
+  assert.ok(!ci.includes('[ -f "RELEASE-NOTES-${VERSION}.txt" ]'), '不能再从根目录取');
+});
+
 async function testAsync(name, fn) {
   try {
     await fn();

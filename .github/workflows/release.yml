@@ -258,7 +258,7 @@ jobs:
     # 注意：依赖 job 被 skip 时，默认会把依赖它的 job 一起 skip，所以必须带 always()
     if: ${{ always() && needs.android.result == 'success' && needs.portable.result != 'failure' && needs.portable.result != 'cancelled' }}
     steps:
-      # 需要仓库里的 RELEASE-NOTES-<版本>.txt 作正文，所以要先 checkout（只取这一个文件也够，但没必要省）
+      # 需要仓库里的 release-notes/RELEASE-NOTES-<版本>.txt 作正文，所以要先 checkout
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
@@ -285,9 +285,9 @@ jobs:
         run: |
           set -e
           mkdir -p dist
-          # 正文优先用仓库里的 RELEASE-NOTES-<版本>.txt（人工写好发版说明），没有就用 CI 生成的简短模板
-          if [ -f "RELEASE-NOTES-${VERSION}.txt" ]; then
-            cp "RELEASE-NOTES-${VERSION}.txt" "dist/RELEASE-NOTES-${VERSION}.txt"
+          # 正文优先用仓库里的 release-notes/RELEASE-NOTES-<版本>.txt（人工写好发版说明），没有就用 CI 生成的简短模板
+          if [ -f "release-notes/RELEASE-NOTES-${VERSION}.txt" ]; then
+            cp "release-notes/RELEASE-NOTES-${VERSION}.txt" "dist/RELEASE-NOTES-${VERSION}.txt"
           else
             for f in dist/发布说明-*.txt; do [ -e "$f" ] && cp "$f" "dist/RELEASE-NOTES-${VERSION}.txt" || true; done
           fi
