@@ -2204,6 +2204,28 @@ await testAsync('安卓首启优化：node_modules 瘦身 + assets 单 zip + bui
   assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-build.json')), '仓库 assets 要带 buildId 清单');
 });
 
+test('导出原始资源：project.json 的 file 写成 scene.json 时，仍按目录里的 scene.pkg 导出', () => {
+  const rawexport = require('../src/rawexport');
+  const pkgformat = require('../src/pkgformat');
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rawpkg-'));
+  try {
+    fs.mkdirSync(path.join(dir, 'scene.pkg.dir'));
+    // 造一个最小 scene.pkg（里面有一个 scene.json）
+    const pkg = pkgformat.buildPkg('PKGV0004', [{ path: 'scene.json', data: Buffer.from('{"objects":[]}') }]);
+    fs.writeFileSync(path.join(dir, 'scene.pkg'), pkg);
+    fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({ type: 'Scene', file: 'scene.json', title: 't' }));
+    let threw = null;
+    try {
+      const r = rawexport.exportRaw(dir, { id: '1', title: 't', outDir: dir });
+      assert.ok(fs.existsSync(r.outFile), '应产出 raw zip');
+    } catch (e) { threw = e; }
+    assert.ok(!threw, `不应报错，实际: ${threw && threw.message}`);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('纹理转换：像素行序保持原样，移动端形态不被二次编码', () => {
   const t = require('../src/tex');
   const W = 4, H = 4;

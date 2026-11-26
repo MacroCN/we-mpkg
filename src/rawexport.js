@@ -84,7 +84,10 @@ function exportRaw(itemDir, opts = {}) {
   const warnings = [];
 
   if (kind === 'scene') {
-    const pkgName = (project && typeof project.file === 'string' && project.file) || 'scene.pkg';
+    // project.json 的 file 并不总是 .pkg：有些条目写的是 scene.json（例如 workshop 原包），
+    // 但实际载荷仍然是 scene.pkg，这里按目录里真实存在的包名兜底，避免误报"缺少 scene.json"。
+    let pkgName = (project && typeof project.file === 'string' && project.file) || 'scene.pkg';
+    if (!/\.pkg$/i.test(pkgName) && fs.existsSync(path.resolve(itemDir, 'scene.pkg'))) pkgName = 'scene.pkg';
     const pkgPath = path.resolve(itemDir, pkgName);
     // 已经是解包形态（例如 .mpkg 或已展开的工程目录）：没有 .pkg 但有 scene.json，直接原样打包
     const sceneJsonPath = path.resolve(itemDir, 'scene.json');
