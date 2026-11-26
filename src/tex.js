@@ -552,20 +552,6 @@ function expandRg88(pixels, width, height) {
 }
 
 /** 把某个 mip 的载荷解成逻辑尺寸的 RGBA8（按头部 format） */
-/**
- * 垂直翻转 RGBA 行序。
- * 桌面端 .tex 的像素按「行 0 在底部」存储（D3D 习惯），手机端引擎按「行 0 在顶部」上传，
- * 所以解码出来后必须翻一次，否则整张图上下颠倒。
- */
-function flipRowsRgba(pixels, width, height) {
-  const rowBytes = width * 4;
-  const out = Buffer.alloc(pixels.length);
-  for (let y = 0; y < height; y++) {
-    pixels.copy(out, (height - 1 - y) * rowBytes, y * rowBytes, (y + 1) * rowBytes);
-  }
-  return out;
-}
-
 function decodeMip(mip, format, logicalW, logicalH) {
   let payload = mip.bytes;
   if (mip.lz4 === 1) {
@@ -593,8 +579,6 @@ function decodeMip(mip, format, logicalW, logicalH) {
   } else {
     throw new Error(`不支持的源格式: ${format}`);
   }
-  // 解码路径上的像素都来自桌面端存储（行序自下而上），这里统一翻正再裁剪
-  pixels = flipRowsRgba(pixels, mip.width, mip.height);
   return cropRgba(pixels, mip.width, mip.height, logicalW, logicalH);
 }
 

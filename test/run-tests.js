@@ -2204,7 +2204,7 @@ await testAsync('安卓首启优化：node_modules 瘦身 + assets 单 zip + bui
   assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-build.json')), '仓库 assets 要带 buildId 清单');
 });
 
-test('纹理转换：桌面端「行 0 在底部」的像素翻正，移动端形态原样保留', () => {
+test('纹理转换：像素行序保持原样，移动端形态不被二次编码', () => {
   const t = require('../src/tex');
   const W = 4, H = 4;
   // 桌面端存储：前两行（底部）蓝，后两行（顶部）红
@@ -2230,11 +2230,10 @@ test('纹理转换：桌面端「行 0 在底部」的像素翻正，移动端�
   const mip = parsed.images[0].mips[0];
   let px = Buffer.from(mip.bytes);
   if (mip.lz4 === 1) px = require('../src/lz4').decompress(px, mip.decompressedBytes);
-  // 转换后第一行应当是红色（顶部）
-  assert.strictEqual(px[0], 255, '第一行应为红');
-  assert.strictEqual(px[2], 0, '第一行不该是蓝');
+  // 行序保持与源一致：第一行仍为蓝（源里行 0）
+  assert.strictEqual(px[2], 255, '第一行应为蓝');
   const lastRow = (H - 1) * W * 4;
-  assert.strictEqual(px[lastRow + 2], 255, '最后一行应为蓝');
+  assert.strictEqual(px[lastRow], 255, '最后一行应为红');
 
   // 已是移动端形态（单 mip RGBA8）不能被重新编码/翻转
   const mobile = t.writeMobileTex({
