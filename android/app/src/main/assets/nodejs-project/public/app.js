@@ -10,6 +10,10 @@ const I18N = {
     sortTrend: '热门趋势', sortRecent: '最新发布', sortUpdated: '最近更新', sortTop: '订阅最多',
     filters: '筛选', clearFilters: '清空', prev: '上一页', next: '下一页',
     downloadPack: '下载并打包为 MPKG', steamPage: 'Steam 页面', saveMpkg: '保存 .mpkg', importWe: '导入壁纸引擎',
+    webExport: '导出为离线网页包（PWA）',
+    webExportTip: '仅 Web 类型壁纸有效：产出 zip，解压后用 Kiwi / Firefox 打开 index.html，交互全部保留（不做 mpkg）',
+    saveWeb: '保存离线包 .zip', shareWeb: '分享离线包 .zip', webDone: '解压后用 Kiwi / Firefox 打开 index.html；添加到桌面需要 http(s) 环境',
+    notWeb: '这个条目不是 Web 类型（没有 html），离线网页包不适用',
     needLogin: '先登录再下载', notLogged: '未登录，点右上角 ⚙ 登录',
     rawOnly: '只下载原始文件（不打包 mpkg）',
     hub: '下载中心', openHub: '在下载中心查看（独立进程，关页面也不中断）', cancelTask: '取消任务',
@@ -70,6 +74,10 @@ const I18N = {
     sortTrend: 'Trending', sortRecent: 'Most recent', sortUpdated: 'Recently updated', sortTop: 'Most subscribed',
     filters: 'Filters', clearFilters: 'Clear', prev: 'Prev', next: 'Next',
     downloadPack: 'Download & pack MPKG', steamPage: 'Steam page', saveMpkg: 'Save .mpkg', importWe: 'Import to Wallpaper Engine',
+    webExport: 'Export offline web package (PWA)',
+    webExportTip: 'Web-type wallpapers only: produces a zip; unzip and open index.html in Kiwi / Firefox — all interactions kept (no mpkg)',
+    saveWeb: 'Save offline .zip', shareWeb: 'Share offline .zip', webDone: 'Unzip and open index.html in Kiwi / Firefox; installing to home screen needs http(s)',
+    notWeb: 'This item is not a web wallpaper (no html) — offline web package does not apply',
     needLogin: 'Sign in first', notLogged: 'Not signed in — tap ⚙ to sign in',
     rawOnly: 'Download raw files only (no mpkg)',
     hub: 'Downloads', openHub: 'Open download center (separate process, closing this page won\'t stop it)',
@@ -722,6 +730,7 @@ async function startDownload() {
   if ($('p-sub')) $('p-sub').textContent = '';
   if ($('p-cancel')) $('p-cancel').classList.remove('hidden');
 
+  const webMode = !!($('d-webexport') && $('d-webexport').checked);
   try {
     const { jobId } = await api('/api/jobs', {
       method: 'POST',
@@ -729,9 +738,12 @@ async function startDownload() {
       body: JSON.stringify({
         id: cur.id,
         title: cur.seed.title,
-        raw: state.rawOnly,
+        // 导出离线包时「只下载原始文件」没有意义，两个模式互斥
+        raw: !webMode && state.rawOnly,
         preset: ($('d-quality') || {}).value || 'high',
         preserveAudio: !!($('d-audio') && $('d-audio').checked),
+        // 离线网页包（PWA）：后端只认 web 类型，其它类型会明确报错
+        mode: webMode ? 'web' : undefined,
       }),
     });
     // 任务跑在独立进程（下载中心）里：网页关掉也会继续下，进度在浮层里看
@@ -755,6 +767,33 @@ function showResultAction(jobId, result, job) {
   const el = $('p-file');
   // 优先用任务顶层的 outPath，再退回 result 里的（两个接口字段都要能认）
   const wepath = (job && job.outPath) || (result && result.outPath);
+  // 离线网页包：产出的是 zip，不是 mpkg，动作也跟着换（安卓上分享出去，桌面直接下载）
+  if (result && result.webExport) {
+    if (androidBridge() && wepath && typeof androidBridge().shareFile === 'function') {
+      el.removeAttribute('href');
+      el.dataset.action = 'share';
+      delete el.dataset.i18n;
+      el.textContent = tr('shareWeb');
+      el.onclick = (ev) => {
+        ev.preventDefault();
+        try {
+          const msg = androidBridge().shareFile(wepath);
+          if (msg) $('p-log').textContent += '\n' + msg;
+        } catch (e) {
+          $('p-log').textContent += '\n✘ 分享失败: ' + e.message;
+        }
+      };
+    } else {
+      el.dataset.action = 'save';
+      el.dataset.i18n = 'saveWeb';
+      el.textContent = tr('saveWeb');
+      el.href = '/api/file/' + jobId;
+      el.onclick = null;
+    }
+    if ($('p-note')) $('p-note').textContent = tr('webDone');
+    el.classList.remove('hidden');
+    return;
+  }
   if (androidBridge() && wepath) {
     // 原生直接拿绝对路径，用 content:// 授权给壁纸引擎，不需要走网页下载
     el.removeAttribute('href');
@@ -781,7 +820,7 @@ function showResultAction(jobId, result, job) {
 }
 
 // 任务阶段文案（下载中心返回的 phase）
-const PHASE_LABEL = { prepare: '解包检查', download: '下载', convert: '纹理转换', shader: '着色器适配', reference: '替换资源', write: '写入 mpkg', done: '完成' };
+const PHASE_LABEL = { prepare: '解包检查', download: '下载', convert: '纹理转换', shader: '着色器适配', reference: '替换资源', webexport: '导出网页包', write: '写入 mpkg', done: '完成' };
 
 /** 把下载中心的进度写进详情页的进度条 */
 function applyProgress(job) {

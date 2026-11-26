@@ -1522,7 +1522,11 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(u.compare('2.2.0', '2.1.2'), 1);
     assert.strictEqual(u.compare('v2.1.2', '2.1.2'), 0);
     assert.strictEqual(u.compare('2.0.9', '2.1.0'), -1);
-    assert.match(u.currentVersion(), /^\d+\.\d+\.\d+$/);
+    // beta 版本：同核心号时正式版更高
+    assert.strictEqual(u.compare('2.4.0-beta.1', '2.4.0'), -1);
+    assert.strictEqual(u.compare('2.4.0-beta.2', '2.4.0-beta.1'), 1);
+    assert.strictEqual(u.compare('2.4.0-beta.1', '2.3.3'), 1);
+    assert.match(u.currentVersion(), /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/);
   });
   await testAsync('net.getText 默认不带 Cookie，跨域重定向会剥离 Cookie', async () => {
     const http = require('http');
@@ -1673,6 +1677,80 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(wf.includes('assembleRelease'));
     assert.ok(wf.includes('softprops/action-gh-release'));
     assert.ok(!wf.includes('pwpwsh'), 'shell 拼写错误会让任务直接失败');
+  });
+
+  test('离线网页包：zip 写入器结构正确（可被系统解压）', () => {
+    const zipmod = require('../src/zip');
+    const dir = tmp('zip');
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'hello');
+    fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'sub', 'b.json'), '{"x":1}');
+    const r = zipmod.zipDirToBuffer(dir);
+    assert.strictEqual(r.entries, 2, '应写入 2 个文件');
+    assert.strictEqual(r.buffer.slice(0, 2).toString('latin1'), 'PK', '缺少本地文件头签名');
+    const eocd = r.buffer.length - 22;
+    assert.strictEqual(r.buffer.readUInt32LE(eocd), 0x06054b50, '缺少 EOCD');
+    assert.strictEqual(r.buffer.readUInt16LE(eocd + 8), 2, 'EOCD 记录数不对');
+    assert.ok(r.buffer.readUInt32LE(eocd + 12) > 0, '中央目录大小应大于 0');
+  });
+
+  test('离线网页包：注入 viewport / 触屏脚本 / manifest / sw，产出 zip', () => {
+    const webe = require('../src/webexport');
+    const jpeg = require('jpeg-js');
+    const dir = tmp('webexp');
+    fs.mkdirSync(path.join(dir, 'assets'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'index.html'),
+      '<!DOCTYPE html><html><head><title>t</title></head><body><canvas id="c"></canvas></body></html>');
+    fs.writeFileSync(path.join(dir, 'assets', 'page.html'), '<html><head></head><body>frag</body></html>');
+    fs.writeFileSync(path.join(dir, 'assets', 'main.js'), 'window.x=1;');
+    // 4x4 的预览图，验证图标生成链路
+    const px = Buffer.alloc(4 * 4 * 4, 200);
+    fs.writeFileSync(path.join(dir, 'preview.jpg'), jpeg.encode({ data: px, width: 4, height: 4 }, 80).data);
+    const out = webe.exportWebProject(dir, {
+      id: '3843961367', title: '测试 网页/壁纸', outDir: path.join(dir, 'out'), keepDir: true,
+    });
+    assert.ok(out.webExport, '应标记为离线网页包');
+    assert.ok(out.outFile.endsWith('_web.zip'), '输出应为 zip');
+    assert.ok(fs.existsSync(out.outFile));
+    assert.ok(out.size > 0);
+    const root = fs.readFileSync(path.join(out.dir, 'index.html'), 'utf8');
+    assert.ok(/name="viewport"/.test(root), '根 html 缺少 viewport');
+    assert.ok(root.includes('we-touch.js') && root.includes('we-pwa.js'), '缺少触屏/PWA 脚本引用');
+    assert.ok(root.includes('manifest.webmanifest'), '缺少 manifest 引用');
+    // 深层 html 的资源路径要加 ../
+    const nested = fs.readFileSync(path.join(out.dir, 'assets', 'page.html'), 'utf8');
+    assert.ok(nested.includes('../we-touch.js'), '子目录 html 的脚本路径应是相对上级');
+    const manifest = JSON.parse(fs.readFileSync(path.join(out.dir, 'manifest.webmanifest'), 'utf8'));
+    assert.strictEqual(manifest.display, 'fullscreen');
+    assert.strictEqual(manifest.icons.length, 2, '应有 192/512 两个图标');
+    assert.ok(fs.existsSync(path.join(out.dir, 'icon-192.jpg')));
+    const sw = fs.readFileSync(path.join(out.dir, 'sw.js'), 'utf8');
+    assert.ok(sw.includes("'./index.html'") && sw.includes("'./assets/main.js'"), 'sw 预缓存列表不完整');
+    assert.ok(fs.readFileSync(path.join(out.dir, 'we-touch.js'), 'utf8').includes("'touchstart'"), '触屏脚本应监听 touchstart');
+    // 打包时 WE 私有资源要被跳过
+    assert.strictEqual(webe.pickEntryHtml(dir), 'index.html');
+  });
+
+  test('离线网页包：非 web 条目直接报错，不产出 zip', () => {
+    const webe = require('../src/webexport');
+    const dir = tmp('notweb');
+    fs.writeFileSync(path.join(dir, 'scene.pkg'), 'x');
+    let err = null;
+    try {
+      webe.exportWebProject(dir, { id: '1', title: 'scene', outDir: path.join(dir, 'out') });
+    } catch (e) { err = e; }
+    assert.ok(err, '应抛错');
+    assert.strictEqual(err.code, 'NOT_WEB');
+  });
+
+  test('前端有「导出离线网页包」选项，且会带上 mode=web', () => {
+    const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    assert.ok(html.includes('id="d-webexport"'), '缺少导出离线包勾选项');
+    const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.ok(js.includes("mode: webMode ? 'web'"), '提交任务时应带上 mode=web');
+    assert.ok(js.includes('raw: !webMode && state.rawOnly'), '导出与只下载模式应互斥');
+    assert.ok(js.includes('result.webExport'), '结果区应能识别离线包');
+    assert.ok(js.includes('shareFile'), '安卓端应能分享离线包');
   });
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);

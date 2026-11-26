@@ -151,6 +151,27 @@ async function runJob(job, hooks = {}) {
     return { result: { rawDir: dl.dir, raw: true, files }, dlDir };
   }
 
+  // 导出模式：web 类型壁纸不做 mpkg，而是导出成离线网页包（PWA），保留全部交互
+  if (job.mode === 'web') {
+    onLog('导出模式：离线网页包（PWA）');
+    const webexport = require('./webexport');
+    const res = webexport.exportWebProject(dl.dir, {
+      id: itemId,
+      title: job.title,
+      outDir: config.OUTPUT_DIR,
+      onLog,
+      onProgress: (p) => onProgress(Object.assign({ phase: p.phase || 'webexport' }, p)),
+    });
+    if (cancelled()) {
+      try { if (res.outFile) fs.rmSync(res.outFile, { force: true }); } catch { /* ignore */ }
+      throw new CancelledError('任务已取消（本次导出的离线包已删除）');
+    }
+    checkpoint();
+    onLog('全部完成');
+    purgeDownloadDir(dlDir, onLog);
+    return { result: res, dlDir: null };
+  }
+
   let reference = job.reference || null;
   if (!reference) {
     const refGuess = path.join(config.ROOT, 'refs', `${itemId}.mpkg`);

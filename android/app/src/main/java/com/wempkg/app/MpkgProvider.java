@@ -55,9 +55,35 @@ public class MpkgProvider extends ContentProvider {
 
     /** 给外壳层复用：只允许把产出目录里的 .mpkg 交给壁纸引擎 */
     public static boolean isAllowedFile(android.content.Context ctx, File f) {
+        return isAllowedInRoots(ctx, f, new String[]{".mpkg"});
+    }
+
+    /**
+     * 分享/导出用：允许输出目录里的离线网页包（.zip）与说明文件。
+     * 与 isAllowedFile 分开，避免 zip 被误当成 mpkg 塞给壁纸引擎。
+     */
+    public static boolean isAllowedExportFile(android.content.Context ctx, File f) {
+        return isAllowedInRoots(ctx, f, new String[]{".zip", ".mpkg", ".txt"});
+    }
+
+    public static String mimeOf(String name) {
+        String n = name == null ? "" : name.toLowerCase();
+        if (n.endsWith(".zip")) return "application/zip";
+        if (n.endsWith(".mpkg")) return MIME;
+        if (n.endsWith(".txt")) return "text/plain";
+        return "application/octet-stream";
+    }
+
+    private static boolean isAllowedInRoots(android.content.Context ctx, File f, String[] exts) {
         try {
             File canonical = f.getCanonicalFile();
-            if (!canonical.isFile() || !canonical.getName().toLowerCase().endsWith(".mpkg")) return false;
+            if (!canonical.isFile()) return false;
+            String name = canonical.getName().toLowerCase();
+            boolean extOk = false;
+            for (String ext : exts) {
+                if (name.endsWith(ext)) { extOk = true; break; }
+            }
+            if (!extOk) return false;
             for (File root : allowedRoots(ctx)) {
                 String rootPath = root.getCanonicalPath();
                 if (canonical.getPath().equals(rootPath)
@@ -114,7 +140,11 @@ public class MpkgProvider extends ContentProvider {
 
     @Override
     public String getType(Uri uri) {
-        return MIME;
+        try {
+            return mimeOf(resolve(uri).getName());
+        } catch (FileNotFoundException e) {
+            return MIME;
+        }
     }
 
     @Override

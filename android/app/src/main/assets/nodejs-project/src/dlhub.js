@@ -47,7 +47,7 @@ function readJsonSafe(file) {
 // ---------------- 队列 ----------------
 
 const KEEP_HISTORY = 20;
-const JOB_PARAMS = ['itemId', 'title', 'raw', 'preset', 'preserveAudio', 'videoMagic', 'reference'];
+const JOB_PARAMS = ['itemId', 'title', 'raw', 'preset', 'preserveAudio', 'videoMagic', 'reference', 'mode'];
 
 function defaultProgress() {
   return { phase: 'queued', percent: null, detail: '排队中', bytes: 0, total: 0, speed: 0, eta: null };
@@ -73,6 +73,7 @@ function createHub(opts = {}) {
     return {
       id: j.id, itemId: j.itemId, title: j.title,
       raw: !!j.raw, preset: j.preset, preserveAudio: !!j.preserveAudio,
+      mode: j.mode || null,
       videoMagic: j.videoMagic, engine: j.engine || null, reference: j.reference || null,
       state: j.state, progress: j.progress, error: j.error,
       result: j.result ? {
@@ -82,6 +83,8 @@ function createHub(opts = {}) {
         audio: j.result.audio, warnings: j.result.warnings,
         rawDir: j.result.rawDir, raw: !!j.result.raw,
         files: j.result.raw ? (j.result.files || []).length : undefined,
+        webExport: !!j.result.webExport, mode: j.result.mode || null,
+        entry: j.result.entry, htmlCount: j.result.htmlCount,
       } : null,
       createdAt: j.createdAt, startedAt: j.startedAt, finishedAt: j.finishedAt,
       log: j.log.slice(-400),
@@ -114,6 +117,7 @@ function createHub(opts = {}) {
       const job = {
         id: raw.id, itemId: String(raw.itemId), title: raw.title || `wallpaper_${raw.itemId}`,
         raw: !!raw.raw, preset: raw.preset || 'high', preserveAudio: !!raw.preserveAudio,
+        mode: raw.mode || null,
         videoMagic: raw.videoMagic || '0020', engine: raw.engine || null, reference: raw.reference || null,
         state: raw.state === 'downloading' || raw.state === 'packing' ? 'queued' : (raw.state || 'queued'),
         progress: defaultProgress(), error: raw.error || null, result: raw.result || null,
@@ -256,6 +260,7 @@ function createHub(opts = {}) {
       itemId,
       title: String(req.title || `wallpaper_${itemId}`),
       raw: !!req.raw,
+      mode: req.mode === 'web' ? 'web' : null,
       preset: typeof req.preset === 'string' && req.preset ? req.preset : 'high',
       preserveAudio: !!req.preserveAudio,
       videoMagic: typeof req.videoMagic === 'string' ? req.videoMagic : '0020',

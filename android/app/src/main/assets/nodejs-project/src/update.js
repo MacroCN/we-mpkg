@@ -21,16 +21,30 @@ function currentVersion() {
   }
 }
 
-/** 只比较 x.y.z；非数字段按 0 处理 */
+/**
+ * 只比较 x.y.z；非数字段按 0 处理。
+ * 支持 prerelease（2.4.0-beta.1）：核心版本相同则「带 beta 的」比正式版低。
+ */
+function parseVer(v) {
+  const s = String(v || '').replace(/^v/i, '').trim();
+  const cut = s.search(/[-+]/);
+  const core = cut >= 0 ? s.slice(0, cut) : s;
+  const pre = cut >= 0 ? s.slice(cut + 1) : '';
+  return { core: core.split('.').map((n) => parseInt(n, 10) || 0), pre };
+}
+
 function compare(a, b) {
-  const pa = String(a || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b || '').replace(/^v/i, '').split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const x = pa[i] || 0;
-    const y = pb[i] || 0;
+  const A = parseVer(a);
+  const B = parseVer(b);
+  for (let i = 0; i < Math.max(A.core.length, B.core.length); i++) {
+    const x = A.core[i] || 0;
+    const y = B.core[i] || 0;
     if (x !== y) return x > y ? 1 : -1;
   }
-  return 0;
+  if (A.pre === B.pre) return 0;
+  if (!A.pre) return 1;   // 正式版高于同版本号的 prerelease
+  if (!B.pre) return -1;
+  return A.pre.localeCompare(B.pre, 'en', { numeric: true }) > 0 ? 1 : -1;
 }
 
 function pickAssets(assets) {

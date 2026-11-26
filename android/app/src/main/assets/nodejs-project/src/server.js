@@ -488,6 +488,8 @@ const server = http.createServer(async (req, res) => {
           preset: body.preset,
           preserveAudio: body.preserveAudio,
           videoMagic: body.videoMagic,
+          // web 类型壁纸可选「导出离线网页包（PWA）」，见 webexport.js
+          mode: body.mode === 'web' ? 'web' : null,
           // 让「暂停」按钮能按引擎区分：历史记录里的 steamcmd 任务（旧版本）不支持暂停
           engine: packjob.activeEngine(),
         });

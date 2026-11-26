@@ -163,6 +163,30 @@ public class MainActivity extends Activity {
                 return sendToWallpaperEngine(f.getAbsolutePath());
             }
 
+            /** 把刚导出的离线网页包（zip）分享出去：微信 / QQ / 文件管理器都能收 */
+            @android.webkit.JavascriptInterface
+            public String shareFile(String path) {
+                if (!canUseBridge()) return "✘ 页面来源未授权";
+                if (path == null || path.trim().isEmpty()) return "✘ 没有拿到文件路径";
+                File f = new File(path.trim());
+                if (!MpkgProvider.isAllowedExportFile(MainActivity.this, f)) {
+                    return "✘ 只允许分享产出目录里的 .zip / .mpkg";
+                }
+                try {
+                    Uri uri = MpkgProvider.uriFor(f);
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType(MpkgProvider.mimeOf(f.getName()));
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    Intent chooser = Intent.createChooser(send, getString(R.string.app_name) + " · " + f.getName());
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    startActivity(chooser);
+                    return "已打开分享面板（" + f.getName() + "）";
+                } catch (Exception e) {
+                    return "✘ 分享失败: " + e.getMessage();
+                }
+            }
+
             /** 下载中心浮层开关：返回键据此决定「先收浮层」还是「退到后台」 */
             @android.webkit.JavascriptInterface
             public void setDownloadsOpen(boolean open) {
