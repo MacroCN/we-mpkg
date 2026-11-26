@@ -43,6 +43,11 @@ public class MainActivity extends Activity {
     private boolean downloadsOpen = false;
     /** 只有用户明确点「退出」才关掉本地 Node；返回/退到后台都保留 */
     private boolean quitRequested = false;
+    /** 安全区（状态栏/导航栏）以 dp 下发给网页的 CSS 变量，避免重复注入 */
+    private int safeTopPx = 0;
+    private int safeBottomPx = 0;
+    private int sentTopDp = -1;
+    private int sentBottomDp = -1;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -84,6 +89,14 @@ public class MainActivity extends Activity {
             @Override
             public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
                 currentPageUrl = url == null ? "" : url;
+            }
+
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                // 每次导航后样式表是新的，需要重新注入一次安全区
+                sentTopDp = -1;
+                sentBottomDp = -1;
+                pushSafeAreaToWeb(safeTopPx, safeBottomPx);
             }
 
             @Override
@@ -145,9 +158,11 @@ public class MainActivity extends Activity {
                     top = insets.getSystemWindowInsetTop();
                     bottom = insets.getSystemWindowInsetBottom();
                 }
-                // 注意：WebView 会忽略自身的 padding（渲染面覆盖整个 view），
-                // 必须把 insets 加在 content 根容器上，才能真正把页面挤到状态栏/手势区之内
-                v.setPadding(0, top, 0, bottom);
+                // 沉浸式：不再给原生 View 加 padding（那样状态栏只是被刷成一条深色边），
+                // 而是把安全区以 CSS 变量交给网页，页面自己排布，内容可以一直铺到屏幕顶部
+                safeTopPx = top;
+                safeBottomPx = bottom;
+                pushSafeAreaToWeb(top, bottom);
                 return insets;
             }
         });
@@ -676,6 +691,23 @@ public class MainActivity extends Activity {
                 loadedUrl = url;
                 status("已连接: " + url);
             }
+        });
+    }
+
+    /** 把状态栏/导航栏高度按 dp 写进网页的 CSS 变量（1 CSS px ≈ 1dp，viewport 是 device-width） */
+    private void pushSafeAreaToWeb(int topPx, int bottomPx) {
+        if (web == null) return;
+        float density = getResources().getDisplayMetrics().density;
+        if (density <= 0) density = 1f;
+        int top = Math.round(topPx / density);
+        int bottom = Math.round(bottomPx / density);
+        if (top == sentTopDp && bottom == sentBottomDp) return;   // 没变化就别反复执行 JS
+        sentTopDp = top;
+        sentBottomDp = bottom;
+        final String js = "document.documentElement.style.setProperty('--sat','" + top + "px');"
+                + "document.documentElement.style.setProperty('--sab','" + bottom + "px');";
+        runOnUiThread(new Runnable() {
+            @Override public void run() { web.evaluateJavascript(js, null); }
         });
     }
 

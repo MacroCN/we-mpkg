@@ -595,6 +595,7 @@ function wireAutoHideHead() {
   let acc = 0;
   let hidden = false;
   const setHidden = (v) => {
+    if (v && document.body.classList.contains('searching')) return;   // 正在输入时不要收
     if (hidden === v) return;
     hidden = v;
     document.body.classList.toggle('head-hidden', v);
@@ -613,6 +614,35 @@ function wireAutoHideHead() {
   // 点输入框时一定把头部放出来，否则搜不了
   const search = $('search');
   if (search) search.addEventListener('focus', () => { setHidden(false); acc = 0; });
+}
+
+/** 回到顶部悬浮按钮：滚过一屏出现，点击平滑回顶 */
+function wireScrollTop() {
+  const btn = $('toTop');
+  if (!btn) return;
+  const sync = () => { btn.classList.toggle('hidden', window.scrollY < 400); };
+  window.addEventListener('scroll', sync, { passive: true });
+  btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  sync();
+}
+
+/** 手机端聚焦搜索框：整行弹出到顶部（带拉伸动画），桌面保持原样 */
+function wireSearchFocus() {
+  const bar = document.querySelector('.searchbar');
+  const input = $('search');
+  if (!bar || !input) return;
+  input.addEventListener('focus', () => {
+    if (window.innerWidth > 640) return;
+    document.body.classList.remove('head-hidden');
+    bar.classList.add('searching');
+    document.body.classList.add('searching');
+    if (window.scrollY > 0) window.scrollTo({ top: 0 });
+  });
+  const close = () => {
+    bar.classList.remove('searching');
+    document.body.classList.remove('searching');
+  };
+  input.addEventListener('blur', () => setTimeout(close, 120));
 }
 
 /** 首页下拉刷新：列表已在顶部时继续下拉，松手刷新当前筛选 */
@@ -1576,6 +1606,8 @@ function wire() {
 
   wireAutoHideHead();
   wirePullToRefresh();
+  wireScrollTop();
+  wireSearchFocus();
 
   // 点击遮罩关闭
   $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeSettings(); });

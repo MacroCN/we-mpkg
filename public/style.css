@@ -24,7 +24,8 @@ html, body {
   line-height: 1.5;
 }
 
-body { padding-bottom: env(safe-area-inset-bottom); }
+:root { --sat: 0px; --sab: 0px; }
+body { padding-bottom: var(--sab, 0px); }
 
 /* ---------- 顶栏 ---------- */
 .topbar {
@@ -32,7 +33,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
+  padding: calc(10px + var(--sat, 0px)) 14px 10px;
   background: linear-gradient(180deg, #0e1620, rgba(15, 23, 32, 0.92));
   position: sticky;
   top: 0;
@@ -55,6 +56,10 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 .top-actions { display: flex; gap: 8px; flex: 0 0 auto; }
 
 .ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
   background: var(--bg-3);
   color: var(--text);
   border: 1px solid var(--line);
@@ -82,7 +87,7 @@ body { padding-bottom: env(safe-area-inset-bottom); }
 /* 下拉刷新：默认藏在视口上方，手指下拉时跟手露出 */
 .ptr {
   position: fixed;
-  top: 0;
+  top: var(--sat, 0px);
   left: 0;
   right: 0;
   height: 44px;
@@ -284,12 +289,15 @@ main { padding: 10px 14px 24px; }
 }
 .drawer-head h2 { margin: 0; font-size: 17px; font-weight: 650; flex: 1; word-break: break-word; }
 .icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none; border: none; color: var(--dim);
   font-size: 18px; padding: 4px 6px; cursor: pointer;
 }
 .drawer-body {
   overflow-y: auto;
-  padding: 0 16px calc(18px + env(safe-area-inset-bottom));
+  padding: 0 16px calc(18px + var(--sab, 0px));
   -webkit-overflow-scrolling: touch;
 }
 .d-preview { width: 100%; border-radius: 12px; background: #0e1720; }
@@ -669,3 +677,42 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
 
 /* 关于页的项目信息 */
 .about-title { margin-bottom: 2px; color: var(--text); }
+
+/* 回到顶部：右下角悬浮，滚过一屏才出现 */
+.to-top {
+  position: fixed;
+  right: 16px;
+  bottom: calc(20px + var(--sab, 0px));
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: rgba(29, 43, 56, 0.92);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 45;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+}
+.to-top.hidden { display: none !important; }
+
+/* 搜索框聚焦：整行弹出到顶部，带拉伸动画 */
+.searchbar.searching {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 46;
+  padding-top: calc(10px + var(--sat, 0px));
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
+  animation: searchPop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+@keyframes searchPop {
+  from { transform: translateY(16px) scale(0.96); opacity: 0.55; }
+  to { transform: none; opacity: 1; }
+}
+.searchbar.searching input { font-size: 16px; }
