@@ -213,9 +213,30 @@ jobs:
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
 
-      - name: Rename notes
+      - name: Prepare release body
         run: |
-          for f in dist/发布说明-*.txt; do [ -e "$f" ] && mv "$f" "dist/RELEASE-NOTES-${VERSION}.txt"; done || true
+          set -e
+          mkdir -p dist
+          # 正文优先用仓库里的 RELEASE-NOTES-<版本>.txt（人工写好发版说明），没有就用 CI 生成的简短模板
+          if [ -f "RELEASE-NOTES-${VERSION}.txt" ]; then
+            cp "RELEASE-NOTES-${VERSION}.txt" "dist/RELEASE-NOTES-${VERSION}.txt"
+          else
+            for f in dist/发布说明-*.txt; do [ -e "$f" ] && cp "$f" "dist/RELEASE-NOTES-${VERSION}.txt" || true; done
+          fi
+          rm -f dist/发布说明-*.txt
+          if [ -s "dist/RELEASE-NOTES-${VERSION}.txt" ]; then
+            cat "dist/RELEASE-NOTES-${VERSION}.txt" > dist/release-body.md
+          else
+            printf 'we-mpkg %s\n\nGitHub Actions 自动构建（tag %s）。\n' "$VERSION" "$TAG" > dist/release-body.md
+          fi
+          {
+            printf '\n## 下载\n\n'
+            printf -- '- 绿色版：解压 `we-mpkg-portable-%s.zip`，双击 `start.bat`\n' "$VERSION"
+            printf -- '- 安卓：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n' "$VERSION"
+            printf -- '- 源码：`we-mpkg-src-%s.zip`\n\n' "$VERSION"
+            printf '构建提交：%s\n' "$GITHUB_SHA"
+          } >> dist/release-body.md
+          echo "正文前几行："; head -n 5 dist/release-body.md
 
       - uses: softprops/action-gh-release@v3
         with:
@@ -224,13 +245,8 @@ jobs:
           # 带 - 的 tag（如 v2.4.0-beta.1）发布为预发布，避免 /releases/latest 把 beta 推给正式版用户
           prerelease: ${{ contains(env.TAG, '-') }}
           make_latest: ${{ contains(env.TAG, '-') && 'false' || 'true' }}
-          body: |
-            we-mpkg ${{ env.VERSION }}
-
-            GitHub Actions 自动构建，提交 ${{ github.sha }}。
-            - 绿色版：解压 `we-mpkg-portable-${{ env.VERSION }}.zip`，双击 `start.bat`
-            - 安卓：安装 `we-mpkg-android-${{ env.VERSION }}.apk`（arm64-v8a，覆盖安装保留凭据）
-            - 源码：`we-mpkg-src-${{ env.VERSION }}.zip`
+          # 正文由上一步从 RELEASE-NOTES-<版本>.txt 拼出来，再附上下载说明
+          body_path: dist/release-body.md
           files: |
             dist/we-mpkg-portable-*.zip
             dist/we-mpkg-android-*.apk
