@@ -86,7 +86,15 @@ function exportRaw(itemDir, opts = {}) {
   if (kind === 'scene') {
     const pkgName = (project && typeof project.file === 'string' && project.file) || 'scene.pkg';
     const pkgPath = path.resolve(itemDir, pkgName);
-    if (!fs.existsSync(pkgPath)) throw new Error(`场景壁纸缺少 ${pkgName}，无法导出原始资源`);
+    // 已经是解包形态（例如 .mpkg 或已展开的工程目录）：没有 .pkg 但有 scene.json，直接原样打包
+    const sceneJsonPath = path.resolve(itemDir, 'scene.json');
+    if (!fs.existsSync(pkgPath) && fs.existsSync(sceneJsonPath)) {
+      onLog('  已是解包形态（有 scene.json、无 .pkg），原样打包工程目录');
+      warnings.push('工程目录已是解包形态，未做二次解包');
+    } else if (!fs.existsSync(pkgPath)) {
+      throw new Error(`场景壁纸缺少 ${pkgName}（也没有 scene.json），无法导出原始资源`);
+    }
+    if (fs.existsSync(pkgPath)) {
     onLog(`  解包 ${path.basename(pkgPath)} ...`);
     onProgress({ phase: 'rawexport', percent: null, detail: '解包 scene.pkg' });
     try {
@@ -101,6 +109,7 @@ function exportRaw(itemDir, opts = {}) {
       onLog(`  ⚠ 解包失败（${e.message}），改为原样打包工程目录`);
       zipFrom = itemDir;
       warnings.push(`scene.pkg 解包失败（${e.message}），已改为原样打包`);
+    }
     }
   }
 

@@ -2200,7 +2200,50 @@ await testAsync('安卓首启优化：node_modules 瘦身 + assets 单 zip + bui
   // 仓库里带的 assets 必须是打包好的形态（否则 APK 缺依赖）
   const assetsDir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'assets');
   assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-project.zip')), '仓库 assets 要带 nodejs-project.zip');
+
   assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-build.json')), '仓库 assets 要带 buildId 清单');
+});
+
+test('纹理转换：桌面端「行 0 在底部」的像素翻正，移动端形态原样保留', () => {
+  const t = require('../src/tex');
+  const W = 4, H = 4;
+  // 桌面端存储：前两行（底部）蓝，后两行（顶部）红
+  const rgba = Buffer.alloc(W * H * 4);
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const o = (y * W + x) * 4;
+      const isRed = y >= 2;
+      rgba[o] = isRed ? 255 : 0;
+      rgba[o + 1] = 0;
+      rgba[o + 2] = isRed ? 0 : 255;
+      rgba[o + 3] = 255;
+    }
+  }
+  const src = buildTex({
+    format: t.TEX_FORMAT.RGBA8888, container: 'TEXB0003', imageFormat: -1,
+    texW: W, texH: H,
+    images: [{ mips: [{ w: W, h: H, bytes: rgba }] }],
+  });
+  const out = t.convertTexBuffer(src, { preset: 'original', force: true });
+  assert.ok(out.changed, '桌面端 RGBA 应该被转换');
+  const parsed = t.parseTex(out.bytes);
+  const mip = parsed.images[0].mips[0];
+  let px = Buffer.from(mip.bytes);
+  if (mip.lz4 === 1) px = require('../src/lz4').decompress(px, mip.decompressedBytes);
+  // 转换后第一行应当是红色（顶部）
+  assert.strictEqual(px[0], 255, '第一行应为红');
+  assert.strictEqual(px[2], 0, '第一行不该是蓝');
+  const lastRow = (H - 1) * W * 4;
+  assert.strictEqual(px[lastRow + 2], 255, '最后一行应为蓝');
+
+  // 已是移动端形态（单 mip RGBA8）不能被重新编码/翻转
+  const mobile = t.writeMobileTex({
+    flags: 0, unk: 0,
+    images: [{ pixels: rgba, width: W, height: H }],
+  });
+  const kept = t.convertTexBuffer(mobile, { preset: 'original' });
+  assert.strictEqual(kept.route, 'keep-mobile');
+  assert.ok(!kept.changed, '移动端形态应原样保留');
 });
 
 
