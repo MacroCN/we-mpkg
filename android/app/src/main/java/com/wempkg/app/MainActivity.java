@@ -48,6 +48,8 @@ public class MainActivity extends Activity {
     private int safeBottomPx = 0;
     private int sentTopDp = -1;
     private int sentBottomDp = -1;
+    /** 启动页（原生 View）原始 padding，insets 时在它基础上叠加 */
+    private int setupPadLeft, setupPadTop, setupPadRight, setupPadBottom;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -76,6 +78,11 @@ public class MainActivity extends Activity {
 
         web = findViewById(R.id.web);
         setupPanel = findViewById(R.id.setupPanel);
+        // 启动页是原生 View（不在网页里），沉浸式之后它会被状态栏压住，需要自己吃安全区
+        setupPadLeft = setupPanel.getPaddingLeft();
+        setupPadTop = setupPanel.getPaddingTop();
+        setupPadRight = setupPanel.getPaddingRight();
+        setupPadBottom = setupPanel.getPaddingBottom();
         txtStatus = findViewById(R.id.txtStatus);
         editRemote = findViewById(R.id.editRemote);
         editRemoteToken = findViewById(R.id.editRemoteToken);
@@ -163,6 +170,11 @@ public class MainActivity extends Activity {
                 safeTopPx = top;
                 safeBottomPx = bottom;
                 pushSafeAreaToWeb(top, bottom);
+                // 启动页内容整体下移：避让状态栏和底部手势条
+                if (setupPanel != null) {
+                    setupPanel.setPadding(setupPadLeft, setupPadTop + top,
+                            setupPadRight, setupPadBottom + bottom);
+                }
                 return insets;
             }
         });

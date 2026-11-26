@@ -142,10 +142,10 @@ body.head-hidden .searchbar { top: 0; transform: translateY(-100%); }
 
 /* ---------- 筛选 ---------- */
 .filters { padding: 10px 14px 4px; border-bottom: 1px solid var(--line); }
-@media (max-width: 640px) {
-  /* 手机竖向空间有限，筛选区限高可滚动，保证列表还能看到 */
-  .filters { max-height: 44vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-}
+/* 手机竖向空间有限，筛选区限高 + 自己滚动，保证列表还能看到。
+   不能只写在 max-width:640px 里：WebView 的实际 CSS 宽度经常大于 640，媒体查询不生效，
+   筛选区就会撑满整屏、且滚不动 */
+.filters { max-height: 46vh; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
 .filters-head {
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 6px;
@@ -700,19 +700,18 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
 }
 .to-top.hidden { display: none !important; }
 
-/* 搜索框聚焦：整行弹出到顶部，带拉伸动画 */
-.searchbar.searching {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 46;
-  padding-top: calc(10px + var(--sat, 0px));
-  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5);
-  animation: searchPop 0.22s cubic-bezier(0.2, 0.9, 0.3, 1);
+/* 搜索框聚焦：只让输入框自己撑开（占满整行、加高、字号变大），不移动整行 */
+.searchbar.searching #search {
+  flex: 1 1 100%;
+  font-size: 17px;
+  padding: 14px 14px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  animation: inputPop 0.18s cubic-bezier(0.2, 0.9, 0.3, 1);
 }
-@keyframes searchPop {
-  from { transform: translateY(16px) scale(0.96); opacity: 0.55; }
+/* 输入时把排序和搜索按钮收起来，避免抢地方 */
+.searchbar.searching #sort,
+.searchbar.searching #go { display: none; }
+@keyframes inputPop {
+  from { transform: scale(0.97); opacity: 0.6; }
   to { transform: none; opacity: 1; }
 }
-.searchbar.searching input { font-size: 16px; }

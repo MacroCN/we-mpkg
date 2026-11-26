@@ -632,11 +632,10 @@ function wireSearchFocus() {
   const input = $('search');
   if (!bar || !input) return;
   input.addEventListener('focus', () => {
-    if (window.innerWidth > 640) return;
+    // 只放大输入框本身，不做整行位移
     document.body.classList.remove('head-hidden');
     bar.classList.add('searching');
     document.body.classList.add('searching');
-    if (window.scrollY > 0) window.scrollTo({ top: 0 });
   });
   const close = () => {
     bar.classList.remove('searching');
@@ -666,6 +665,8 @@ function wirePullToRefresh() {
     if (busy || e.touches.length !== 1) return;
     if (window.scrollY > 0) return;
     if (!$('drawer').classList.contains('hidden') || !$('modal').classList.contains('hidden')) return;
+    // 手指落在自己的滚动容器里（筛选栏、日志等）时交给它们自己滚，别被下拉刷新吃掉
+    if (e.target && e.target.closest && e.target.closest('.filters, .log, .drawer-body, .modal-body')) return;
     startY = e.touches[0].clientY;
     dy = 0;
     armed = false;
