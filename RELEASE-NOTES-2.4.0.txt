@@ -1,0 +1,42 @@
+we-mpkg 2.4.0 正式版
+
+整条 beta 线（beta.1 → beta.5）已测试通过并合入主线。
+
+## 主要变化
+
+**网页类壁纸「下载原始资源」**
+- 详情页勾选「下载原始资源」后不再打包 mpkg，而是导出 `<标题>_<id>_raw.zip`
+- video 原样打包；scene 先解包 scene.pkg 再打包；web 走离线网页包（viewport + 触屏脚本 + manifest + Service Worker，可添加到桌面）
+- Web 条目没有 mpkg，卡片上「下载并打包 MPKG」置灰
+
+**音频策略**
+- 删除「保留壁纸自带音频」勾选项
+- 勾选「下载原始资源」→ 原始音频原样保留
+- 打包 mpkg → 默认剥离音频；场景里检测到音频交互（频谱 / 音频响应，含写在 scene/effect JSON 属性里的绑定）时自动保留，避免频谱层整层空白
+- CLI 仍可用 `--keep-audio` 强制保留
+
+**界面**
+- 顶栏常驻任务条（运行数 + 排队数 + 加权总进度），替代右下角小药丸
+- 卡片右上角类型徽标 + 「＋ 加选」「⬇ 直接下载」
+- 新增 joblib.js 统一任务视图（状态/阶段动作/指纹只在 joblib 维护，下载中心与任务列表共用）
+- 画质默认设备推荐档并标「推荐」
+- 失败任务支持「重试 / 换节点重试（先强制重测 CDN）/ 重新登录」
+- 桌面端「打开所在文件夹」（限制在输出/下载目录内）
+- 设置弹窗拆成 账号 / 网络 / 输出 / 关于 四个 tab
+
+## 安全加固
+
+- **防 DNS rebinding**：主服务与下载中心（3091）都校验 Host 白名单，只接受 `localhost` 与 IP 字面量；自定义域名用环境变量 `WE_MPKG_ALLOW_HOST` 放行
+- **写接口 Content-Type**：下载中心 POST 必须 `application/json`，堵住 `text/plain` 简单请求免预检建任务/取消/关闭
+- **目录穿越**：条目 id 全入口 `/^\d{1,20}$/` 校验（主服务 `/api/jobs`、`/api/item`、下载中心、packjob 的 `js-<id>`、workshop、CLI `wempkg` 与 `steamjs`），`id="../evil"` 写不出下载目录
+- **任务动作白名单**：`/api/jobs/:id/:action` 与 hub 同名接口只允许 `cancel / retry / pause / resume / forget`
+
+## 测试
+
+113 通过 / 0 失败 / 1 跳过
+
+## 安装
+
+- 绿色版：解压 `we-mpkg-portable-2.4.0.zip`，双击 `start.bat`
+- 安卓：安装 `we-mpkg-android-2.4.0.apk`（arm64-v8a，覆盖安装保留凭据）
+- 源码：`we-mpkg-src-2.4.0.zip`
