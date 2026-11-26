@@ -692,10 +692,7 @@ function closeDetail() {
 window.__androidBack = function () {
   const modal = $('modal');
   if (modal && !modal.classList.contains('hidden')) {
-    modal.classList.add('hidden');
-    if (state.loginPoll) clearTimeout(state.loginPoll);
-    state.loginPoll = null;
-    state.loginPollSeq++;
+    closeSettings();
     return true;
   }
   const drawer = $('drawer');
@@ -872,6 +869,7 @@ async function cancelCurrentJob() {
 // ---------------- 设置 / 登录 ----------------
 async function openSettings() {
   $('modal').classList.remove('hidden');
+  document.body.classList.add('modal-open');
   // 安卓壳里才有「回启动页」入口（本地/远程、导入凭据都在那边）
   const hasSetup = !!(window.Android && typeof window.Android.openSetup === 'function');
   if ($('setupRow')) $('setupRow').classList.toggle('hidden', !hasSetup);
@@ -894,6 +892,14 @@ async function openSettings() {
     $('dirHint').textContent = e.message;
   }
   loadCdnNodes();
+}
+
+function closeSettings() {
+  $('modal').classList.add('hidden');
+  document.body.classList.remove('modal-open');
+  if (state.loginPoll) clearTimeout(state.loginPoll);
+  state.loginPoll = null;
+  state.loginPollSeq++;
 }
 
 /** 调起系统目录选择器（安卓端），选完由原生回填 __folderPicked */
@@ -1229,16 +1235,13 @@ function wire() {
   if ($('openSetupBtn')) {
     $('openSetupBtn').onclick = () => {
       if (window.Android && typeof window.Android.openSetup === 'function') {
-        $('modal').classList.add('hidden');
+        closeSettings();
         window.Android.openSetup();
       }
     };
   }
   $('modalClose').onclick = () => {
-    $('modal').classList.add('hidden');
-    if (state.loginPoll) clearTimeout(state.loginPoll);
-    state.loginPoll = null;
-    state.loginPollSeq++;
+    closeSettings();
   };
   $('saveDir').onclick = saveDir;
   if ($('saveProxy')) $('saveProxy').onclick = saveProxy;
@@ -1284,7 +1287,7 @@ function wire() {
   };
 
   // 点击遮罩关闭
-  $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) $('modal').classList.add('hidden'); });
+  $('modal').addEventListener('click', (e) => { if (e.target === $('modal')) closeSettings(); });
 
   // 手机：下拉返回键 / 侧滑关闭抽屉
   window.addEventListener('popstate', () => { if (!$('drawer').classList.contains('hidden')) closeDetail(); });
