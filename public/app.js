@@ -170,6 +170,24 @@ const TAG_ZH = {
   'Standard Definition': '标清', 'Ultrawide Standard Definition': '超宽标清',
   'Other resolution': '其它分辨率', 'Dynamic resolution': '动态分辨率',
   'Ultrawide': '超宽', 'Dual': '双屏', 'Triple': '三屏', 'Portrait': '竖屏',
+
+  // 素材类型（Asset Type）：Steam 中文页不翻译这套 WE 自有术语，只能走内置词表
+  Particle: '粒子', Image: '图像', Sound: '声音', Model: '模型', Text: '文字',
+  Sprite: '精灵图', Fullscreen: '全屏', Composite: '合成', Script: '脚本',
+  Effect: '特效', 'Scripted Layer': '脚本图层', '3D Model': '3D 模型',
+  'Audio Visualizer': '音频可视化',
+
+  // 素材题材（Asset Genre）
+  Background: '背景', Character: '角色', Clock: '时钟', Fire: '火焰',
+  Interactive: '交互', Magic: '魔法', 'Post Processing': '后处理', Smoke: '烟雾',
+  Space: '太空', Rain: '雨', Water: '水', Snow: '雪', Lightning: '闪电',
+  Forest: '森林', City: '城市', Dark: '暗黑', Minimal: '极简', Underwater: '水下',
+  Star: '星空', Ocean: '海洋', Clouds: '云', Sunset: '日落', Night: '夜晚',
+  Daylight: '白天',
+
+  // 脚本类型（Script Type）
+  None: '无', 'Scene Script': '场景脚本', 'Web Script': '网页脚本',
+  JavaScript: 'JavaScript', Lua: 'Lua', Shader: '着色器',
 };
 
 function tr(key, vars) {

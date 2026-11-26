@@ -1,0 +1,18 @@
+we-mpkg 2.4.9-beta.9
+====================
+
+测试版，只发布安卓 APK。
+
+补齐素材类筛选项的中文词表
+- Steam 官方中文页不翻译 Wallpaper Engine 自有的这批术语（素材类型/素材题材/脚本类型），
+  官方对照表拿不到，只能走内置词表，本次补齐：
+- 素材类型：Particle 粒子、Image 图像、Sound 声音、Model 模型、Text 文字、Sprite 精灵图、
+  Fullscreen 全屏、Composite 合成、Script 脚本、Effect 特效、Scripted Layer 脚本图层
+- 素材题材：Audio Visualizer 音频可视化、Background 背景、Character 角色、Clock 时钟、
+  Fire 火焰、Interactive 交互、Magic 魔法、Post Processing 后处理、Smoke 烟雾、Space 太空，
+  另补 Rain/Snow/Water/Forest/City/Dark/Minimal/Underwater/Star/Ocean 等常见题材
+- 脚本类型：预置 None 无、Scene Script 场景脚本、Web Script 网页脚本、JavaScript、Lua、Shader 着色器
+
+显示与请求仍分离：标签显示中文，请求 /api/browse 仍传 Steam 英文原名。
+
+其他：compileSdk/targetSdk 维持 36；全量测试 122 通过 / 0 失败 / 1 跳过；assets 已重打（buildId cdd97b8a…）
