@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const { config } = require('../src/config');
 const steamjs = require('../src/steamjs');
+const guard = require('../src/guard');
 
 const ROOT = config.ROOT;
 const SAMPLE_ID = 3841811070;
@@ -64,6 +65,9 @@ async function cmdWhoami() {
 }
 
 async function cmdGet(id) {
+  if (!id) throw new Error('用法: node bin/steamjs.js get <创意工坊id>');
+  // 这个值会拼成 downloads/<id>，必须纯数字（防 "../evil" 写到 downloads 之外）
+  id = guard.assertItemId(id);
   const { refreshToken } = await ensureToken();
   const outDir = path.join(ROOT, 'downloads', String(id));
   const res = await steamjs.downloadItem({ id, outDir, refreshToken, onLog: log, onProgress: (f, done, total) => {
@@ -74,6 +78,8 @@ async function cmdGet(id) {
 }
 
 async function cmdMpkg(id) {
+  if (!id) throw new Error('用法: node bin/steamjs.js mpkg <创意工坊id>');
+  id = guard.assertItemId(id);
   const res = await cmdGet(id);
   const pack = require('../src/pack');
   const out = await pack.packFromItemDir(res.dir, { id, title: res.title, onLog: log });

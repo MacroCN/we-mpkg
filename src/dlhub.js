@@ -566,6 +566,7 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
         const id = parts[3];
         const action = parts[4];
         if (!guard.isValidJobId(id)) return json(res, 400, { error: '任务 id 不合法' });
+        if (action && !guard.isValidJobAction(action)) return json(res, 400, { error: '不支持的任务动作' });
         if (action === 'cancel' && req.method === 'POST') {
           const ok = hub.cancel(id);
           return json(res, ok ? 200 : 404, ok ? { ok: true } : { error: '任务不存在或已结束' });

@@ -1922,6 +1922,7 @@ test('写接口必须 application/json（text/plain 简单请求拦掉）', () =
 });
 
 test('所有入口都接了 guard（server / dlhub / packjob / workshop / CLI / 前端）', () => {
+  const guard = require('../src/guard');
   const root = path.join(__dirname, '..');
   const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
   const srv = read('src/server.js');
@@ -1936,6 +1937,12 @@ test('所有入口都接了 guard（server / dlhub / packjob / workshop / CLI / 
   assert.ok(ws.includes('assertItemId') && ws.includes('isValidItemId'));
   const cli = read('bin/wempkg.js');
   assert.ok(cli.includes("require('../src/guard')"));
+  const cli2 = read('bin/steamjs.js');
+  assert.ok(cli2.includes("require('../src/guard')") && cli2.includes('assertItemId'), 'bin/steamjs.js 的 downloads/<id> 也要校验');
+  assert.ok(guard.isValidJobAction('cancel') && guard.isValidJobAction('forget') && guard.isValidJobAction('pause') && guard.isValidJobAction('resume') && guard.isValidJobAction('retry'));
+  for (const bad of ['', '../x', 'exec', 'retry-node']) assert.strictEqual(guard.isValidJobAction(bad), false, `动作 ${bad} 不该放行`);
+  assert.ok(srv.includes('isValidJobAction'), '主服务要白名单任务动作');
+  assert.ok(dl.includes('isValidJobAction'), '下载中心要白名单任务动作');
   const php = read('public/index.html');
   assert.ok(!php.includes('d-audio'), '「保留音频」勾选项应已删除');
   const js = read('public/app.js');

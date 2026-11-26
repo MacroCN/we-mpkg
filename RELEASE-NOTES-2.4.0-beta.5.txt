@@ -1,0 +1,12 @@
+we-mpkg v2.4.0-beta.5（Beta 测试版，不合并主线）
+
+beta.4 的两处收尾：
+
+- bin/steamjs.js 补上条目 id 校验：`downloads/<id>` 与 `mpkg <id>` 都走 guard.assertItemId，和 bin/wempkg.js 的三处一致（本地 CLI，低危但保持一致）
+- 任务动作白名单：/api/jobs/:id/:action 与下载中心的 /api/hub/jobs/:id/:action 只允许 cancel / retry / pause / resume / forget，其它动作返回 400（原来只校验 jobId）
+
+无其它改动，音频策略与 beta.4 相同：
+- 勾选「下载原始资源」→ 原始音频原样保留
+- 打包 mpkg → 默认剥离音频，检测到音频交互（频谱 / 音频响应）时自动保留
+
+测试：113 通过 / 0 失败 / 1 跳过

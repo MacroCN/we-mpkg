@@ -537,6 +537,7 @@ const server = http.createServer(async (req, res) => {
       const jobId = pn.split('/')[3];
       const action = pn.split('/')[4];
       if (!guard.isValidJobId(jobId)) return json(res, 400, { error: '任务 id 不合法' });
+      if (action && !guard.isValidJobAction(action)) return json(res, 400, { error: '不支持的任务动作' });
       try {
         const h = await hub();
         const pathname = action ? `/api/hub/jobs/${encodeURIComponent(jobId)}/${action}` : `/api/hub/jobs/${encodeURIComponent(jobId)}`;

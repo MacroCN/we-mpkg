@@ -50,6 +50,12 @@ function checkHost(hostHeader) {
 
 const ITEM_ID_RE = /^\d{1,20}$/;
 const JOB_ID_RE = /^d\d{1,12}$/;
+// 下载中心支持的任务动作，主服务与 hub 共用同一张表（不白名单就把任意路径段转发给 hub）
+const JOB_ACTIONS = ['cancel', 'retry', 'pause', 'resume', 'forget'];
+
+function isValidJobAction(action) {
+  return JOB_ACTIONS.includes(String(action == null ? '' : action).trim());
+}
 
 function isValidItemId(id) {
   return ITEM_ID_RE.test(String(id == null ? '' : id).trim());
@@ -97,5 +103,5 @@ function jsonBodyOk(req) {
 
 module.exports = {
   hostNameOf, checkHost, extraAllowedHosts,
-  isValidItemId, assertItemId, isValidJobId, assertJobId, jsonBodyOk,
+  isValidItemId, assertItemId, isValidJobId, assertJobId, isValidJobAction, JOB_ACTIONS, jsonBodyOk,
 };
