@@ -7,6 +7,7 @@
  * 目标尺寸规则，并优先使用 ffmpeg 的 MediaCodec 硬件 H.264 编码器。
  */
 const fs = require('fs');
+const ffmpegHelp = require('./ffmpeg');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
@@ -97,17 +98,15 @@ function ffmpegCandidates(opts = {}) {
     process.env.WEM_FFMPEG,
     ...nativeCandidates,
     process.env.FFMPEG,
-    // 官方新版构建优先（.cache/toolchain/ffmpeg，9.x）。
-    // 工坊里的媒体文件不可信：2018 年那版 ffmpeg-lite 是 ≈4.1-dev，
-    // 解码七年间的已知漏洞（容器/解码器一堆 CVE）等于把风险直接暴露给用户，
-    // 所以旧版只留作「新版全都不在」时的兜底，排在最后。
+    // 只用新版（用户自带 / 官方 9.x 构建 / 绿色版内置的那份）。
+    // 工坊里的媒体文件不可信：2018 年那版 ffmpeg（≈4.1-dev）要把七年间的已知
+    // 容器/解码器漏洞全部暴露给用户，所以这里不留任何旧版兜底——
+    // 找不到就报错并给出下载地址（见 src/ffmpeg.js）。
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg'),
-    // 兜底：老版 ffmpeg-lite（≈4.1-dev，2018 构建）
-    path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
   ];
 }
 
@@ -230,10 +229,9 @@ function transcodeProjectVideo(projectDir, preset, opts = {}) {
 
   const ffmpeg = opts.ffmpeg || findFfmpeg(opts);
   if (!ffmpeg) {
-    const hint = process.env.WEM_FFMPEG
-      ? `WEM_FFMPEG=${process.env.WEM_FFMPEG}`
-      : `nativeLibraryDir=${nativeLibDebug()}`;
-    warnings.push(`video 类型视频需要降分辨率，但本机没找到 ffmpeg，原样保留: ${rel}（${hint}）`);
+    // 桌面端没有内置 ffmpeg：明确告诉用户去哪下、放哪里，不做静默降级
+    warnings.push(`video 类型视频需要降分辨率，但本机没找到 ffmpeg，原样保留: ${rel} —— ${ffmpegHelp.missingHelpShort()}`);
+    if (opts.onLog) opts.onLog(`  ${ffmpegHelp.missingHelp()}`);
     return { changed: false, warnings };
   }
   const dims = probeVideoDims(ffmpeg, src, opts);

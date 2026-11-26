@@ -76,20 +76,34 @@ A: 手机版壁纸引擎**根本没有 Web 引擎**（只有一个 Scene/Video �
    本工具的做法是：用电脑上的 Edge/Chrome 无头渲染这个网页，编成 mp4，再按 video 类型封装 —— 手机端就能正常播放。
    代价是丢失交互、多屏和音频反应，只保留动画。
    · 需要本机有 Edge 或 Chrome（Windows 一般自带 Edge）+ ffmpeg。
-   · ffmpeg 放这里即可被自动找到：.cache\toolchain\ffmpeg\bin\ffmpeg.exe
-     （也可以设环境变量 WEM_FFMPEG=<ffmpeg.exe 的完整路径>）
-   · 缺 ffmpeg 时会明确警告并退回原样封装（手机上仍会黑屏），不会假装成功。
+   · ffmpeg 的查找顺序：WEM_FFMPEG → tools\ffmpeg\ffmpeg.exe（绿色版内置）→ PATH
+   · 缺 ffmpeg 时会明确警告并退回原样封装（手机上仍会黑屏），不会假装成功；
+     同时会给出下载地址和放置路径，按下面「ffmpeg 怎么装」照做即可。
    · 参数：run.bat pack <目录> --web-seconds 8 --web-fps 24 --web-layout letterbox|full|auto
    · 手机 App 里打包没有浏览器也没有 ffmpeg，所以 web 类只能在电脑上打包。
 
 Q: 4K / 竖屏视频纹理的壁纸，打包后手机黑屏或卡顿？
 A: 视频纹理超过 1920（按最长边算）会自动转码：H.264 Constrained Baseline + yuv420p，
    竖屏锁高度、横屏锁宽度，再把纹理头尺寸改成与视频流一致。
-   · 绿色版已内置精简版 ffmpeg：tools\ffmpeg\ffmpeg.exe，开箱即用（约 60 MB）。
+   · 绿色版自带一份官方新版 ffmpeg：tools\ffmpeg\ffmpeg.exe，开箱即用。
    · 想换自己的：设环境变量 WEM_FFMPEG=<ffmpeg.exe 完整路径>，优先于内置。
+   · 不内置 2018 年那种老版本（4.x）：工坊媒体不可信，旧解码器等于把七年的已知漏洞
+     暴露给你。官方版缺失时本工具会直接停下并提示你去下载，不会悄悄用旧版凑合。
    · 找不到 ffmpeg 时不会假装成功：打包结果里会给警告，说明这条纹理保持原样、
-     手机端可能读不出画面。
+     手机端可能读不出画面，并在日志里给出下面的安装步骤。
    · 安卓 App 内没有内置 ffmpeg，4K 视频纹理只能原样保留；需要转码的话请在电脑上打包。
+
+Q: ffmpeg 怎么装？（Windows）
+A: 本工具不携带旧版，缺的时候会提示。手动装只有三步：
+   1. 下载官方 Windows 构建：https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+      （其它平台：https://ffmpeg.org/download.html）
+   2. 解压 zip，取出 bin\ffmpeg.exe（同目录的 ffprobe.exe 一起拷上也没问题）。
+   3. 放到下面任意一个位置，重启 we-mpkg：
+      · 绿色版：<we-mpkg 解压目录>\tools\ffmpeg\ffmpeg.exe
+      · 源码方式跑：<项目目录>\.cache\toolchain\ffmpeg\bin\ffmpeg.exe
+      · 或者不挪文件，直接设环境变量 WEM_FFMPEG=<ffmpeg.exe 的完整绝对路径>（优先级最高）
+   想自检：命令行执行 tools\ffmpeg\ffmpeg.exe -version，能打印版本号就成了；
+   we-mpkg 打包时日志里也会写「视频 xxx -> yyy（libx264）」，说明用的是哪一份。
 
 六、转移 / 卸载
 ------------------------------------------------------------

@@ -786,7 +786,7 @@ function shrinkVideoTex(buf, info, opts = {}) {
     return {
       changed: false,
       route: 'keep-video-noffmpeg',
-      reason: `视频纹理 ${video.width}x${video.height} 需要缩到 ${target}px，但没找到 ffmpeg，只能原样保留`,
+      reason: `视频纹理 ${video.width}x${video.height} 需要缩到 ${target}px，但没找到 ffmpeg，只能原样保留 —— ${require('./ffmpeg').missingHelpShort()}`,
     };
   }
   try {

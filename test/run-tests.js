@@ -2371,23 +2371,45 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
   }
 })();
 
-test('ffmpeg 候选：官方新版在前，2018 的 ffmpeg-lite 只做兜底', () => {
+test('ffmpeg 候选：只用新版，旧版 lite 彻底移除', () => {
   const video = require('../src/video');
   const webrender = require('../src/webrender');
   const list = video.ffmpegCandidates().filter(Boolean);
-  const iNew = list.findIndex((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg')));
-  const iLite = list.findIndex((p) => p.includes('ffmpeg-lite'));
-  assert.ok(iNew >= 0, '新版 ffmpeg 应该在候选列表里');
-  assert.ok(iLite >= 0, 'lite 仍保留为兜底');
-  assert.ok(iNew < iLite, '新版必须排在 lite 之前（旧版解码不受信媒体会引入已知漏洞）');
   const wList = (webrender.FFMPEG_CANDIDATES || []).filter(Boolean);
-  const wNew = wList.findIndex((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg')));
-  const wLite = wList.findIndex((p) => p.includes('ffmpeg-lite'));
-  assert.ok(wNew >= 0 && wLite >= 0 && wNew < wLite, 'webrender 的音频解码路径同样要新版优先');
-  // 被删掉的 ffmpeg-installer 4.1.0（.cache/toolchain/npm-ff）不应该出现在任何候选里
   for (const p of list.concat(wList)) {
+    assert.ok(!String(p).includes('ffmpeg-lite'), '2018 的 ffmpeg-lite 不能再出现在候选里');
     assert.ok(!String(p).includes('npm-ff'), 'npm-ff（4.1.0 tarball）不应再被引用');
   }
+  // 新版路径仍在列表里（.cache/toolchain/ffmpeg + 绿色版 tools/ffmpeg），保证「装了就能用」
+  assert.ok(list.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
+  assert.ok(wList.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
+  assert.ok(list.some((p) => p.includes(path.join('tools', 'ffmpeg'))));
+});
+
+test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级', () => {
+  const help = require('../src/ffmpeg');
+  const text = help.missingHelp();
+  assert.ok(text.includes(help.DOWNLOAD_URL), '要给出下载地址');
+  assert.ok(/https:\/\//.test(help.DOWNLOAD_URL));
+  assert.ok(text.includes(path.join('.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe')), '要给出放置路径');
+  assert.ok(text.includes('tools\\ffmpeg\\ffmpeg.exe'), '绿色版的放置路径也要写');
+  assert.ok(text.includes('WEM_FFMPEG'), '要提环境变量这个备选');
+  const short = help.missingHelpShort();
+  assert.ok(short.includes(help.DOWNLOAD_URL) && short.length < 400, '单行版要短，能塞进任务警告');
+  // 打包流程里的警告必须带上安装指引，而不是只说「没找到」
+  const vsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'video.js'), 'utf8');
+  assert.ok(vsrc.includes('missingHelpShort()'), '打包警告要给安装指引');
+  const wsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'webrender.js'), 'utf8');
+  assert.ok(wsrc.includes('missingHelp()'), '编码 mp4 失败要给完整步骤');
+  // 绿色版脚本 / CI 都不能再引用 lite
+  const portable = fs.readFileSync(path.join(__dirname, '..', 'build-portable.ps1'), 'utf8');
+  assert.ok(!portable.includes("'.cache\\toolchain\\ffmpeg-lite"), 'build-portable.ps1 不能再取 lite');
+  const ci = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
+  assert.ok(!/path: \.cache\/toolchain\/ffmpeg-lite/.test(ci), 'CI 缓存目录要改成新版路径');
+  // 说明文档要给安装方法
+  const green = fs.readFileSync(path.join(__dirname, '..', 'packaging', 'README-GREEN.txt'), 'utf8');
+  assert.ok(green.includes('ffmpeg-release-essentials.zip'), '绿色版说明里要有下载地址');
+  assert.ok(green.includes('tools\\ffmpeg\\ffmpeg.exe'));
 });
 
 async function testAsync(name, fn) {

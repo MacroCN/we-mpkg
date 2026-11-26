@@ -34,15 +34,14 @@ const BROWSER_CANDIDATES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ];
 
-// 顺序与 src/video.js 保持一致：官方新版（9.x）在前，2018 的 ffmpeg-lite 垫底。
-// 网页壁纸的音频解码同样要处理不受信的工坊媒体，没有理由退回七年前的老解码器。
+// 顺序与 src/video.js 保持一致：只用新版，不内置 2018 年那版（详见 src/ffmpeg.js）。
+// 网页壁纸的音频解码同样是「用不可信的工坊媒体喂解码器」，没有理由退回旧版本。
 const FFMPEG_CANDIDATES = [
   process.env.WEM_FFMPEG,
   process.env.FFMPEG,
   path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
   path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
   path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
-  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg-lite', 'ffmpeg.exe'),
 ];
 
 function firstExisting(list, extra = []) {
@@ -369,6 +368,7 @@ async function captureFrames(htmlPath, outDir, opts = {}) {
       audioRel = '/' + path.relative(rootDir, audio.path).split(path.sep).map(encodeURIComponent).join('/');
       onLog(`  音频兼容层: ${path.basename(audio.path)}（用于频谱 + 拟真麦克风输入）`);
       const f = findFfmpeg();
+      if (!f) onLog(`  ${require('./ffmpeg').missingHelpShort()}`);
       if (f) {
         const wav = path.join(userData, 'mic.wav');
         try {
@@ -480,7 +480,7 @@ async function captureFrames(htmlPath, outDir, opts = {}) {
  */
 function encodeMp4(frameDir, outMp4, opts = {}) {
   const ffmpeg = opts.ffmpeg || findFfmpeg();
-  if (!ffmpeg) throw new Error('没有找到 ffmpeg，无法把渲染的帧编码成 mp4（可设置环境变量 WEM_FFMPEG）');
+  if (!ffmpeg) throw new Error(`无法把渲染的帧编码成 mp4。${require('./ffmpeg').missingHelp()}`);
   const fps = opts.fps || DEFAULT_FPS;
   const seconds = opts.seconds || DEFAULT_SECONDS;
   const width = opts.width;

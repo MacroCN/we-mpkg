@@ -47,16 +47,17 @@ if (Test-Path (Join-Path $root 'tools\test-resume.js')) {
   }
 }
 
-# 精简版 ffmpeg：4K / 竖屏视频纹理转码要用（源码树里在 .cache，不进 git；构建时拷进便携版）
-$ffSrc = Join-Path $root '.cache\toolchain\ffmpeg-lite\ffmpeg.exe'
-if (-not (Test-Path $ffSrc)) { $ffSrc = Join-Path $root '.cache\toolchain\ffmpeg\bin\ffmpeg.exe' }
+# ffmpeg：4K / 竖屏视频纹理转码、网页壁纸音频解码要用。
+# 只取新版（.cache\toolchain\ffmpeg\bin，CI 从 gyan.dev 拉的官方 essentials），
+# 不再内置 2018 年那版 lite —— 旧解码器处理不受信的工坊媒体风险太大。
+$ffSrc = Join-Path $root '.cache\toolchain\ffmpeg\bin\ffmpeg.exe'
 if (Test-Path $ffSrc) {
   $ffDst = Join-Path $dst 'tools\ffmpeg'
   New-Item -ItemType Directory -Path $ffDst -Force | Out-Null
   Copy-Item $ffSrc (Join-Path $ffDst 'ffmpeg.exe') -Force
   Write-Host ("==> 内置 ffmpeg: {0:N1} MB" -f ((Get-Item (Join-Path $ffDst 'ffmpeg.exe')).Length / 1MB))
 } else {
-  Write-Host '⚠ 未找到 ffmpeg（4K/竖屏视频纹理将无法自动转码）'
+  Write-Host '⚠ 未内置 ffmpeg：运行时缺它会提示用户自行下载安装（见 README-GREEN.txt）'
 }
 
 Write-Host '==> 复制启动脚本与说明'
