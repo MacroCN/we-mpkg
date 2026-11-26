@@ -589,22 +589,94 @@ async function browse(opts = {}) {
  * 从创意工坊页面 SSR 状态里读出官方筛选分组（Type / Age Rating / Genre / Resolution …）。
  * Steam 只在页面状态里给这套定义，没有独立接口，所以解析后缓存。
  */
-let filtersCache = { at: 0, data: null };
+let filtersCache = { at: 0, data: null, labels: null };
 const FILTERS_TTL = 30 * 60 * 1000;
+/** 中文对照表拉取失败时，隔一会儿再补，不用等满 30 分钟 */
+const LABEL_RETRY_MS = 5 * 60 * 1000;
+
+/**
+ * 官方英文页和中文页的筛选分组/标签是同构的（标签 id 是稳定的数字 id），
+ * 用它生成「英文名 → 官方中文名」对照表：译名来自官方，不依赖机翻，也不用维护词表。
+ * 只用于显示；请求筛选时仍然传英文原名（requiredtags[] 只认规范 tag 名）。
+ */
+function buildFilterLabels(enGroups, zhGroups) {
+  if (!Array.isArray(enGroups) || !Array.isArray(zhGroups) || !enGroups.length || !zhGroups.length) return null;
+  const groups = {};
+  const tags = {};
+  for (let i = 0; i < enGroups.length; i++) {
+    const en = enGroups[i];
+    const zh = zhGroups[i];
+    if (!en || !zh) continue;
+    if (en.name && zh.name && en.name !== zh.name) groups[en.name] = zh.name;
+    const enTags = en.tags || [];
+    const zhTags = zh.tags || [];
+    const zhById = new Map(zhTags.filter((t) => t && t.id).map((t) => [String(t.id), t.name]));
+    const sameOrder = zhTags.length === enTags.length;
+    for (let j = 0; j < enTags.length; j++) {
+      const t = enTags[j];
+      if (!t || !t.name) continue;
+      // 优先按稳定的 tag id 对齐；没有 id 时退回按顺序对齐（长度一致才敢用）
+      let zhName = t.id ? zhById.get(String(t.id)) : null;
+      if (!zhName && sameOrder && zhTags[j]) zhName = zhTags[j].name;
+      if (zhName && zhName !== t.name) tags[t.name] = zhName;
+    }
+  }
+  if (!Object.keys(groups).length && !Object.keys(tags).length) return null;
+  return { groups, tags };
+}
+
+async function fetchFilterPage(lang) {
+  await ensureWebLogin(undefined);
+  const cookie = net.steamCookie().replace(/Steam_Language=[^;]*/, `Steam_Language=${lang}`);
+  const html = await net.getText(
+    `https://steamcommunity.com/app/${APP_ID}/workshop/?l=${lang}`,
+    {
+      timeout: 25000,
+      retries: 1,
+      headers: {
+        Cookie: cookie,
+        'Accept-Language': lang === 'english' ? 'en-US,en;q=0.9' : 'zh-CN,zh;q=0.9',
+      },
+    },
+  );
+  return extractFilterGroups(html);
+}
 
 async function getFilters({ force = false } = {}) {
-  if (!force && filtersCache.data && Date.now() - filtersCache.at < FILTERS_TTL) return filtersCache.data;
+  const fresh = filtersCache.data && Date.now() - filtersCache.at < FILTERS_TTL;
+  if (!force && fresh) {
+    // 分组有了但中文对照表还没拿到（上次中文页抓失败）：过几分钟再补一次
+    if (!filtersCache.labels && Date.now() - filtersCache.at > LABEL_RETRY_MS) {
+      refreshLabels(filtersCache.data).catch(() => {});
+    }
+    return filtersCache.data;
+  }
+  // 先串行确保登录态，避免两个请求同时去取凭据
   await ensureWebLogin(undefined);
-  // 必须按英文取：中文页面的标签名不是规范的 tag 名，拿去 requiredtags[] 会筛不出结果
-  const cookie = net.steamCookie().replace(/Steam_Language=[^;]*/, 'Steam_Language=english');
-  const html = await net.getText(
-    `https://steamcommunity.com/app/${APP_ID}/workshop/?l=english`,
-    { timeout: 25000, retries: 1, headers: { Cookie: cookie, 'Accept-Language': 'en-US,en;q=0.9' } },
-  );
-  const groups = extractFilterGroups(html);
+  // 英文页拿规范 tag 名；中文页只用来生成显示用的对照表，抓不到不影响筛选本身
+  const [groups, zhGroups] = await Promise.all([
+    fetchFilterPage('english'),
+    fetchFilterPage('schinese').catch(() => null),
+  ]);
   if (!groups) throw new Error('创意工坊页面结构变化，未能解析出筛选分组');
-  filtersCache = { at: Date.now(), data: groups };
+  filtersCache = { at: Date.now(), data: groups, labels: buildFilterLabels(groups, zhGroups) };
   return groups;
+}
+
+/** 单独补抓中文页，不阻塞筛选返回 */
+async function refreshLabels(groups) {
+  try {
+    const zhGroups = await fetchFilterPage('schinese');
+    const labels = buildFilterLabels(groups || [], zhGroups);
+    if (labels) {
+      filtersCache.labels = labels;
+      filtersCache.at = Date.now();
+    }
+  } catch { /* 中文页抓不到就继续用内置词表兜底 */ }
+}
+
+function getFilterLabels() {
+  return filtersCache.labels || null;
 }
 
 function extractFilterGroups(html) {
@@ -654,6 +726,8 @@ module.exports = {
   browseHtml,
   browseApi,
   getFilters,
+  getFilterLabels,
+  buildFilterLabels,
   getItemDetail,
   getFileDetails,
   parseBrowseHtml,

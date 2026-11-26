@@ -265,7 +265,8 @@ const server = http.createServer(async (req, res) => {
     if (pn === '/api/filters') {
       try {
         const groups = await workshop.getFilters({ force: u.searchParams.get('force') === '1' });
-        return json(res, 200, { groups });
+        // labels 是官方中英对照（只用于显示），拿不到就返回 null，前端会退回内置词表
+        return json(res, 200, { groups, labels: workshop.getFilterLabels() });
       } catch (e) {
         return json(res, 502, { error: `筛选条件拉取失败：${e.message}` });
       }

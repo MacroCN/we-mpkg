@@ -329,6 +329,20 @@ function selectedGroups() {
   return out;
 }
 
+/** 分组名：优先用官方中文页对照，其次内置词表，最后原样英文 */
+function filterGroupLabel(name) {
+  const map = state.filterLabels && state.filterLabels.groups;
+  if (state.lang === 'zh' && map && map[name]) return map[name];
+  return state.lang === 'zh' && GROUP_LABEL_KEY[name] ? tr(GROUP_LABEL_KEY[name]) : name;
+}
+
+/** 标签名：同上。注意只影响显示，请求依然用英文原名 */
+function filterTagLabel(name) {
+  const map = state.filterLabels && state.filterLabels.tags;
+  if (state.lang === 'zh' && map && map[name]) return map[name];
+  return tagLabel(name);
+}
+
 function renderFilters() {
   const box = $('filterGroups');
   if (!state.openGroups) {
@@ -347,10 +361,9 @@ function renderFilters() {
     head.className = 'fgroup-head';
     // 只改显示：分组名走 GROUP_LABEL_KEY 翻译，标签走 tagLabel；
     // 请求里仍然用 Steam 原始英文名（g.name / t.name），翻译过的名字发过去会筛不到东西
-    const label = state.lang === 'zh' && GROUP_LABEL_KEY[g.name]
-      ? tr(GROUP_LABEL_KEY[g.name]) : g.name;
+    const label = filterGroupLabel(g.name);
     const cnt = set.size;
-    const picked = Array.from(set).map(tagLabel).join(' / ');
+    const picked = Array.from(set).map(filterTagLabel).join(' / ');
     head.innerHTML = `<span>${esc(label)}${cnt ? `<span class="cnt">${esc(picked)}</span>` : ''}</span><span class="caret">›</span>`;
     head.onclick = () => {
       if (state.openGroups.has(g.name)) state.openGroups.delete(g.name);
@@ -363,7 +376,7 @@ function renderFilters() {
     for (const t of g.tags) {
       const chip = document.createElement('span');
       chip.className = 'chip' + (set.has(t.name) ? ' on' : '');
-      chip.textContent = tagLabel(t.name);
+      chip.textContent = filterTagLabel(t.name);
       chip.onclick = () => {
         if (set.has(t.name)) set.delete(t.name);
         else set.add(t.name);
@@ -396,6 +409,8 @@ async function loadFilters() {
   try {
     const data = await api('/api/filters');
     state.filterGroups = data.groups || [];
+    // 官方中英对照（启动时抓官方中文页生成）；没有就用内置词表
+    state.filterLabels = data.labels || null;
     renderFilters();
   } catch (e) {
     $('filterGroups').innerHTML = `<p class="status err">${esc(e.message)}</p>`;

@@ -2278,6 +2278,30 @@ test('纹理转换：像素行序保持原样，移动端形态不被二次编�
   assert.ok(!kept.changed, '移动端形态应原样保留');
 });
 
+test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求值仍是英文', () => {
+  const en = [
+    { name: 'Age Rating', tags: [{ name: 'Everyone', id: '1' }, { name: 'Mature', id: '3' }] },
+    { name: 'Genre', tags: [{ name: 'Anime', id: '10' }, { name: 'Fantasy', id: '20' }] },
+  ];
+  // 中文页：顺序打乱 + 有一个 id 不同（模拟官方增删标签），只能靠 id 对上
+  const zh = [
+    { name: '年龄分级', tags: [{ name: '成人', id: '3' }, { name: '所有人', id: '1' }] },
+    { name: '类型', tags: [{ name: '奇幻', id: '20' }, { name: '动漫', id: '10' }, { name: '新增标签', id: '99' }] },
+  ];
+  const labels = workshop.buildFilterLabels(en, zh);
+  assert.ok(labels, '应生成对照表');
+  assert.strictEqual(labels.groups['Age Rating'], '年龄分级');
+  assert.strictEqual(labels.groups.Genre, '类型');
+  assert.strictEqual(labels.tags.Everyone, '所有人');
+  assert.strictEqual(labels.tags.Mature, '成人');
+  assert.strictEqual(labels.tags.Anime, '动漫');
+  assert.strictEqual(labels.tags.Fantasy, '奇幻');
+  assert.strictEqual(labels.tags['新增标签'], undefined, '中文页新增标签不应写进英文映射');
+  // 结构不对时返回 null，前端退回内置词表
+  assert.strictEqual(workshop.buildFilterLabels(en, null), null);
+  assert.strictEqual(workshop.buildFilterLabels([], []), null);
+});
+
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);
   if (failed) {
