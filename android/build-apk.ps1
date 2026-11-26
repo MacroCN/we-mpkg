@@ -75,13 +75,20 @@ if (Test-Path $nmSrc) {
     $rc = 0
     $robocopy = Join-Path $env:SystemRoot 'System32\robocopy.exe'
     if (-not (Test-Path $robocopy)) { throw "找不到 robocopy: $robocopy" }
-    & $robocopy $nmSrc $nmDst /E /NFL /NDL /NJH /NJS /XD '.github' 'test' 'tests' 'docs' 'examples' '.bin' /XF '*.md' '*.map' '*.ts' '*.gz' '*.zip' > $null
+    & $robocopy $nmSrc $nmDst /E /NFL /NDL /NJH /NJS /XD '.bin' /XF '*.gz' '*.zip' > $null
     $rc = $LASTEXITCODE
     if ($rc -ge 8) { throw "复制 node_modules 失败 (robocopy=$rc)" }
+    # 文档 / 测试 / protobufjs 的 cli 之类一律删掉，手机上只用得到能 require 的那部分
+    node (Join-Path $projRoot 'tools\prune-node-modules.js') $nmDst
 }
 # 手机端不需要 SteamCMD 相关目录
 Get-ChildItem $assetsDir -Recurse -File | Measure-Object -Property Length -Sum |
     ForEach-Object { Write-Host ("    assets {0:N0} 个文件, {1:N1} MB" -f $_.Count, ($_.Sum / 1MB)) }
+
+# 打成单个 zip + buildId 清单，并删掉展开目录：手机上解包从「几千次 asset open」变成「一次顺序解压」
+node (Join-Path $projRoot 'tools\make-assets-bundle.js') $assetsDir
+Get-ChildItem (Join-Path $appDir 'src\main\assets') -File | Where-Object { $_.Name -like 'nodejs-*' } |
+    ForEach-Object { Write-Host ("    {0} {1:N1} MB" -f $_.Name, ($_.Length / 1MB)) }
 
 Write-Host "[4/5] 写 local.properties"
 $sdkDir = (Join-Path $Toolchain 'android-sdk').Replace('\', '\\')

@@ -21,6 +21,13 @@ public final class NodeRunner {
             new java.util.concurrent.atomic.AtomicBoolean(false);
     private static final String ASSET_PROJECT = "nodejs-project";
     private static final String PROJECT_DIR = "nodejs-project";
+    /** 打包进 assets 的单个 zip（由 tools/make-assets-bundle.js 生成） */
+    private static final String ASSET_ZIP = "nodejs-project.zip";
+    /** zip 的 buildId 清单，用来判断要不要重新解包 */
+    private static final String ASSET_MANIFEST = "nodejs-build.json";
+    /** 已经解好的 buildId 记在 filesDir 下 */
+    private static final String STAMP_FILE = ".nodejs-stamp";
+    private static final Object EXTRACT_LOCK = new Object();
 
     static {
         System.loadLibrary("node");
@@ -136,8 +143,159 @@ public final class NodeRunner {
         return true;
     }
 
+    /**
+     * 确保私有目录里的 JS 工程是最新的。
+     *
+     * assets 里现在是 `nodejs-project.zip` + `nodejs-build.json`（构建时生成）：
+     * - 清单里的 buildId 和 filesDir/.nodejs-stamp 一致 → 什么都不做（平时冷启动零成本）
+     * - 不一致（首次安装 / 升级换了内容）→ 清掉运行时目录再按 zip 顺序解包，保留 .cache 与 output
+     *
+     * 没有清单（例如直接用 Android Studio 编译出展开的 assets 目录）时退回逐文件复制。
+     */
+    public static void ensureProject(Context ctx) throws IOException {
+        synchronized (EXTRACT_LOCK) {
+            String want = assetBuildId(ctx);
+            String key = want != null ? ("zip:" + want) : ("dir:" + versionCode(ctx));
+            String have = readStamp(ctx);
+            if (key.equals(have) && new File(scriptPath(ctx)).isFile()) return;
+
+            Log.i(TAG, "prepare project dir: " + key + " (was " + have + ")");
+            long t0 = System.currentTimeMillis();
+            if (want != null) {
+                cleanRuntimeDirs(ctx);
+                extractZip(ctx, want);
+            } else {
+                copyAssetDir(ctx.getAssets(), ASSET_PROJECT, new File(projectDir(ctx)));
+            }
+            writeStamp(ctx, key);
+            Log.i(TAG, "project dir ready in " + (System.currentTimeMillis() - t0) + "ms");
+        }
+    }
+
+    /** 启动前预热（用户还在启动页选模式时就把解包跑掉），跟 ensureProject 共用一把锁 */
+    public static void prepareInBackground(final Context ctx) {
+        new Thread(new Runnable() {
+            @Override public void run() {
+                try {
+                    ensureProject(ctx);
+                } catch (Throwable t) {
+                    Log.w(TAG, "prepare failed (稍后会重试): " + t.getMessage());
+                }
+            }
+        }, "asset-prepare").start();
+    }
+
+    private static String assetBuildId(Context ctx) {
+        try (InputStream in = ctx.getAssets().open(ASSET_MANIFEST)) {
+            org.json.JSONObject o = new org.json.JSONObject(readAll(in));
+            String id = o.optString("buildId", "");
+            return id.isEmpty() ? null : id;
+        } catch (Exception e) {
+            Log.i(TAG, "no " + ASSET_MANIFEST + " in assets, fallback to dir copy");
+            return null;
+        }
+    }
+
+    private static long versionCode(Context ctx) {
+        try {
+            android.content.pm.PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
+            return android.os.Build.VERSION.SDK_INT >= 28 ? pi.getLongVersionCode() : pi.versionCode;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    private static String readStamp(Context ctx) {
+        File f = new File(ctx.getFilesDir(), STAMP_FILE);
+        if (!f.exists()) return "";
+        try {
+            return readAll(new java.io.FileInputStream(f)).trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private static void writeStamp(Context ctx, String key) {
+        File f = new File(ctx.getFilesDir(), STAMP_FILE);
+        File tmp = new File(f.getAbsolutePath() + ".tmp");
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(tmp)) {
+            out.write(key.getBytes("UTF-8"));
+        } catch (Exception e) {
+            Log.w(TAG, "write stamp failed: " + e.getMessage());
+            return;
+        }
+        if (!tmp.renameTo(f)) {
+            //noinspection ResultOfMethodCallIgnored
+            f.delete();
+            //noinspection ResultOfMethodCallIgnored
+            tmp.renameTo(f);
+        }
+    }
+
+    private static String readAll(InputStream in) throws IOException {
+        StringBuilder sb = new StringBuilder();
+        try (java.io.BufferedReader r = new java.io.BufferedReader(
+                new java.io.InputStreamReader(in, "UTF-8"))) {
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /** 只清运行时目录，.cache（登录凭据 / 设置 / 续转断点）与 output 必须保留 */
+    private static void cleanRuntimeDirs(Context ctx) {
+        File root = new File(projectDir(ctx));
+        File[] children = root.listFiles();
+        if (children == null) return;
+        for (java.io.File child : children) {
+            String name = child.getName();
+            if (name.equals(".cache") || name.equals("output") || name.equals("downloads")) continue;
+            try {
+                deleteRecursive(child);
+            } catch (Exception e) {
+                Log.w(TAG, "clean " + name + " failed: " + e.getMessage());
+            }
+        }
+    }
+
+    /** 按 zip 顺序解包：3478 次 asset open 变成 1 次 + 顺序读 */
+    private static void extractZip(Context ctx, String buildId) throws IOException {
+        File dest = new File(projectDir(ctx));
+        if (!dest.exists() && !dest.mkdirs()) throw new IOException("mkdirs failed: " + dest);
+        byte[] buf = new byte[65536];
+        int count = 0;
+        try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(
+                ctx.getAssets().open(ASSET_ZIP), 65536)) {
+            java.util.zip.ZipEntry e;
+            while ((e = zin.getNextEntry()) != null) {
+                String name = e.getName();
+                File out = new File(dest, name);
+                // 防御 zip-slip：条目名里不许出现 ..
+                if (!out.getCanonicalPath().startsWith(dest.getCanonicalPath())) {
+                    throw new IOException("非法的 zip 条目: " + name);
+                }
+                if (e.isDirectory()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    out.mkdirs();
+                    continue;
+                }
+                File parent = out.getParentFile();
+                if (parent != null && !parent.exists()) {
+                    //noinspection ResultOfMethodCallIgnored
+                    parent.mkdirs();
+                }
+                try (OutputStream fo = new FileOutputStream(out)) {
+                    int n;
+                    while ((n = zin.read(buf)) != -1) fo.write(buf, 0, n);
+                }
+                count++;
+            }
+        }
+        Log.i(TAG, "extracted " + count + " files from " + ASSET_ZIP + " (" + buildId + ")");
+    }
+
     public static void extractAssets(Context ctx) throws IOException {
-        copyAssetDir(ctx.getAssets(), ASSET_PROJECT, new File(projectDir(ctx)));
+        ensureProject(ctx);
     }
 
     private static void copyAssetDir(AssetManager am, String path, File dest) throws IOException {
@@ -167,7 +325,7 @@ public final class NodeRunner {
             public void run() {
                 boolean nativeEntered = false;
                 try {
-                    extractAssets(ctx);
+                    ensureProject(ctx);
                     cleanLegacyDownloadCache(ctx);
                     prepareSettings(ctx);
                     String dir = projectDir(ctx);

@@ -36,6 +36,9 @@ desktop.ini
 
 # ---- 例外：文档/脚本里用到的图片与示例保留 ----
 !assets/**
+# assets 里的 JS 工程包（构建产物，但要跟着仓库走，否则 APK 缺依赖）
+!android/app/src/main/assets/nodejs-project.zip
+!android/app/src/main/assets/nodejs-build.json
 
 # 本机构建路径（每台机器不同）
 local.properties

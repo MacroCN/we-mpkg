@@ -152,7 +152,11 @@ jobs:
           cp -R node_modules "$ASSETS"/node_modules
           # Android asset merger 会把 foo.js.gz 当成 foo.js 的重复资源
           find "$ASSETS" -name '*.gz' -delete
-          du -sh "$ASSETS"
+          # Java 侧兜底逻辑要能 fallback，但正常路径只走 zip：先同步、再瘦身、最后打包
+          node tools/prune-node-modules.js "$ASSETS/node_modules"
+          node tools/make-assets-bundle.js "$ASSETS"
+          ls -lh android/app/src/main/assets
+          du -sh android/app/src/main/assets
 
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties

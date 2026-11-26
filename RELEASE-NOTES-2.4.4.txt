@@ -1,0 +1,46 @@
+we-mpkg 2.4.4（安卓首启解包提速：单 zip + buildId 跳过）
+
+安卓端之前**每次冷启动**都会把 `assets/nodejs-project` 整包重解一遍（3478 个文件 / 24 MB），
+而且是最慢的逐文件 `AssetManager.open()` 复制。这一版从三个方向一起改。
+
+## 1. node_modules 瘦身：3478 → 1338 个文件，24 MB → 3.4 MB（zip）
+新增 `tools/prune-node-modules.js`，删掉运行时用不到的东西：
+
+- 文档 / 测试 / 示例 / 覆盖率 / CI 配置（`*.md`、`test/`、`docs/`、`.github/` …）
+- TypeScript 声明、source map、`.tsbuildinfo`
+- **protobufjs 的 `cli/`**：里面挂着一整套 lodash 副本，光这一个目录就是 2000+ 文件 / 9.4 MB
+- **lodash 的 `fp/ amd/ cjs/ modules/ jsdoc/`**：只留 `lodash.js`
+
+`dist/`、`lib/`、`src/`、`protobufs/` 这些可能被 `package.json` 的 `main` 指向的目录一律不动。
+瘦身后实测：3437 → 1266 个文件，23.4 MB → 14.56 MB（打包成 zip 后 3.4 MB）。
+`build-apk.ps1` 与 CI 的 "Sync JS project into assets" 都会自动跑这一步。
+
+## 2. assets 只放一个 zip，解包一次顺序读完
+新增 `tools/make-assets-bundle.js`：把 `nodejs-project/` 打成 `assets/nodejs-project.zip`，
+同时写 `assets/nodejs-build.json`（含 `buildId` = 内容 sha1）。APK 里不再有展开的几千个小文件，
+手机上解包从「3478 次 asset open + 3478 次文件写」变成「读一个 zip + 顺序解压」。
+`build.gradle` 把 `zip` 加进 `noCompress`，避免 aapt 二次压缩、解包时多一次 inflate。
+
+## 3. buildId 跳过解包：平时冷启动零成本
+`NodeRunner` 新增 `ensureProject()`：
+
+- 读 `assets/nodejs-build.json` 的 `buildId`，和 `filesDir/.nodejs-stamp` 比对
+- 一致 → 直接跳过（之前是要复制 24 MB）
+- 不一致（首次安装 / 升级换了内容）→ 只清 `bin`、`src`、`public`、`node_modules`、`package.json`，
+  **保留 `.cache`（登录凭据 / 设置 / 续转断点）和 `output`**，再按 zip 解包
+- assets 里没有清单（直接用 Android Studio 编译展开目录）→ 退回原来的逐文件复制，行为不变
+- 解包带 zip-slip 防御；耗时写进日志（`project dir ready in xxx ms`）
+
+## 4. 提前解包
+`MainActivity.onCreate()` 里就调 `NodeRunner.prepareInBackground()`：用户还在启动页选
+「本地 / 远程」时解包已经在跑，点「本地模式」时通常已经就绪；`start()` 与它共用一个锁，
+不会重复解包。
+
+## 预期
+- 首次安装 / 升级后首次：解包 3.4 MB zip，约 0.5–1.5 s（原来是 4–10 s）
+- 之后每次冷启动：0（只读一个 stamp 文件）
+
+## 其它
+- 测试：119 通过 / 0 失败 / 1 跳过（新增安卓首启段：瘦身规则、zip 打包 buildId 稳定性、
+  `NodeRunner`/`MainActivity` 源码断言、仓库 assets 必须是打包形态）
+- 仓库里的 assets 现在只提交 `nodejs-project.zip` + `nodejs-build.json`（`.gitignore` 已加例外）

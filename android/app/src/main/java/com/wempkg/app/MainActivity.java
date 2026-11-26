@@ -49,6 +49,8 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
         requestNotifPermission();
+        // 进页面就开始准备 JS 工程（首次/升级要解包 zip），等用户点「本地模式」时通常已经就绪
+        NodeRunner.prepareInBackground(getApplicationContext());
 
         web = findViewById(R.id.web);
         setupPanel = findViewById(R.id.setupPanel);
@@ -304,7 +306,7 @@ public class MainActivity extends Activity {
             showWeb("http://127.0.0.1:" + PORT + "/");
             return;
         }
-        status("正在启动本地 Node…首次启动要解包资源，约 5-10 秒");
+        status("正在启动本地 Node…（首次安装要解压资源，之后秒开）");
         KeepAliveService.start(getApplicationContext());
         NodeRunner.start(getApplicationContext());
         new Thread(new Runnable() {

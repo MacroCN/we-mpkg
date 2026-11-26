@@ -2128,6 +2128,81 @@ await testAsync('cachegc：临时目录 / 着色器缓存 / 续转计划 / 日�
   assert.strictEqual(r.logs.skipped, 1, '正在写的日志应记为跳过');
 });
 
+await testAsync('安卓首启优化：node_modules 瘦身 + assets 单 zip + buildId 跳过解包', async () => {
+  const { execFileSync } = require('child_process');
+  const root = tmp('assets-slim');
+
+  // 1) 瘦身脚本：造一个带「文档/测试/protobufjs cli/lodash 多副本」的假 node_modules
+  const nm = path.join(root, 'node_modules');
+  const mk = (rel, content) => {
+    const p = path.join(nm, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, content);
+  };
+  mk('foo/index.js', 'module.exports=1;');
+  mk('foo/README.md', '# doc');
+  mk('foo/test/a.js', 'x');
+  mk('foo/docs/guide.md', 'x');
+  mk('foo/index.d.ts', 'x');
+  mk('foo/index.js.map', '{}');
+  mk('foo/.eslintrc.js', 'x');
+  mk('protobufjs/index.js', 'module.exports=2;');
+  mk('protobufjs/cli/bin/pbjs', 'x');
+  mk('protobufjs/cli/node_modules/lodash/lodash.js', 'x');
+  mk('protobufjs/cli/node_modules/lodash/fp/map.js', 'x');
+  mk('lodash/lodash.js', 'x');
+  mk('lodash/fp/map.js', 'x');
+  mk('lodash/LICENSE', 'x');
+  mk('lodash/package.json', '{}');
+  execFileSync(process.execPath, [path.join(__dirname, '..', 'tools', 'prune-node-modules.js'), nm], { stdio: 'pipe' });
+
+  assert.ok(fs.existsSync(path.join(nm, 'foo', 'index.js')), '运行时 .js 要留');
+  assert.ok(!fs.existsSync(path.join(nm, 'foo', 'README.md')), '*.md 要删');
+  assert.ok(!fs.existsSync(path.join(nm, 'foo', 'test')), 'test/ 要删');
+  assert.ok(!fs.existsSync(path.join(nm, 'foo', 'index.d.ts')), '*.d.ts 要删');
+  assert.ok(!fs.existsSync(path.join(nm, 'foo', 'index.js.map')), '*.map 要删');
+  assert.ok(!fs.existsSync(path.join(nm, 'protobufjs', 'cli')), 'protobufjs 的 cli 整套要删');
+  assert.ok(fs.existsSync(path.join(nm, 'protobufjs', 'index.js')), 'protobufjs 本体要留');
+  assert.ok(!fs.existsSync(path.join(nm, 'lodash', 'fp')), 'lodash 的 fp/ 副本要删');
+  assert.ok(fs.existsSync(path.join(nm, 'lodash', 'lodash.js')), 'lodash 运行时入口要留');
+
+  // 2) 打包脚本：同一份内容两次打包 buildId 必须一致（NodeRunner 靠它判断要不要重解）
+  const proj = path.join(root, 'assets', 'nodejs-project');
+  fs.mkdirSync(path.join(proj, 'bin'), { recursive: true });
+  fs.mkdirSync(path.join(proj, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(proj, 'package.json'), '{"name":"x"}');
+  fs.writeFileSync(path.join(proj, 'bin', 'a.js'), 'console.log(1)\n');
+  fs.writeFileSync(path.join(proj, 'src', 'b.js'), 'console.log(2)\n');
+  const bundle = path.join(__dirname, '..', 'tools', 'make-assets-bundle.js');
+  execFileSync(process.execPath, [bundle, proj], { stdio: 'pipe' });
+  const manifestPath = path.join(root, 'assets', 'nodejs-build.json');
+  const m1 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  assert.ok(fs.existsSync(path.join(root, 'assets', 'nodejs-project.zip')), '应产出 nodejs-project.zip');
+  assert.ok(!fs.existsSync(proj), '打包后展开目录应删掉');
+  assert.strictEqual(m1.files, 3);
+  assert.ok(m1.buildId && m1.buildId.length === 40, 'buildId 应是 sha1');
+  execFileSync(process.execPath, [bundle, path.join(root, 'assets')], { stdio: 'pipe' });
+  const m2 = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  if (fs.existsSync(path.join(root, 'assets', 'nodejs-project.zip'))) {
+    // 第二次跑时目录已删，zip 不动；buildId 不变即可
+    assert.strictEqual(m1.buildId, m2.buildId, '同样内容 buildId 必须稳定');
+  }
+
+  // 3) 安卓侧确实用了 stamp + zip（源码断言，和仓库其它前端用例同风格）
+  const java = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app', 'NodeRunner.java'), 'utf8');
+  assert.ok(java.includes('nodejs-project.zip'), 'NodeRunner 要从 zip 解包');
+  assert.ok(java.includes('.nodejs-stamp'), 'NodeRunner 要有 buildId stamp');
+  assert.ok(java.includes('ensureProject'), 'NodeRunner 要有统一入口');
+  assert.ok(java.includes('prepareInBackground'), 'NodeRunner 要支持提前预热');
+  assert.ok(java.includes('cleanRuntimeDirs'), '升级重解时只清运行时目录');
+  const activity = fs.readFileSync(path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app', 'MainActivity.java'), 'utf8');
+  assert.ok(activity.includes('NodeRunner.prepareInBackground'), '进页面就该开始预热解包');
+  // 仓库里带的 assets 必须是打包好的形态（否则 APK 缺依赖）
+  const assetsDir = path.join(__dirname, '..', 'android', 'app', 'src', 'main', 'assets');
+  assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-project.zip')), '仓库 assets 要带 nodejs-project.zip');
+  assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-build.json')), '仓库 assets 要带 buildId 清单');
+});
+
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);
   if (failed) {
@@ -2147,4 +2222,6 @@ async function testAsync(name, fn) {
     console.log(`  ✘ ${name}\n      ${e.message}`);
   }
 }
+
+
 
