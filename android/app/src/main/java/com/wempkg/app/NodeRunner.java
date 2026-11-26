@@ -264,8 +264,7 @@ public final class NodeRunner {
         if (!dest.exists() && !dest.mkdirs()) throw new IOException("mkdirs failed: " + dest);
         byte[] buf = new byte[65536];
         int count = 0;
-        try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(
-                ctx.getAssets().open(ASSET_ZIP), 65536)) {
+        try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(ctx.getAssets().open(ASSET_ZIP))) {
             java.util.zip.ZipEntry e;
             while ((e = zin.getNextEntry()) != null) {
                 String name = e.getName();
