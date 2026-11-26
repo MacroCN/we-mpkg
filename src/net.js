@@ -95,8 +95,23 @@ function requestOnce(urlStr, opts, proxy) {
 
   return new Promise((resolve, reject) => {
     let settled = false;
-    const fail = (e) => { if (!settled) { settled = true; reject(e); } };
-    const ok = (v) => { if (!settled) { settled = true; resolve(v); } };
+    // 绝对超时：socket 的 setTimeout 只是「空闲超时」，服务端慢速滴漏数据时它会一直不触发。
+    // 这里再压一条总截止时间，保证请求一定会结束、重试/兜底判断不会被卡死。
+    const hardMs = Math.max(1000, Number(opts.totalTimeout) || Math.max(timeout * 4, 60000));
+    let hard = null;
+    let active = null;
+    let activeSocket = null;
+    const clear = () => { if (hard) { clearTimeout(hard); hard = null; } };
+    const fail = (e) => { if (!settled) { settled = true; clear(); reject(e); } };
+    const ok = (v) => { if (!settled) { settled = true; clear(); resolve(v); } };
+    hard = setTimeout(() => {
+      const err = new Error(`总超时(${hardMs}ms) ${urlStr}`);
+      err.code = 'ETIMEDOUT_TOTAL';
+      try { if (active && active.destroy) active.destroy(err); } catch { /* ignore */ }
+      try { if (activeSocket) activeSocket.destroy(err); } catch { /* ignore */ }
+      fail(err);
+    }, hardMs);
+    if (hard.unref) hard.unref();
 
     const onResponse = (res) => {
       const chunks = [];
@@ -106,6 +121,7 @@ function requestOnce(urlStr, opts, proxy) {
     };
 
     const send = (req) => {
+      active = req;
       req.setTimeout(timeout, () => req.destroy(new Error(`Timeout(${timeout}ms) ${urlStr}`)));
       req.on('error', fail);
       if (bodyBuf) req.write(bodyBuf);
@@ -148,6 +164,7 @@ function requestOnce(urlStr, opts, proxy) {
       path: `${u.hostname}:${u.port || 443}`,
       headers: connectHeaders,
     });
+    active = connectReq;
     connectReq.setTimeout(timeout, () => connectReq.destroy(new Error('Proxy CONNECT timeout')));
     connectReq.on('error', fail);
     connectReq.on('connect', (res, socket) => {
@@ -155,6 +172,7 @@ function requestOnce(urlStr, opts, proxy) {
         socket.destroy();
         return fail(new Error(`Proxy CONNECT ${res.statusCode}`));
       }
+      activeSocket = socket;
       const secure = tls.connect({ socket, servername: u.hostname }, () => {
         const req = https.request({
           hostname: u.hostname,
@@ -165,6 +183,8 @@ function requestOnce(urlStr, opts, proxy) {
           agent: false,
           createConnection: () => secure,
         }, onResponse);
+        active = req;
+        activeSocket = secure;
         req.setTimeout(timeout, () => req.destroy(new Error(`Timeout(${timeout}ms) ${urlStr}`)));
         req.on('error', fail);
         if (bodyBuf) req.write(bodyBuf);
@@ -231,7 +251,11 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
  */
 async function request(urlStr, opts = {}) {
   const retries = opts.retries === undefined ? 1 : opts.retries;
-  const proxy = currentProxy();
+  // 显式传 proxy:null 可强制直连；本机回环地址一律直连（代理对 127.0.0.1 只会返回 502）
+  let host = '';
+  try { host = new URL(urlStr).hostname; } catch { host = ''; }
+  const loopback = host === '127.0.0.1' || host === 'localhost' || host === '::1' || host === '[::1]';
+  const proxy = ('proxy' in opts) ? opts.proxy : (loopback ? null : currentProxy());
   let lastErr;
   for (let attempt = 0; attempt <= retries; attempt++) {
     let res;

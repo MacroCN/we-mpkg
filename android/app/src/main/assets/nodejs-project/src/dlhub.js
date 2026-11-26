@@ -68,6 +68,7 @@ function createHub(opts = {}) {
   let running = 0;
   let persistTimer = null;
   let stopped = false;
+  let lastGcAt = 0;
 
   // ---- 持久化（节流写盘，进程退出前 flush）----
   function serializeJob(j) {
@@ -99,6 +100,51 @@ function createHub(opts = {}) {
     } catch (e) {
       logger(`⚠ 队列写盘失败: ${e.message}`);
     }
+    notifySse();
+  }
+
+  // ---- SSE：只有真的有订阅者时才建定时器，没人看就完全不推 ----
+  const sseSubs = new Set();
+  let sseTimer = null;
+
+  function snapshot() {
+    return { maxConcurrent, running, jobs: list().map((j) => view(j, { logs: true })) };
+  }
+
+  function sseFlush() {
+    if (!sseSubs.size) return;
+    let payload;
+    try { payload = `data: ${JSON.stringify(snapshot())}\n\n`; } catch { return; }
+    for (const res of sseSubs) {
+      try {
+        // 客户端已经断开（EPIPE）就顺手摘掉，别一直往上写
+        if (res.writableEnded || res.destroyed) { sseSubs.delete(res); continue; }
+        res.write(payload);
+      } catch {
+        sseSubs.delete(res);
+      }
+    }
+  }
+
+  /** 节流推送：进度变化很密，400ms 一次足够；有任务在跑就持续推，跑完自然停 */
+  function notifySse() {
+    if (stopped || !sseSubs.size) return;
+    if (sseTimer) return;
+    sseTimer = setTimeout(() => {
+      sseTimer = null;
+      sseFlush();
+      if (running && sseSubs.size) notifySse();
+    }, 400);
+    if (sseTimer.unref) sseTimer.unref();
+  }
+
+  function subscribe(res) {
+    sseSubs.add(res);
+    notifySse();
+  }
+
+  function unsubscribe(res) {
+    sseSubs.delete(res);
   }
 
   function persist() {
@@ -197,6 +243,7 @@ function createHub(opts = {}) {
         updatedAt: now,
       };
       job.progressAt = now;
+      notifySse(); // 有 SSE 订阅者时按 400ms 节流推进度，没有订阅者时什么都不做
     };
   }
 
@@ -238,6 +285,13 @@ function createHub(opts = {}) {
       if (job.hidden) jobs.delete(job.id);
       pruneHistory();
       persist();
+      // 每个任务结束后顺手治理一次缓存/日志，但最多一小时一次（扫描目录别太勤）
+      if (Date.now() - lastGcAt > 3600 * 1000) {
+        lastGcAt = Date.now();
+        setImmediate(() => {
+          try { require('./cachegc').run({ cacheDir: config.CACHE_DIR, logDir: config.LOG_DIR, logger }); } catch { /* 治理失败不影响任务 */ }
+        });
+      }
       setImmediate(tick);
     }
   }
@@ -439,6 +493,7 @@ function createHub(opts = {}) {
   return {
     maxConcurrent,
     add, get, list, cancel, retry, forget, pause, resume, view, stop, persistNow,
+    subscribe, unsubscribe, snapshot,
     stats: () => ({
       total: jobs.size, running,
       queued: [...jobs.values()].filter((j) => j.state === 'queued').length,
@@ -552,8 +607,35 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
           jobs: hub.list().map((j) => hub.view(j, { logs: true })),
         });
       }
+      if (pn === '/api/hub/events' && req.method === 'GET') {
+        // SSE：任务列表/进度变化主动推给页面，代替 1s 轮询
+        req.socket.setTimeout(0);
+        if (req.socket.setNoDelay) req.socket.setNoDelay(true);
+        res.writeHead(200, {
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-store, no-transform',
+          Connection: 'keep-alive',
+          'X-Accel-Buffering': 'no',
+        });
+        res.write('retry: 2000\n\n');
+        hub.subscribe(res);
+        const hb = setInterval(() => {
+          try { if (!res.writableEnded) res.write(': ping\n\n'); } catch { /* 连接已断，close 回调会清理 */ }
+        }, 15000);
+        if (hb.unref) hb.unref();
+        const cleanup = () => {
+          clearInterval(hb);
+          hub.unsubscribe(res);
+        };
+        req.on('close', cleanup);
+        res.on('close', cleanup);
+        return;
+      }
       if (pn === '/api/hub/jobs' && req.method === 'POST') {
-        const body = JSON.parse((await readBody(req)) || '{}');
+        let body;
+        try { body = JSON.parse((await readBody(req)) || '{}'); } catch (e) {
+          return json(res, 400, { error: `请求体不是合法 JSON：${e.message}` });
+        }
         try {
           const job = hub.add(body);
           return json(res, 200, { jobId: job.id });

@@ -1971,6 +1971,137 @@ test('所有入口都接了 guard（server / dlhub / packjob / workshop / CLI / 
   assert.ok(pack.includes('sceneHasAudioReactive'), '有音频交互时要自动保留音频');
 });
 
+  console.log('\n[24] 健壮性收尾：SSE / 畸形 JSON / 绝对超时 / 缓存治理');
+
+await testAsync('SSE：下载中心主动推任务列表，不再靠轮询', async () => {
+  const http = require('http');
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('sse'), 'state.json'), maxConcurrent: 2 });
+  const srv = dlhub.createServer({ hub, port: 0 });
+  await new Promise((r) => srv.once('listening', r));
+  const port = srv.address().port;
+
+  const frames = [];
+  const req = http.get({ host: '127.0.0.1', port, path: '/api/hub/events', headers: { Accept: 'text/event-stream' } }, (res) => {
+    assert.strictEqual(res.statusCode, 200);
+    assert.match(res.headers['content-type'], /text\/event-stream/);
+    res.setEncoding('utf8');
+    res.on('data', (c) => {
+      for (const part of c.split('\n\n')) {
+        const line = part.trim();
+        if (line.startsWith('data: ')) {
+          try { frames.push(JSON.parse(line.slice(6))); } catch { /* ping */ }
+        }
+      }
+    });
+  });
+  req.on('error', () => { /* 收尾时销毁会触发，忽略 */ });
+
+  // 首帧（订阅时推的当前快照）
+  await sleepMs(700);
+  assert.ok(frames.length >= 1, '订阅后应收到快照');
+  assert.ok(Array.isArray(frames[frames.length - 1].jobs));
+
+  // 新任务进来后应主动再推一帧，且能带出这条任务
+  const job = hub.add({ id: '555' });
+  await sleepMs(800);
+  const last = frames[frames.length - 1];
+  assert.ok(last.jobs.some((j) => j.id === job.id), '新任务应通过推流送达');
+
+  req.destroy();
+  await new Promise((r) => srv.close(r));
+  hub.stop();
+});
+
+await testAsync('畸形 JSON 请求体返回 400，不是 500', async () => {
+  const EventEmitter = require('events');
+  const { readJsonBody } = require('../src/server');
+  const mkReq = (chunks) => {
+    const req = new EventEmitter();
+    setImmediate(() => { for (const c of chunks) req.emit('data', Buffer.from(c)); req.emit('end'); });
+    return req;
+  };
+  const ok = await readJsonBody(mkReq(['{"a":1}']));
+  assert.strictEqual(ok.a, 1);
+  const empty = await readJsonBody(mkReq(['']));
+  assert.deepStrictEqual(empty, {});
+  await assert.rejects(() => readJsonBody(mkReq(['{"a":'])), (e) => e.statusCode === 400 && e.code === 'BAD_JSON');
+  // 静态检查：请求体不再有裸 JSON.parse
+  const srvSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'server.js'), 'utf8');
+  assert.ok(!/JSON\.parse\(\(await readBody\(req\)\)/.test(srvSrc), '请求体解析要统一走 readJsonBody');
+  const hubSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'dlhub.js'), 'utf8');
+  assert.ok(hubSrc.includes('请求体不是合法 JSON'), '下载中心的 POST 也要 400');
+});
+
+await testAsync('net：服务端慢速滴漏数据也会被总超时打断', async () => {
+  const http = require('http');
+  const net = require('../src/net');
+  const config = require('../src/config').config;
+  const oldFallback = config.USE_CURL_FALLBACK;
+  config.USE_CURL_FALLBACK = false; // 别让 curl 兜底把测试拖长
+  const srv = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    const t = setInterval(() => res.write('.'), 150); // 一直在滴，空闲超时永远不会触发
+    res.on('close', () => clearInterval(t));
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const port = srv.address().port;
+  const t0 = Date.now();
+  try {
+    await net.request(`http://127.0.0.1:${port}/`, { timeout: 3000, totalTimeout: 900, retries: 0 });
+    assert.fail('应该超时');
+  } catch (e) {
+    assert.strictEqual(e.code, 'ETIMEDOUT_TOTAL', `实际错误: ${e.code} ${e.message}`);
+    assert.ok(Date.now() - t0 < 2500, '总超时应按 totalTimeout 生效，而不是等 3s 空闲超时');
+  } finally {
+    config.USE_CURL_FALLBACK = oldFallback;
+    await new Promise((r) => srv.close(r));
+  }
+});
+
+await testAsync('cachegc：临时目录 / 续转计划 / 日志都会被限额', async () => {
+  const cachegc = require('../src/cachegc');
+  const root = tmp('gc');
+  const cacheDir = path.join(root, '.cache');
+  const logDir = path.join(root, 'logs');
+  fs.mkdirSync(cacheDir, { recursive: true });
+  fs.mkdirSync(logDir, { recursive: true });
+  const old = Date.now() - 10 * 24 * 3600 * 1000;
+
+  // 旧临时目录
+  for (const name of ['pkg-old1', 'pkg-old2', 'item-123']) {
+    const p = path.join(cacheDir, name);
+    fs.mkdirSync(p, { recursive: true });
+    fs.writeFileSync(path.join(p, 'x.bin'), Buffer.alloc(1024));
+    fs.utimesSync(p, new Date(old), new Date(old));
+  }
+  // pack-plan：12 份，越靠前越旧
+  const planRoot = path.join(cacheDir, 'pack-plan');
+  fs.mkdirSync(planRoot, { recursive: true });
+  for (let i = 0; i < 12; i++) {
+    const p = path.join(planRoot, `id${i}`);
+    fs.mkdirSync(p, { recursive: true });
+    const t = new Date(Date.now() - (12 - i) * 3600 * 1000);
+    fs.utimesSync(p, t, t);
+  }
+  // 超大日志
+  const bigLog = path.join(logDir, 'app.log');
+  fs.writeFileSync(bigLog, `head\n${'x'.repeat(12 * 1024 * 1024)}`);
+
+  const opts = { tempMaxAgeMs: 3 * 24 * 3600 * 1000, tempKeepNewest: 1, planKeepNewest: 4, logMaxBytes: 1 * 1024 * 1024, logTailBytes: 64 * 1024 };
+  const r = cachegc.run({ cacheDir, logDir, logger: () => {}, ...opts });
+
+  assert.ok(!fs.existsSync(path.join(cacheDir, 'pkg-old1')));
+  assert.ok(!fs.existsSync(path.join(cacheDir, 'item-123')));
+  assert.ok(fs.existsSync(path.join(planRoot, 'id11')), '最新的续转目录要留着');
+  const left = fs.readdirSync(planRoot).length;
+  assert.ok(left <= 4, `pack-plan 应保留 4 份，实际 ${left}`);
+  const logSize = fs.statSync(bigLog).size;
+  assert.ok(logSize < 1024 * 1024, `日志应被截断，实际 ${logSize}`);
+  assert.ok(r.cache.removed >= 2, '应清掉过期临时目录');
+});
+
+
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);
   if (failed) {
     for (const f of failures) console.error(`\n失败: ${f.name}\n${f.error.stack}`);

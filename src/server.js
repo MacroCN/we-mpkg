@@ -215,6 +215,24 @@ function readBody(req) {
   });
 }
 
+/**
+ * 读并解析 JSON 请求体。畸形 JSON 抛 400 级错误（外层统一回 400），不再落到兜底的 500。
+ * @param {import('http').IncomingMessage} req
+ * @param {object} fallback 空 body 时返回的默认值
+ */
+async function readJsonBody(req, fallback = {}) {
+  const raw = await readBody(req);
+  if (!raw || !String(raw).trim()) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    const err = new Error(`请求体不是合法 JSON：${e.message}`);
+    err.statusCode = 400;
+    err.code = 'BAD_JSON';
+    throw err;
+  }
+}
+
 function serveStatic(req, res, pathname) {
   const rel = pathname === '/' ? '/index.html' : pathname;
   const safe = path.normalize(path.join(config.PUBLIC_DIR, decodeURIComponent(rel)));
@@ -254,7 +272,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (pn === '/api/settings') {
       if (req.method === 'POST') {
-        const body = JSON.parse((await readBody(req)) || '{}');
+        const body = await readJsonBody(req);
         const out = {};
         try {
           if (body.outputDir !== undefined) out.outputDir = configMod.setOutputDir(body.outputDir);
@@ -283,7 +301,7 @@ const server = http.createServer(async (req, res) => {
     }
     // 只走指定代理做一次连通性测试（不等同于“下载时先直连再回退”）
     if (pn === '/api/proxy/test' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}');
+      const body = await readJsonBody(req);
       try {
         const r = await require('./net').testProxy(body.proxy || config.PROXY, undefined, 10000);
         return json(res, 200, { ok: true, status: r.status, ms: r.ms });
@@ -312,7 +330,7 @@ const server = http.createServer(async (req, res) => {
     if (pn === '/api/login/credentials' && req.method === 'POST') {
       const steamjs = require('./steamjs');
       let body;
-      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { body = {}; }
+      body = await readJsonBody(req);
       try {
         const { session, needsCode, codeType } = await steamjs.createPasswordSession({
           user: String(body.accountName || '').trim(),
@@ -351,7 +369,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (pn === '/api/login/code' && req.method === 'POST') {
       let body;
-      try { body = JSON.parse((await readBody(req)) || '{}'); } catch { body = {}; }
+      body = await readJsonBody(req);
       if (!pendingSession) return json(res, 400, { ok: false, error: '没有进行中的登录' });
       try {
         await pendingSession.submitSteamGuardCode(String(body.code || '').trim());
@@ -481,6 +499,48 @@ const server = http.createServer(async (req, res) => {
       const item = await workshop.getItemDetail(id);
       return json(res, 200, item);
     }
+    // 任务事件流：主服务按 SSE 转发下载中心的 /api/hub/events，页面用 EventSource 订阅，
+    // 不再每秒轮询 /api/jobs。hub 断开时流会结束，浏览器 EventSource 自动重连。
+    if (pn === '/api/events' && req.method === 'GET') {
+      let h;
+      try { h = await hub(); } catch (e) {
+        res.writeHead(200, { 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-store' });
+        res.write(`event: error\ndata: ${JSON.stringify({ error: `下载中心不可用：${e.message}` })}\n\n`);
+        return res.end();
+      }
+      req.socket.setTimeout(0);
+      if (req.socket.setNoDelay) req.socket.setNoDelay(true);
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream; charset=utf-8',
+        'Cache-Control': 'no-store, no-transform',
+        Connection: 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.write('retry: 2000\n\n');
+      const upstream = http.get({
+        host: '127.0.0.1',
+        port: h.port,
+        path: '/api/hub/events',
+        headers: { Accept: 'text/event-stream', Host: `127.0.0.1:${h.port}` },
+      }, (up) => {
+        up.on('data', (c) => {
+          if (res.writableEnded) return;
+          try { res.write(c); } catch { /* 客户端已断 */ }
+        });
+        up.on('end', () => { try { res.end(); } catch { /* ignore */ } });
+        up.on('error', () => { try { res.end(); } catch { /* ignore */ } });
+      });
+      upstream.on('error', () => {
+        try {
+          if (!res.writableEnded) res.write(`event: error\ndata: ${JSON.stringify({ error: '下载中心不可用' })}\n\n`);
+          res.end();
+        } catch { /* ignore */ }
+      });
+      const close = () => { try { upstream.destroy(); } catch { /* ignore */ } };
+      req.on('close', close);
+      res.on('close', close);
+      return;
+    }
     if (pn === '/api/jobs' && req.method === 'POST') {
       if (!packjob.activeEngine()) {
         return json(res, 400, {
@@ -488,8 +548,7 @@ const server = http.createServer(async (req, res) => {
           hint: '点右上角 ⚙ 填账号密码登录，或把电脑上 get-token.bat 得到的那段凭据粘进去导入，即可下载；也可用「远程模式」连电脑。',
         });
       }
-      const raw = await readBody(req);
-      const body = JSON.parse(raw || '{}');
+      const body = await readJsonBody(req);
       if (!body.id) return json(res, 400, { error: '缺少 id' });
       // id 会被拼进 downloads/js-<id>：必须纯数字，否则 "../evil" 能写到下载目录之外
       try { body.id = guard.assertItemId(body.id); } catch (e) { return json(res, 400, { error: e.message }); }
@@ -577,7 +636,7 @@ const server = http.createServer(async (req, res) => {
     }
     // 桌面端「打开所在文件夹」：只允许在输出/下载目录里定位，避免被当成任意路径打开器
     if (pn === '/api/reveal' && req.method === 'POST') {
-      const body = JSON.parse((await readBody(req)) || '{}');
+      const body = await readJsonBody(req);
       if (!body.path) return json(res, 400, { error: '缺少 path' });
       const target = path.resolve(String(body.path));
       const roots = [config.OUTPUT_DIR, config.DOWNLOAD_DIR].map((p) => path.resolve(p));
@@ -633,6 +692,8 @@ const server = http.createServer(async (req, res) => {
     }
     return serveStatic(req, res, pn);
   } catch (e) {
+    // 请求本身有问题（畸形 JSON、id 不合法等）回 400，别报成服务器错误
+    if (e && e.statusCode === 400 && !res.headersSent) return json(res, 400, { error: e.message });
     return json(res, 500, { error: e.message });
   }
 });
@@ -663,6 +724,12 @@ function pruneStaleDownloads(maxAgeMs = 24 * 3600 * 1000) {
 function start(port = config.PORT) {
   ensureDirs();
   pruneStaleDownloads();
+  // .cache / logs 治理：临时目录、续转计划、日志体积都在这里收口（失败不影响启动）
+  try {
+    require('./cachegc').run({ cacheDir: config.CACHE_DIR, logDir: config.LOG_DIR, logger: (m) => console.log(m) });
+  } catch (e) {
+    console.log(`  ⚠ 缓存治理跳过: ${e.message}`);
+  }
   // 下载任务进行中不新建 CM 连接去换社区站 cookie（避免两条会话互相干扰）
   // 任务现在跑在下载中心进程里，因此查它的状态（查不到就不拦，最多是多一次 cookie 刷新）
   workshop.setLoginBusyCheck(async () => {
@@ -724,7 +791,7 @@ function start(port = config.PORT) {
   });
 }
 
-module.exports = { start, server, redactProxy };
+module.exports = { start, server, redactProxy, readJsonBody };
 
 if (require.main === module) {
   start().catch((e) => { console.error('启动失败:', e.message); process.exit(1); });

@@ -118,6 +118,51 @@
     timer = setTimeout(poll, delay);
   }
 
+  // ---------- 事件流（SSE） ----------
+  // 有 EventSource 时用它接收推送（服务端按 400ms 节流），推流断开才退回轮询，
+  // 避免每秒一次空查询，也避免「页面关了轮询还在跑」这类生命周期问题。
+  let es = null;
+
+  function stopLoop() {
+    if (timer) { clearTimeout(timer); timer = null; }
+  }
+
+  function startLoop() {
+    if (timer) return;
+    schedule();
+  }
+
+  function applyPayload(d) {
+    if (!d || !Array.isArray(d.jobs)) return;
+    jobs = d.jobs;
+    jobs.maxConcurrent = d.maxConcurrent;
+    render();
+  }
+
+  function connectSse() {
+    if (es || typeof EventSource === 'undefined') return;
+    try {
+      es = new EventSource('api/events');
+    } catch {
+      es = null;
+      return;
+    }
+    es.onopen = () => { stopLoop(); };
+    es.onmessage = (ev) => {
+      try { applyPayload(JSON.parse(ev.data)); } catch { /* 半截数据包忽略，等下一帧 */ }
+    };
+    es.onerror = () => {
+      // EventSource 会自动重连；这期间恢复轮询兜底，别让界面卡死
+      startLoop();
+      // 断线太久（CLOSED 状态）就重建，避免浏览器放弃后永久静默
+      if (es && es.readyState === 2) {
+        try { es.close(); } catch { /* ignore */ }
+        es = null;
+        setTimeout(connectSse, 3000);
+      }
+    };
+  }
+
   async function poll() {
     timer = null;
     try {
@@ -130,7 +175,9 @@
     } catch (e) {
       if (stat) stat.textContent = t('下载中心未响应：', 'Hub error: ') + e.message;
     }
-    schedule();
+    // SSE 已连上就不要再排下一次轮询；只有断流时才继续兜底
+    if (es && es.readyState === 1) stopLoop();
+    else schedule();
   }
 
   // ---------- 拖动 ----------
@@ -367,7 +414,8 @@
     if (confirmBar) confirmBar.classList.remove('on');
     notifyAndroid(false);
     render();
-    schedule();
+    // SSE 连着就不用再排轮询；断流时 schedule 会继续兜底
+    if (!(es && es.readyState === 1)) schedule();
   }
 
   function toggle() {
@@ -440,7 +488,9 @@
       hubBtn.addEventListener('click', toggle);
     }
     build();
+    // 先拉一次现状（任务条立刻有数），随后交给 SSE 推流；EventSource 不可用时保留轮询兜底
     schedule();
+    connectSse();
     // 首次进页面：如果后台已有任务，任务条立刻反映出来；带 ?dlc=1 直接展开浮层
     window.WE_DLC = {
       open: openPanel,
