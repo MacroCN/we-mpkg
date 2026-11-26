@@ -1,0 +1,26 @@
+we-mpkg 2.4.1（修复 2.4.0 的音频响应回归）
+
+## 问题
+2.4.0 去掉了「保留壁纸自带音频」勾选项后，音频响应判定只覆盖两处：
+- 场景对象直接挂的 effect 里的 `g_AudioSpectrum*`
+- 少量 JSON 字样（audiospectrum / audioResponse）
+
+于是部分场景类音频响应壁纸判定不到音频交互 → 音频文件被剥掉 → 应用后频谱层是一条平线、整层不动。
+
+## 修法
+`sceneHasAudioReactive` 的判断扩成三层，任一层命中就保留音频：
+
+1. 场景对象 effect 依赖的着色器含 `g_AudioSpectrum*`（原有逻辑）
+2. 项目里**任意**着色器文本含 `g_AudioSpectrum*`（材质 / 子层 / 间接引用解析不到时兜底）
+3. 任意 effect / scene / project 的 JSON、脚本、材质里出现音频响应字样或属性：
+   `audio spectrum`、`audio responsive`、`audioListener`、`audioprocess`、`fftSize`，
+   以及 `"audio" / "spectrum" / "fft"` 开头的 JSON 键
+
+打包日志会打印命中的证据文件，例如：
+`音频交互: effects/xxx.frag 含 g_AudioSpectrum`
+`音频交互: scene.json 声明了音频相关属性`
+
+## 其它
+- 新增 CLI `--drop-audio`：强制剥离音频（即使检测到音频交互），和 `--keep-audio` 对称
+- 默认策略不变：打包 mpkg 默认剥离音频，检测到音频交互才保留；「下载原始资源」始终保留原始音频
+- 测试：114 通过 / 0 失败 / 1 跳过（新增「未被引用的着色器也要能命中」与 `--drop-audio` 用例）

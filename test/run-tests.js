@@ -928,6 +928,25 @@ test('音频交互写在 JSON 属性里也算（同样保留音频）', () => {
   assert.ok(fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
 });
 
+test('音频交互只写在未被引用的着色器里也算（保留音频）；--drop-audio 例外', () => {
+  const dir = makeLayerProject('audioOrphan', 'void main(){}\n');
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [{ id: 1, image: 'models/util/solidlayer.json', effects: [{ file: 'effects/plain/effect.json' }] }],
+  }));
+  // 没挂到任何对象上的着色器（material / 子层间接引用，sceneUsesAudioSpectrum 解析不到）
+  fs.writeFileSync(path.join(dir, 'effects', 'orphan.frag'), 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
+  assert.ok(!packer.sceneUsesAudioSpectrum(dir), '场景对象依赖里确实没有频谱');
+  assert.ok(packer.sceneHasAudioReactive(dir), '兜底扫描要能发现');
+  assert.strictEqual(packer.stripAudio(dir, {}).keptForAudioReactive, true);
+  assert.ok(fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
+
+  // 强制剥离：autoKeepAudioReactive=false（CLI --drop-audio）
+  const r = packer.stripAudio(dir, { autoKeepAudioReactive: false });
+  assert.strictEqual(r.keptForAudioReactive, false);
+  assert.strictEqual(r.removed, 1);
+  assert.ok(!fs.existsSync(path.join(dir, 'sound', 'bgm.mp3')));
+});
+
 test('默认剥离音频，preserveAudio 时保留', () => {
   const dir = tmp('audio');
   fs.mkdirSync(path.join(dir, 'sound'), { recursive: true });

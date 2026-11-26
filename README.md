@@ -16,7 +16,7 @@
 | 创意工坊检索 | 浏览 / 搜索 / 标签筛选（Type、Age Rating、Genre、Resolution、Category、Asset Type…），筛选语义与官方客户端一致：**同一组内多选为「或」，不同组之间为「与」，某组不选即该组不过滤**；一次连续取 1/3/5 页，热门支持 7/30/90/365 天时间窗 |
 | 内容范围 | 有 Steam 登录凭据时自动带上账号登录态，抓到的条目范围与桌面客户端一致（含成人分级内容）；未登录则退回匿名范围，界面会标注 |
 | 下载 | 纯 JS 引擎 `steamjs`：内置 Steam 登录 / manifest / depot 密钥 / CDN 分块下载，全平台（Windows / Linux / 安卓）；支持分块级断点续传、暂停继续、坏 CDN 节点自动剔除 |
-| 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理按 DXT1/3/5/R8/RG88/直通图解码为 RGBA8 并 LZ4 压缩、着色器 GLSL ES 兼容改写（含结构性补丁）、`project.json`/`preview.gif` 补齐；支持画质档位、断点续转、默认剥离音频（检测到音频交互/频谱时自动保留，`--keep-audio` 可强制保留） |
+| 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理按 DXT1/3/5/R8/RG88/直通图解码为 RGBA8 并 LZ4 压缩、着色器 GLSL ES 兼容改写（含结构性补丁）、`project.json`/`preview.gif` 补齐；支持画质档位、断点续转、默认剥离音频（检测到音频交互/频谱时自动保留，`--keep-audio` 强制保留、`--drop-audio` 强制剥离） |
 | 网页类壁纸 | 安卓客户端没有 Web 引擎，本工具把网页渲染成视频并按 `video` 类型封装；同时注入音频响应 API，音频可视化壁纸的频谱不再为 0 |
 | 下载中心 | 下载/打包在独立进程里跑，网页关掉也不中断；最多 3 条同时下载，带字节级进度条、速度与 ETA；队列落盘，重启后自动续跑 |
 | 安卓端 | 下载缓存放 `Android/data/com.wempkg.app/files/downloads`，打包成功自动清理、失败保留续传；成品用 `content://` 直接拉起「导入壁纸引擎」 |
@@ -122,7 +122,7 @@ run.bat browse --tag Scene,Video  多个标签同时命中（强制「与」）
 run.bat info <id>                查看条目详情
 run.bat get <id>                 下载 + 打包成 .mpkg（一步到位）
 run.bat fetch <id>               只下载原始文件
-run.bat pack <目录|.pkg>          把本地内容打成 .mpkg（支持 --quality / --keep-audio / --resume / --video-magic）
+run.bat pack <目录|.pkg>          把本地内容打成 .mpkg（支持 --quality / --keep-audio / --drop-audio / --resume / --video-magic）
 run.bat inspect <目录|容器>       查看内部结构
 run.bat cdn                      查看上次的 CDN 节点测速结果
 run.bat cdn --test               立即重测节点延迟并按顺序打印

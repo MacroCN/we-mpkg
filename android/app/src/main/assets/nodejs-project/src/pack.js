@@ -260,30 +260,59 @@ function sceneUsesAudioSpectrum(projectDir) {
 
 /**
  * 是否有音频交互（音频频谱 / 音频响应）。
- * 除了 shader 里的 g_AudioSpectrum*，有些壁纸把音频绑定写在 scene/effect 的 JSON 属性里
- * （audiospectrum、audioresponsive 等），这些也要算。
+ *
+ * 判断分三层，任一层命中就保留音频：
+ *   1. 场景里各对象的 effect 依赖的着色器用到 g_AudioSpectrum*（最典型）
+ *   2. 项目里任意着色器文本出现 g_AudioSpectrum*（有些层通过 material / 子层间接引用，
+ *      依赖解析可能漏掉）
+ *   3. scene / effect / project 的 JSON 或脚本里出现 audio / spectrum / FFT 之类的字样
+ *      （音频绑定写在属性里、或者用别的名字声明音频响应）
+ *
+ * 宁可多留一段音频，也不要把音频响应层打成一条死线。真要强制去掉用 --drop-audio。
  */
-function sceneHasAudioReactive(projectDir) {
-  if (sceneUsesAudioSpectrum(projectDir)) return true;
-  const AUDIO_BIND_RE = /audio\s*spec(?:trum)?|audio\s*resp|audioresp/i;
+function sceneHasAudioReactive(projectDir, opts = {}) {
+  const onLog = opts.onLog || (() => {});
+  const hit = (why) => {
+    onLog(`  音频交互: ${why}`);
+    return true;
+  };
+
+  if (sceneUsesAudioSpectrum(projectDir)) return hit('effect 依赖的着色器含 g_AudioSpectrum');
+
+  // 文本类文件里出现音频响应字样；材质/贴图/音频目录不扫（里面是二进制或无关内容）
+  const AUDIO_HINT_RE = /g_AudioSpectrum|audio\s*spectrum|audio\s*resp|audioresp|audiolistener|audioprocess|fftsize|attendee_audio/i;
+  const SHADER_EXT = new Set(['.frag', '.vert', '.vsfrag', '.vs', '.fs', '.glsl', '.js', '.txt', '.lua']);
+  const DATA_EXT = new Set(['.json', '.scene', '.materials']);
+  const SKIP_DIRS = new Set(['materials', 'textures', 'models', 'sound', 'audio', 'videos']);
   const MAX_TEXT = 2 * 1024 * 1024; // 只看小文本文件，跳过贴图/视频
+
   const scan = (d, depth) => {
-    if (depth > 6) return false;
+    if (depth > 8) return false;
     let ents = [];
     try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return false; }
     for (const ent of ents) {
       const abs = path.join(d, ent.name);
       if (ent.isDirectory()) {
-        const name = ent.name.toLowerCase();
-        if (name === 'materials' || name === 'models' || name === 'textures' || name === 'sound' || name === 'audio') continue;
-        if (scan(abs, depth + 1)) return true;
+        if (SKIP_DIRS.has(ent.name.toLowerCase())) continue;
+        const sub = scan(abs, depth + 1);
+        if (sub) return sub;
         continue;
       }
       const ext = path.extname(ent.name).toLowerCase();
-      if (ext !== '.json' && ext !== '.scene' && ext !== '.txt' && ext !== '.js' && ext !== '.vert' && ext !== '.frag' && ext !== '.vsfrag' && ext !== '.vs' && ext !== '.fs') continue;
+      if (!SHADER_EXT.has(ext) && !DATA_EXT.has(ext)) continue;
       try {
         if (fs.statSync(abs).size > MAX_TEXT) continue;
-        if (AUDIO_BIND_RE.test(fs.readFileSync(abs, 'utf8'))) return true;
+        const text = fs.readFileSync(abs, 'utf8');
+        if (/g_AudioSpectrum\d+(?:Left|Right)/.test(text)) {
+          return hit(`${path.relative(projectDir, abs).split(path.sep).join('/')} 含 g_AudioSpectrum`);
+        }
+        if (AUDIO_HINT_RE.test(text)) {
+          return hit(`${path.relative(projectDir, abs).split(path.sep).join('/')} 提到音频响应`);
+        }
+        // JSON 里直接写 "audio" / "spectrum" 这类键（不同壁纸命名不统一，按字面兜底）
+        if ((ext === '.json' || ext === '.scene') && /"?(audio|spectrum|fft)[a-z]*"?\s*:/.test(text)) {
+          return hit(`${path.relative(projectDir, abs).split(path.sep).join('/')} 声明了音频相关属性`);
+        }
       } catch { /* 读不到就跳过 */ }
     }
     return false;
@@ -652,7 +681,7 @@ function stripAudio(projectDir, opts = {}) {
   if (opts.preserveAudio) return result;
   // 壁纸里有音频交互（频谱/音频响应）时保留音频：删掉监听器就收不到数据，相关层会整层空掉。
   // 其余情况（只有一段 BGM）照旧剥离，官方导出手机版也不带。
-  const audioReactive = opts.autoKeepAudioReactive !== false && sceneHasAudioReactive(projectDir);
+  const audioReactive = opts.autoKeepAudioReactive !== false && sceneHasAudioReactive(projectDir, { onLog });
   if (audioReactive) {
     result.keptForAudioReactive = true;
     onLog('  音频保留：检测到音频交互（频谱/音频响应），删掉音频后相关效果收不到数据');
@@ -788,7 +817,7 @@ async function packFromItemDir(itemDir, opts = {}) {
   const mobileDir = prepared.projectDir;
 
   // 音频：默认剥离（官方导出手机版也不带），--keep-audio 可保留
-  const audio = stripAudio(mobileDir, { preserveAudio: opts.preserveAudio, onLog });
+  const audio = stripAudio(mobileDir, { preserveAudio: opts.preserveAudio, autoKeepAudioReactive: opts.autoKeepAudioReactive, onLog });
 
   // video 类型没有 .tex 可转，project.json 指向的原始 mp4 也要按画质档位降分辨率
   if (prepared.type === 'video') {
@@ -938,7 +967,7 @@ async function packFromPath(inputPath, opts = {}) {
   onLog(`解包 ${path.basename(inputPath)}: ${res.files.length} 个文件 (${res.magic})`);
   const warnings = [];
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
-  const audio = stripAudio(projectDir, { preserveAudio: opts.preserveAudio, onLog });
+  const audio = stripAudio(projectDir, { preserveAudio: opts.preserveAudio, autoKeepAudioReactive: opts.autoKeepAudioReactive, onLog });
   const planFile = path.join(workDir, 'convert-plan.json');
   const checkpointFile = path.join(workDir, 'convert-checkpoint.json');
   const plan = convertplan.buildPlan({

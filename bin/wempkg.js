@@ -184,7 +184,7 @@ async function cmdGet(args) {
 
 async function cmdPack(args) {
   const input = args._[0];
-  if (!input) throw new Error('用法: pack <目录|.pkg|.mpkg> [--title 名称] [--out x.mpkg] [--ref ref.mpkg] [--quality high|balanced|smooth|original] [--keep-audio] [--resume]');
+  if (!input) throw new Error('用法: pack <目录|.pkg|.mpkg> [--title 名称] [--out x.mpkg] [--ref ref.mpkg] [--quality high|balanced|smooth|original] [--keep-audio] [--drop-audio] [--resume]');
   if (!fs.existsSync(input)) throw new Error(`路径不存在: ${input}`);
   const out = await packer.packFromPath(input, {
     title: args.title,
@@ -385,7 +385,8 @@ function webOptions(args) {
 /**
  * 打包相关参数
  *   --quality high|balanced|smooth|original  画质档位（默认 high）
- *   --keep-audio                             保留壁纸自带音频（默认剥离）
+ *   --keep-audio                             保留壁纸自带音频（默认：有音频交互才保留）
+ *   --drop-audio                             强制剥离音频（即使检测到音频交互）
  *   --drop-audio-layers                      强制移除音频频谱可视化层（默认修复并保留）
  *   --resume                                 沿用上次的工作目录与断点，中断后接着转
  *   --video-magic 0014|0020                  视频类 mpkg 的容器魔数（默认 0020）
@@ -395,6 +396,7 @@ function packOptions(args) {
   const o = {};
   if (typeof args.quality === 'string') o.preset = args.quality;
   if (args['keep-audio']) o.preserveAudio = true;
+  if (args['drop-audio']) o.autoKeepAudioReactive = false;
   if (args['drop-audio-layers']) o.dropAudioLayers = true;
   if (args.resume) o.resume = true;
   if (typeof args['video-magic'] === 'string') o.videoMagic = args['video-magic'];
@@ -460,7 +462,8 @@ async function main() {
   fetch    只下载原始文件
   pack     把本地目录 / .pkg 打成 .mpkg
             --quality high|balanced|smooth|original  画质档位（默认 high）
-            --keep-audio   保留壁纸自带音频（默认剥离）
+            --keep-audio   保留壁纸自带音频（默认：检测到音频交互才保留）
+            --drop-audio   强制剥离音频（即使检测到音频交互）
             --drop-audio-layers  强制移除音频频谱可视化层（默认修复后保留）
             --resume       沿用上次工作目录与断点，中断后接着转
             --max-texture-mb N  单张纹理解码内存预算（默认 192）
