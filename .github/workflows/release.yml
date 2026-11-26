@@ -15,6 +15,11 @@ on:
 permissions:
   contents: write
 
+# 同一个 ref 的发布串行跑，避免重复构建；正在跑的不要被打断（tag 发布必须完整出包）
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
   ANDROID_NDK_VERSION: '26.1.10909125'
   ANDROID_BUILD_TOOLS: '35.0.0'
@@ -28,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
       - uses: actions/setup-node@v7
         with:
@@ -46,17 +51,30 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # ffmpeg 二进制不大但每次都要从 gyan.dev 拉，缓存一下（key 变了会重新下）
+      - name: Cache ffmpeg binary
+        uses: actions/cache@v4
+        with:
+          path: .cache/toolchain/ffmpeg-lite
+          key: ffmpeg-lite-${{ runner.os }}-v1
+
       - name: Fetch ffmpeg (essentials build)
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force -Path .cache\toolchain\ffmpeg-lite | Out-Null
-          curl.exe -L --retry 3 -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
-          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg -Force
-          $exe = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-          Copy-Item $exe.FullName .cache\toolchain\ffmpeg-lite\ffmpeg.exe -Force
-          Remove-Item ffmpeg.zip -Force
-          .cache\toolchain\ffmpeg-lite\ffmpeg.exe -version | Select-Object -First 1
+          $dst = '.cache\toolchain\ffmpeg-lite\ffmpeg.exe'
+          if (Test-Path $dst) {
+            Write-Host 'ffmpeg: 命中缓存，跳过下载'
+          } else {
+            New-Item -ItemType Directory -Force -Path .cache\toolchain\ffmpeg-lite | Out-Null
+            curl.exe -L --retry 3 -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+            Expand-Archive ffmpeg.zip -DestinationPath ffmpeg -Force
+            $exe = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
+            Copy-Item $exe.FullName $dst -Force
+            Remove-Item ffmpeg.zip -Force
+            Remove-Item ffmpeg -Recurse -Force
+          }
+          & $dst -version | Select-Object -First 1
 
       - name: Build portable zip
         shell: pwsh
@@ -99,6 +117,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
 
       - uses: actions/setup-node@v7
         with:
@@ -109,6 +129,19 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+
+      # NDK + build-tools + platform 加起来几百 MB，按版本号做 key 缓存
+      - name: Cache Android SDK components
+        uses: actions/cache@v4
+        with:
+          # ubuntu runner 的 SDK 固定在 /usr/local/lib/android/sdk（env 上下文里取不到 ANDROID_HOME）
+          path: |
+            /usr/local/lib/android/sdk/ndk/${{ env.ANDROID_NDK_VERSION }}
+            /usr/local/lib/android/sdk/build-tools/${{ env.ANDROID_BUILD_TOOLS }}
+            /usr/local/lib/android/sdk/platforms/android-36
+          key: android-sdk-${{ runner.os }}-ndk${{ env.ANDROID_NDK_VERSION }}-bt${{ env.ANDROID_BUILD_TOOLS }}-api36
+          restore-keys: |
+            android-sdk-${{ runner.os }}-
 
       - name: Install NDK & build-tools
         run: |
@@ -126,19 +159,37 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 预编译原生库（libnode 等）来自 release 附件，按附件版本做 key
+      - name: Cache prebuilt native libraries
+        uses: actions/cache@v4
+        with:
+          path: .cache/native-prebuilt
+          key: native-prebuilt-v1-${{ runner.os }}
+
       - name: Fetch prebuilt native libraries
         run: |
-          curl -L --retry 3 -o native.tar.gz \
-            https://github.com/MacroCN/we-mpkg/releases/download/android-node-prebuilt-v1/android-node-prebuilt-v1.tar.gz
-          mkdir -p android/app/src/main/jniLibs
-          tar -xzf native.tar.gz -C android/app/src/main/jniLibs
+          mkdir -p .cache/native-prebuilt android/app/src/main/jniLibs
+          if [ ! -s .cache/native-prebuilt/native.tar.gz ]; then
+            curl -L --retry 3 -o .cache/native-prebuilt/native.tar.gz \
+              https://github.com/MacroCN/we-mpkg/releases/download/android-node-prebuilt-v1/android-node-prebuilt-v1.tar.gz
+          fi
+          tar -xzf .cache/native-prebuilt/native.tar.gz -C android/app/src/main/jniLibs
           ls -lh android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Cache Android ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: .cache/toolchain/ffmpeg-android
+          key: ffmpeg-android-9.0-${{ runner.os }}-9085507b
 
       - name: Fetch Android ffmpeg (LGPL + MediaCodec)
         run: |
           mkdir -p .cache/toolchain/ffmpeg-android android/app/src/main/jniLibs/arm64-v8a
-          curl -L --retry 3 -o .cache/toolchain/ffmpeg-android/ffmpeg \
-            https://raw.githubusercontent.com/hzw1199/Android-FFmpeg-Prebuilt/main/ffmpeg-9.0/bin/ffmpeg
+          if [ ! -s .cache/toolchain/ffmpeg-android/ffmpeg ]; then
+            curl -L --retry 3 -o .cache/toolchain/ffmpeg-android/ffmpeg \
+              https://raw.githubusercontent.com/hzw1199/Android-FFmpeg-Prebuilt/main/ffmpeg-9.0/bin/ffmpeg
+          fi
+          # 校验和始终跑：缓存里的文件被污染也能发现
           echo "9085507B0DC32643B4D6D084A7E7D3469EF17907A7BA15C22D3997ED09C932AA  .cache/toolchain/ffmpeg-android/ffmpeg" | sha256sum -c -
           chmod +x .cache/toolchain/ffmpeg-android/ffmpeg
           cp .cache/toolchain/ffmpeg-android/ffmpeg android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
@@ -210,6 +261,7 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.sha }}
+          fetch-depth: 1
 
       - uses: actions/download-artifact@v8
         with:
