@@ -78,8 +78,19 @@ node bin\wempkg.js serve --port 3090
 |---|---|
 | `video` | 直接可用（原样封装） |
 | `scene` | 可用（DXT/直通图解码成 RGBA8 并按 LZ4 压缩、着色器做移动端改写） |
-| `web` | 可用（渲染成视频封装，含音频轨与音频响应频谱） |
+| `web` | 可用（渲染成视频封装，含音频轨与音频响应频谱）；另有 **导出离线网页包（PWA）** 选项保留原生交互（beta） |
 | `application` | 不可用，依赖桌面运行时，已从筛选列表中移除 |
+
+### 导出离线网页包（PWA，beta）
+
+勾选详情页的「导出为离线网页包（PWA）」后，`web` 类型壁纸不再转视频，而是原样保留网页资源，
+产出 `<标题>_<id>_web.zip`：
+
+- 自动注入 `viewport`、`we-touch.js`（把触摸翻译成鼠标事件，禁滚动/缩放/长按菜单）、
+  `manifest.webmanifest` 与 `sw.js`（离线缓存，PWA 可「添加到桌面」）
+- 手机解压后用 Kiwi / Firefox 打开 `index.html` 即可，JS / Canvas / WebGL 交互全部保留
+- 它**不是系统壁纸**；`service worker` 需要 http(s) 或 localhost，`file://` 下会自动跳过
+- 非 `web` 类型条目会明确报错，不会产出半成品
 
 ---
 
