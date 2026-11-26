@@ -221,6 +221,9 @@ jobs:
         with:
           tag_name: ${{ env.TAG }}
           name: we-mpkg ${{ env.VERSION }}
+          # 带 - 的 tag（如 v2.4.0-beta.1）发布为预发布，避免 /releases/latest 把 beta 推给正式版用户
+          prerelease: ${{ contains(env.TAG, '-') }}
+          make_latest: ${{ contains(env.TAG, '-') && 'false' || 'true' }}
           body: |
             we-mpkg ${{ env.VERSION }}
 
