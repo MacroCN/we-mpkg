@@ -2482,7 +2482,7 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
 test('Rust 纹理 CLI（阶段 0）：探测候选含 .cache/toolchain，可一键关闭回落', () => {
   const rt = require('../src/rusttex');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'rusttex.js'), 'utf8');
-  assert.ok(src.includes(path.join('.cache', 'toolchain', 'bin', 'rust-tex')), '探测要覆盖 .cache/toolchain/bin');
+  assert.ok(/['"]\.cache['"],\s*['"]toolchain['"],\s*['"]bin['"]/.test(src), '探测要覆盖 .cache/toolchain/bin');
   assert.ok(src.includes('WE_RUST_TEX'), '要支持环境变量显式指定');
   assert.ok(src.includes('WE_TEX_RUST'), '要支持一键关闭（回落 JS）');
 
