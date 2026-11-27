@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0f1720" />
 <title>WE 创意工坊 → MPKG</title>
-<link rel="stylesheet" href="/style.css?v=2.2.0" />
-<link rel="stylesheet" href="/dlcenter.css?v=2.2.0" />
+<link rel="stylesheet" href="/style.css?v=2.4.12" />
+<link rel="stylesheet" href="/dlcenter.css?v=2.4.12" />
 </head>
 <body>
 
@@ -33,6 +33,13 @@
     <button id="settingsBtn" class="ghost" title="Settings">⚙</button>
   </div>
 </header>
+
+<!-- 启动时自动检查更新：有新版本就在顶栏下方提示，关掉后同一版本不再弹 -->
+<div id="updateBanner" class="update-banner hidden" role="status" aria-live="polite">
+  <span id="updateBannerText" class="update-banner-text"></span>
+  <button id="updateBannerGo" class="ghost update-banner-go" type="button" data-i18n="updateGo">去更新</button>
+  <button id="updateBannerClose" class="update-banner-close" type="button" aria-label="忽略本次提示">×</button>
+</div>
 
 <section class="searchbar">
   <input id="search" type="search" data-i18n-ph="searchPh" placeholder="搜索壁纸名称、作者、关键词…" autocomplete="off" enterkeyhint="search" />
@@ -234,6 +241,7 @@
 
       <!-- 关于 -->
       <div class="tabpane" id="tab-about" role="tabpanel">
+        <p id="aboutVersion" class="hint about-version"></p>
         <div class="row cdn-head">
           <strong data-i18n="updateTitle">版本更新</strong>
           <button id="checkUpdate" class="ghost" data-i18n="updateCheck">检查更新</button>
@@ -261,8 +269,8 @@
 <!-- 回到顶部 -->
 <button id="toTop" class="to-top hidden" type="button" aria-label="回到顶部">↑</button>
 
-<script src="/joblib.js?v=2.4.1"></script>
-<script src="/app.js?v=2.4.1"></script>
+<script src="/joblib.js?v=2.4.12"></script>
+<script src="/app.js?v=2.4.12"></script>
 <script src="/dlcenter.js?v=2.4.1" defer></script>
 </body>
 </html>

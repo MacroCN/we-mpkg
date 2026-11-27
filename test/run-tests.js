@@ -2385,6 +2385,49 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
   }
 })();
 
+test('src / tools / public 下的 JS 不能带 UTF-8 BOM（只有 .ps1 需要 BOM）', () => {
+  const root = path.join(__dirname, '..');
+  const bad = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) { if (e.name !== 'node_modules') walk(p); continue; }
+      if (!/\.[cm]?js$/.test(e.name)) continue;
+      const head = fs.readFileSync(p).subarray(0, 3);
+      if (head[0] === 0xEF && head[1] === 0xBB && head[2] === 0xBF) bad.push(path.relative(root, p).split(path.sep).join('/'));
+    }
+  };
+  for (const d of ['src', 'tools', 'public']) walk(path.join(root, d));
+  assert.deepStrictEqual(bad, [], `这些 JS 文件带 BOM（Node 能容忍但没必要）：${bad.join(', ')}`);
+});
+
+test('cachegc 的临时目录保留份数容得下 3 并发', () => {
+  const cachegc = require('../src/cachegc');
+  // 下载中心并发 3，每条任务各留一个 pkg-<ts>/webrender 目录；保留份数必须 ≥ 4，
+  // 否则第 4 条任务刚建目录就可能被当成残骸回收，出现「边跑边删」。
+  assert.ok(cachegc.DEFAULT.tempKeepNewest >= 4, `tempKeepNewest=${cachegc.DEFAULT.tempKeepNewest}，至少要 4`);
+});
+
+test('关于页显示当前版本，启动时自动检查更新并提示', () => {
+  const root = path.join(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  for (const id of ['aboutVersion', 'updateBanner', 'updateBannerText', 'updateBannerGo', 'updateBannerClose']) {
+    assert.ok(html.includes(`id="${id}"`), `index.html 缺少 #${id}`);
+  }
+  const js = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+  for (const q of ['function autoCheckUpdate', 'function renderAboutVersion', 'function showUpdateBanner', 'aboutVersionLabel']) {
+    assert.ok(js.includes(q), `app.js 缺少 ${q}`);
+  }
+  assert.ok(/autoCheckUpdate\(\);/.test(js), 'init 里要调用自动检查');
+  assert.ok(js.includes("api('/api/update/check')"), '启动检查走 6 小时缓存接口，不要 force');
+  assert.ok(!/autoCheckUpdate[\s\S]{0,200}update\/check\?force=1/.test(js), '启动检查不该强制刷新');
+  // 服务端本来就有这个接口，返回 current / latest / hasUpdate
+  const srv = fs.readFileSync(path.join(root, 'src', 'server.js'), 'utf8');
+  assert.ok(srv.includes("'/api/update/check'"));
+  const upd = require('../src/update');
+  assert.strictEqual(upd.currentVersion(), require('../package.json').version, '关于页版本号要跟 package.json 一致');
+});
+
 test('ffmpeg 候选：只用新版，旧版 lite 彻底移除', () => {
   const video = require('../src/video');
   const webrender = require('../src/webrender');

@@ -22,7 +22,9 @@ const DEFAULT = {
   // 临时目录（打包 / 渲染中间产物）
   tempPrefixes: ['pkg-', 'pack-', 'webrender'],
   tempMaxAgeMs: 3 * DAY,
-  tempKeepNewest: 2,
+  // 下载中心最多同时跑 3 条，每条都可能留下 pkg-<ts>/webrender 临时目录；
+  // 再加一条刚建的，保留 4 份才不会被 3 并发的边角情况误删。
+  tempKeepNewest: 4,
   tempActiveMs: 30 * 60 * 1000,
   // 着色器 blob 缓存
   itemPrefix: 'item-',

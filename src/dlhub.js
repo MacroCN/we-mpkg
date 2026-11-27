@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 /**
  * 下载中心（独立进程）
  *

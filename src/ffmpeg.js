@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 /**
  * ffmpeg 缺失时的统一指引。
  *

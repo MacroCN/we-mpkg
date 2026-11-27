@@ -41,6 +41,8 @@ const I18N = {
     updateTitle: '版本更新', updateCheck: '检查更新', updateDownload: '打开下载页', updateDownloadApk: '直接下载 APK',
     updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
     updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
+    aboutVersionLabel: '当前版本 {v}', updateGo: '去更新',
+    updateBannerText: '发现新版本 {v}（当前 {c}）', updateBannerDismissed: '已忽略本次更新提示',
     exitApp: '退出程序（关闭后台服务）',
     exitConfirm: '确定退出？后台服务会被关闭，本页随即失效。',
     exitDone: '已退出，后台服务已关闭，可以关掉这个页面了。',
@@ -116,6 +118,8 @@ const I18N = {
     updateTitle: 'Updates', updateCheck: 'Check for updates', updateDownload: 'Open download page', updateDownloadApk: 'Download APK',
     updateChecking: 'Checking the latest GitHub release…', updateLatest: 'You are up to date ({v})',
     updateFound: 'New version {v} available (current {c})', updateFail: 'Check failed: ',
+    aboutVersionLabel: 'Current version {v}', updateGo: 'Update',
+    updateBannerText: 'New version {v} available (current {c})', updateBannerDismissed: 'Update notice dismissed',
     exitApp: 'Quit (stop background service)',
     exitConfirm: 'Quit now? The background service will be stopped and this page will stop working.',
     exitDone: 'Quit. The service is stopped — you can close this page.',
@@ -232,6 +236,12 @@ function applyLang() {
   // 画质选项的「推荐」标记是动态拼出来的，切语言后要重拼
   syncQualityOptions();
   if (state.device) applyDeviceHint();
+  // 版本号 / 更新提示条是动态文案，切语言后要重拼
+  if (state.version) renderAboutVersion(state.version);
+  const bar = $('updateBanner');
+  if (state.update && bar && !bar.classList.contains('hidden')) {
+    $('updateBannerText').textContent = tr('updateBannerText', { v: state.update.latest, c: state.update.current });
+  }
 }
 
 // ---------------- 状态 ----------------
@@ -782,34 +792,96 @@ async function load() {
   }
 }
 
-async function checkUpdate() {
+const UPDATE_DISMISS_KEY = 'updateDismissedVersion';
+
+/** 关于页顶部的版本号：服务端 /api/update/check 的 current 就是 package.json 的 version */
+function renderAboutVersion(v) {
+  const el = $('aboutVersion');
+  if (el) el.textContent = v ? tr('aboutVersionLabel', { v }) : '';
+}
+
+/**
+ * 「去更新」的落点：安卓端直接给 APK 资产（交给系统浏览器下载），其他平台去 Release 页。
+ * 链接必须是 http(s)，否则当作不安全忽略。
+ */
+function updateTarget(d) {
+  if (!d || !d.hasUpdate || !d.release || !d.release.url) return null;
+  const canExternal = !!(window.Android && typeof window.Android.openExternal === 'function');
+  const apk = canExternal && d.release.assets && d.release.assets.apk;
+  const target = safeHttpUrl(apk ? apk.url : d.release.url);
+  return target ? { href: target, direct: !!apk } : null;
+}
+
+/** 关于页里的更新状态（手动检查与启动自动检查共用） */
+function renderUpdateState(d) {
   const hint = $('updateHint');
   const link = $('updateLink');
+  if (!hint || !link) return;
+  state.version = d.current;
+  state.update = d;
+  renderAboutVersion(d.current);
+  const t = updateTarget(d);
+  if (d.hasUpdate) {
+    hint.textContent = tr('updateFound', { v: d.latest, c: d.current });
+    if (t) {
+      link.href = t.href;
+      link.dataset.direct = t.direct ? '1' : '';
+      link.textContent = t.direct ? tr('updateDownloadApk') : tr('updateDownload');
+      link.classList.remove('hidden');
+    } else {
+      hint.textContent += '（更新链接协议不安全，已忽略）';
+      link.classList.add('hidden');
+    }
+  } else {
+    hint.textContent = tr('updateLatest', { v: d.current });
+    link.classList.add('hidden');
+  }
+}
+
+/** 顶栏下方的更新提示条：同一版本被关掉后不再弹 */
+function showUpdateBanner(d) {
+  const bar = $('updateBanner');
+  const t = updateTarget(d);
+  if (!bar || !t) return;
+  let dismissed = '';
+  try { dismissed = localStorage.getItem(UPDATE_DISMISS_KEY) || ''; } catch { /* 隐私模式 */ }
+  if (dismissed === String(d.latest)) return;
+  $('updateBannerText').textContent = tr('updateBannerText', { v: d.latest, c: d.current });
+  const go = $('updateBannerGo');
+  go.dataset.href = t.href;
+  go.dataset.direct = t.direct ? '1' : '';
+  bar.classList.remove('hidden');
+}
+
+function closeUpdateBanner(remember) {
+  const bar = $('updateBanner');
+  if (bar) bar.classList.add('hidden');
+  if (remember) {
+    try { localStorage.setItem(UPDATE_DISMISS_KEY, remember); } catch { /* ignore */ }
+    const hint = $('updateHint');
+    if (hint) hint.textContent = tr('updateBannerDismissed');
+  }
+}
+
+/** 启动时自动查一次（服务端 6 小时缓存）：失败就静默，不打扰用户 */
+async function autoCheckUpdate() {
+  try {
+    const d = await api('/api/update/check');
+    renderAboutVersion(d.current);
+    if (d.error) return;
+    renderUpdateState(d);
+    if (d.hasUpdate) showUpdateBanner(d);
+  } catch { /* 断网/服务未起：忽略 */ }
+}
+
+async function checkUpdate() {
+  const hint = $('updateHint');
   hint.textContent = tr('updateChecking');
   try {
     const d = await api('/api/update/check?force=1');
     if (d.error) throw new Error(d.error);
-    if (d.hasUpdate) {
-      hint.textContent = tr('updateFound', { v: d.latest, c: d.current });
-      if (d.release && d.release.url) {
-        // 安卓端直接给 APK 资产地址：点击后交给系统浏览器下载，不再先落到 Release 页面
-        const canExternal = !!(window.Android && typeof window.Android.openExternal === 'function');
-        const apk = canExternal && d.release.assets && d.release.assets.apk;
-        const target = safeHttpUrl(apk ? apk.url : d.release.url);
-        if (!target) {
-          hint.textContent = tr('updateFound', { v: d.latest, c: d.current }) + '（更新链接协议不安全，已忽略）';
-          link.classList.add('hidden');
-          return;
-        }
-        link.href = target;
-        link.dataset.direct = apk ? '1' : '';
-        link.textContent = apk ? tr('updateDownloadApk') : tr('updateDownload');
-        link.classList.remove('hidden');
-      }
-    } else {
-      hint.textContent = tr('updateLatest', { v: d.current });
-      link.classList.add('hidden');
-    }
+    renderUpdateState(d);
+    if (d.hasUpdate) showUpdateBanner(d);
   } catch (e) {
     hint.textContent = tr('updateFail') + e.message;
   }
@@ -1658,6 +1730,24 @@ function wire() {
   if ($('testProxy')) $('testProxy').onclick = testProxyConn;
   if ($('resetProxy')) $('resetProxy').onclick = resetProxy;
   if ($('checkUpdate')) $('checkUpdate').onclick = checkUpdate;
+  if ($('updateBannerGo')) {
+    $('updateBannerGo').onclick = () => {
+      const go = $('updateBannerGo');
+      const href = go.dataset.href;
+      if (!href) return;
+      if (go.dataset.direct === '1' && window.Android && typeof window.Android.openExternal === 'function') {
+        openExternal(href);
+      } else {
+        window.open(href, '_blank', 'noopener');
+      }
+    };
+  }
+  if ($('updateBannerClose')) {
+    $('updateBannerClose').onclick = () => {
+      const v = ($('updateBannerText').textContent.match(/\d+\.\d+\.\d+/g) || []).pop() || '';
+      closeUpdateBanner(v);
+    };
+  }
   // APK 直链在 WebView 里点会停在下载页或被拦；显式交给系统浏览器打开
   if ($('updateLink')) {
     $('updateLink').addEventListener('click', (e) => {
@@ -1746,6 +1836,8 @@ async function init() {
   setDownloadLabel();
   load();
   loadFilters();
+  // 启动时自动检测更新；有新版本才弹提示，失败静默
+  autoCheckUpdate();
   // 下载中心页面上的「重新登录」会带 ?settings=account 跳回主界面，直接落在对应 tab
   const wantTab = new URLSearchParams(location.search).get('settings');
   if (wantTab) openSettings(wantTab);

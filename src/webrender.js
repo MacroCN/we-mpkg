@@ -1,4 +1,4 @@
-﻿'use strict';
+'use strict';
 /**
  * web 类型壁纸 -> 视频 转换器
  *

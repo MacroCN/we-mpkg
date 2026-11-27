@@ -715,3 +715,30 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   from { transform: scale(0.97); opacity: 0.6; }
   to { transform: none; opacity: 1; }
 }
+
+/* ---------- 更新提示条 ---------- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 14px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-2);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, #123342, #102a37);
+  color: var(--text);
+  font-size: 14px;
+}
+.update-banner-text { flex: 1 1 200px; min-width: 0; }
+.update-banner-go { flex: 0 0 auto; }
+.update-banner-close {
+  flex: 0 0 auto;
+  width: 28px; height: 28px;
+  display: grid; place-items: center;
+  border: none; border-radius: 8px;
+  background: transparent; color: var(--dim);
+  font-size: 18px; line-height: 1; cursor: pointer;
+}
+.update-banner-close:hover { color: var(--text); background: #1d3b4a; }
+.about-version { font-weight: 600; color: var(--accent); }
