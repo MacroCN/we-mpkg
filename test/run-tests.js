@@ -2530,7 +2530,10 @@ test('安卓 assets 里的 JS 必须与仓库源码一致（防止提交旧 zip�
     if (!dirs.some((d) => name.startsWith(d + '/'))) continue;
     const disk = path.join(root, name);
     assert.ok(fs.existsSync(disk), `zip 里有仓库不存在的文件：${name}`);
-    assert.strictEqual(data.toString('utf8'), fs.readFileSync(disk, 'utf8'), `assets 里的 ${name} 落后于仓库源码，请重打 zip`);
+    // Windows 检出会把工作区换成 CRLF，zip 里是 LF：比较前统一换行符
+    const norm = (t) => t.replace(/\r\n/g, '\n');
+    assert.strictEqual(norm(data.toString('utf8')), norm(fs.readFileSync(disk, 'utf8')),
+      `assets 里的 ${name} 落后于仓库源码，请重打 zip`);
     checked++;
   }
   assert.ok(checked > 20, 'zip 里 JS 文件数量异常');
