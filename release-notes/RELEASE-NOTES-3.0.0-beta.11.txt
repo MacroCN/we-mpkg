@@ -1,0 +1,13 @@
+we-mpkg 3.0.0-beta.11
+
+临时目录按安卓规范改成应用私有 cacheDir（context.getCacheDir() 对应的 <app>/cache），
+不再尝试 /tmp。
+
+查找顺序：
+1. WEM_CACHE_DIR（JNI 约定变量，留给以后重建 JNI 用）
+2. TMPDIR / TEMP / TMP（旧 JNI 可能设了）
+3. <data/data/包名>/cache —— 从 <files>/nodejs-project/src 反推三级得到，安卓标准位置
+4. 项目 <files>/nodejs-project/.cache
+5. cwd/.cache；桌面/测试环境才追加 os.tmpdir()
+
+仍然全部不可写时返回 null，静默回落 JS。versionCode 70，不发布 Release，APK 见 Actions artifact。

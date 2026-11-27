@@ -138,14 +138,21 @@ function info() {
 let tmpRoot = null;
 function tmpDir() {
   if (tmpRoot) return tmpRoot;
-  // 安卓上 os.tmpdir() 是 /tmp（不存在且不可写）；JNI 设置 TMPDIR 的那版二进制又没打进去，
-  // 所以按「环境变量 → 系统临时目录 → 项目 .cache」逐个试，都失败就放弃（回落 JS）。
+  // 安卓规范：临时文件放应用私有 cacheDir（context.getCacheDir()）。
+  // 环境变量可能因为旧 JNI 没设上，这里按「JNI 约定变量 → 从项目路径反推应用 cacheDir
+  // → 项目 .cache → 系统临时目录」的顺序找，都失败就放弃（回落 JS），绝不往 /tmp 写。
+  const projectRoot = path.resolve(__dirname, '..');            // <files>/nodejs-project
+  const filesDir = path.resolve(projectRoot, '..');             // <files>
+  const appRoot = path.resolve(filesDir, '..');                 // /data/data/<pkg>
   const bases = [
+    process.env.WEM_CACHE_DIR,
     process.env.TMPDIR, process.env.TEMP, process.env.TMP,
-    os.tmpdir(),
-    path.join(__dirname, '..', '.cache'),
+    path.join(appRoot, 'cache'),                                // 安卓标准的应用 cache 目录
+    path.join(projectRoot, '.cache'),
     process.cwd() ? path.join(process.cwd(), '.cache') : null,
   ];
+  // 桌面/测试环境才把系统临时目录作为最后兜底
+  if (process.platform !== 'android') bases.push(os.tmpdir());
   for (const base of bases) {
     if (!base) continue;
     try {
