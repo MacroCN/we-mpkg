@@ -1,0 +1,14 @@
+we-mpkg 3.0.0-beta.6
+
+阶段 2 瘦身体积实验的结论：libnode.so 不能靠 strip 瘦。
+
+beta.5 试过用 NDK 的 llvm-strip --strip-unneeded 处理预编译 libnode.so：
+62,487,872 → 75,843,488 字节，APK 从 28.9MB 涨到 36.0MB。原因是它的调试段是压缩存储
+（SHF_COMPRESSED），llvm-strip 会先解压再整体重写，反而变大。因此本版回退：
+只对 libc++_shared.so 做 strip（1,794,776 → 1,292,904 字节，约省 0.5MB），libnode.so 原样保留。
+
+结论：要真正把 62.5MB 的 libnode 降下来，只能重编译精简版（--with-intl=none / 裁内置模块），
+或者按路线图换成 Rust 宿主 + Node sidecar。本版不包含这类改动。
+
+其余与 beta.4 相同：纹理加速引擎状态、双主题保留、Rust tex 全链路。
+versionCode 65，签名不变，可覆盖升级。

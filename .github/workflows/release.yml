@@ -184,12 +184,13 @@ jobs:
           tar -xzf .cache/native-prebuilt/native.tar.gz -C android/app/src/main/jniLibs
           ls -lh android/app/src/main/jniLibs/arm64-v8a
 
-      # 阶段 2 第一步：预编译的 libnode.so 带完整调试符号（62.5MB，其中 .symtab/.strtab/.debug_* 约 12MB）。
-      # 只去掉符号与调试段，动态符号表保留，功能完全不变，APK 直接小一圈。
+      # 只 strip libc++_shared.so。
+      # libnode.so 的调试段是压缩存储（SHF_COMPRESSED），llvm-strip 会先解压再重写，
+      # 实测 62.5MB -> 75.8MB（APK 反而涨 7MB），所以不能直接 strip；要瘦它只能重编译。
       - name: Strip prebuilt native libraries
         run: |
           TOOLCHAIN="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          for lib in libnode.so libc++_shared.so; do
+          for lib in libc++_shared.so; do
             f="android/app/src/main/jniLibs/arm64-v8a/$lib"
             [ -f "$f" ] || continue
             before=$(stat -c%s "$f")
