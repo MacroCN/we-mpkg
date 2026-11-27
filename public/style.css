@@ -935,7 +935,8 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   border-bottom: 1px solid var(--line);
 }
 /* 五个 tab 等高：高度写死、文字单行居中。
-   选中态只加粗不加尺寸，英文长词走省略号，不会把某一个 tab 顶高。 */
+   选中态只换颜色和下划线，不动字重——字重一变文字宽度就变，居中后整行会左右挪一下，
+   看着像点的时候「跳」。 */
 .tabs .tab {
   flex: 1 1 0;
   min-width: 0;
@@ -947,13 +948,19 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   border-bottom: 2px solid transparent;
   color: var(--dim);
   font-size: 13px;
+  font-weight: 500;
   font-family: inherit;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.tabs .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .tab.on {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+  /* 想要「加粗」的观感又不改字宽：两层同色阴影向外各扩 0.6px，布局尺寸完全不变 */
+  text-shadow: 0 0 0.6px currentColor, 0 0 0.6px currentColor;
+}
 .tabpane { display: none; padding-top: 10px; }
 .tabpane.on { display: block; }
 
