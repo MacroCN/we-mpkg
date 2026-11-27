@@ -1,0 +1,28 @@
+we-mpkg 2.4.21
+
+【修复 2.4.20 两层进度没有生效】
+
+原因：任务状态机从来没把 state 切到 packing。下载阶段开始时 state 被固定成
+downloading，之后不管进到纹理转换还是写入 mpkg，state 一直停在 downloading。
+于是前端按 state 判断打包阶段，永远判不到——界面一直显示「下载中」，
+深色打包层也永远画不出来，看起来就像没改。
+
+改动：
+1. src/dlhub.js 的进度跟踪器在进入打包阶段时把 job.state 切成 packing
+   （排队中的任务也一起切）。取消 / 移除 / 重试 / 暂停的判定本来就接受
+   packing，行为不变；打包阶段依然不给「暂停」按钮（CPU 活儿无可暂停的循环）。
+2. public/joblib.js 增加 isPackingPhase()：除了 state，还看 progress.phase —— 只要
+   phase 已经离开 download，就按打包阶段渲染。这样即使服务端状态没切过来，
+   前端也能画出深色层。卡片状态文字和徽标同步显示「打包中」。
+3. public/app.js 详情页同样加了 phase 兜底，状态行显示「打包中」。
+4. 测试补三条：进入 convert 后 state 必须是 packing；下载阶段不画深色层；
+   state 停在 downloading 但 phase=convert 时前端仍要认出打包阶段
+   （143 通过 / 0 失败 / 1 跳过）。
+
+结果：
+- 下载中：一条浅色进度条 + 速率 / 剩余时间；
+- 打包中：底层浅色满格（调淡）+ 上层深色条从 0 走到 100 + 「下载 100% · 打包 x%」；
+- 完成：整条恢复完成色。
+
+版本：versionCode 64 / versionName 2.4.21
+可直接覆盖安装 2.4.19 / 2.4.20。

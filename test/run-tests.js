@@ -1063,6 +1063,7 @@ await testAsync('进度：下载阶段按字节算百分比，速度/ETA 随之�
   assert.strictEqual(job.progress.detail, '下载 a.png');
   d.calls[0].hooks.onProgress({ phase: 'convert', done: 2, total: 4 });
   // 下载层进入打包后锁 100，纹理转换进度记在打包层（深色覆盖条），不再和下载混成一个百分比
+  assert.strictEqual(job.state, 'packing', '进入打包阶段任务状态必须切到 packing，否则界面一直显示下载中');
   assert.strictEqual(job.progress.dlPercent, 100, '开始打包后下载层应为 100%');
   assert.strictEqual(job.progress.packDone, 2);
   assert.strictEqual(job.progress.packTotal, 4);
@@ -2004,6 +2005,37 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     const dlpage = fs.readFileSync(path.join(__dirname, '..', 'public', 'downloads.js'), 'utf8');
     assert.ok(!dlc.includes('STATE_TEXT = {') && !dlpage.includes('STATE_TEXT = {'), '状态文案表不该再复制一份');
     assert.ok(!dlc.includes('PHASE_TEXT = {') && !dlpage.includes('PHASE_TEXT = {'), '阶段文案表不该再复制一份');
+  });
+
+  test('进度条分层：下载层一直在，打包层只在打包阶段出现', () => {
+    require(path.join(__dirname, '..', 'public', 'joblib.js'));
+    const J = globalThis.WE_JOBS;
+    assert.ok(J, 'joblib 应挂到 globalThis');
+
+    const downloading = { id: '1', state: 'downloading', progress: { phase: 'download', percent: 62, dlPercent: 62, packPercent: 0, bytes: 45, total: 72 } };
+    const v1 = J.view(downloading, { zh: true });
+    assert.strictEqual(v1.dlPct, 62);
+    assert.strictEqual(v1.packPct, null, '下载阶段不该有打包层');
+    assert.ok(!v1.bar.includes('class="pack"'), '下载阶段不该画深色层');
+
+    const packing = { id: '2', state: 'packing', progress: { phase: 'convert', percent: 43, dlPercent: 100, packPercent: 43, bytes: 72, total: 72 } };
+    const v2 = J.view(packing, { zh: true });
+    assert.strictEqual(v2.dlPct, 100, '打包阶段下载层锁 100');
+    assert.strictEqual(v2.packPct, 43);
+    assert.ok(v2.bar.includes('class="pack"'), '打包阶段要画出深色覆盖层');
+    assert.ok(v2.bar.includes('layered'), '两层结构要带 layered 类');
+    assert.strictEqual(v2.stateText, '打包中');
+
+    // state 还停在 downloading、但 phase 已经进打包：前端也要认出来
+    const mixed = { id: '3', state: 'downloading', progress: { phase: 'convert', percent: 20, dlPercent: 100, packPercent: 20 } };
+    const v3 = J.view(mixed, { zh: true });
+    assert.strictEqual(v3.packPct, 20, 'phase 进入打包就该显示打包层');
+    assert.strictEqual(v3.stateText, '打包中');
+
+    const done = { id: '4', state: 'done', progress: { percent: 100, dlPercent: 100, packPercent: 100 } };
+    const v4 = J.view(done, { zh: true });
+    assert.strictEqual(v4.pct, 100);
+    assert.strictEqual(v4.packPct, null, '完成后收掉深色层，整条恢复成完成色');
   });
 
   test('前端 8 项：顶栏任务条 / 卡片直达 / 类型徽标 / 设置分 tab / 打开文件夹', () => {

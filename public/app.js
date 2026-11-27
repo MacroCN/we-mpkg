@@ -1308,7 +1308,8 @@ function applyProgress(job) {
   const wrap = bar ? bar.parentElement : null;
   const state = job.state;
   const running = state === 'downloading' || state === 'packing' || state === 'queued';
-  const packing = state === 'packing';
+  // 打包阶段判定：state 应已切到 packing，但老服务端可能停在 downloading，所以再看 phase
+  const packing = state === 'packing' || (state === 'downloading' && !!p.phase && p.phase !== 'download');
   const done = state === 'done';
 
   // 下载层：下载阶段按字节涨，一旦进打包就锁 100 —— 底层永远表示「下载这件事完了没」
@@ -1330,7 +1331,7 @@ function applyProgress(job) {
     packEl.style.width = pk === null ? '0%' : `${Math.max(1, Math.min(100, pk))}%`;
   }
 
-  const stateText = { queued: '排队中', downloading: '下载中', packing: '打包中', done: '完成', failed: '失败', cancelled: '已取消' }[state] || state;
+  const stateText = packing ? '打包中' : ({ queued: '排队中', downloading: '下载中', packing: '打包中', done: '完成', failed: '失败', cancelled: '已取消' }[state] || state);
   $('p-state').textContent = stateText + (done ? ' ✔' : '');
   const late = PHASE_LABEL[p.phase] ? ` · ${PHASE_LABEL[p.phase]}` : '';
 

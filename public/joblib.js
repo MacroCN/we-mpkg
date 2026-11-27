@@ -84,10 +84,17 @@
     if (!p.phase || p.phase === 'download') return num(p.percent);
     return 100;
   }
+  /** 是否处于打包阶段：state 可能是含混的 downloading，所以再看一眼 phase */
+  function isPackingPhase(j) {
+    if (!j) return false;
+    if (j.state === 'packing') return true;
+    const p = j.progress || {};
+    return j.state === 'downloading' && !!p.phase && p.phase !== 'download';
+  }
   /** 打包层进度（0-100）：只在打包中时有值，用来画深色覆盖层；完成后收掉 */
   function packPctOf(j) {
     if (!j) return null;
-    if (j.state !== 'packing') return null;
+    if (!isPackingPhase(j)) return null;
     const p = j.progress || {};
     const v = num(p.packPercent);
     return v !== null ? v : num(p.percent);
@@ -125,7 +132,7 @@
     else if (p.bytes) out.push(human(p.bytes));
     if (isRun(j) && p.speed && !j.paused) out.push(`${human(p.speed)}/s`);
     if (isRun(j) && p.eta && !j.paused) out.push(`${secs(p.eta)}`);
-    if (j.state === 'packing') {
+    if (isPackingPhase(j)) {
       // 打包阶段只报「下载已完成 + 打包百分比」，不再显示下载字节，免得看着像下载又从头开始
       out.push(isZh() ? '下载完成' : 'Downloaded');
     }
@@ -155,6 +162,8 @@
     if (j.state === 'done') kinds.push('done');
     if (j.state === 'failed') kinds.push('failed');
     if (j.state === 'cancelled') kinds.push('ended');
+    // 打包阶段统一按 packing 展示（state 有时还停在 downloading）
+    const stateLabel = packPct !== null || isPackingPhase(j) ? stateText('packing', zh) : stateText(j.state, zh);
 
     const phaseParts = [];
     if (j.paused) phaseParts.push(zh ? '已暂停' : 'Paused');
@@ -209,7 +218,7 @@
 
     return {
       id: j.id, itemId: j.itemId, title: j.title || `wallpaper_${j.itemId}`,
-      state: j.state, stateText: stateText(j.state, zh),
+      state: j.state, stateText: stateLabel,
       paused: !!j.paused, running: run,
       pct, bar: barHtml(dlPct, '', packPct),
       dlPct, packPct,
@@ -224,7 +233,7 @@
       engine: j.engine || null,
       actions,
       kinds,
-      badge: j.paused ? (zh ? '已暂停' : 'Paused') : stateText(j.state, zh),
+      badge: j.paused ? (zh ? '已暂停' : 'Paused') : stateLabel,
     };
   }
 
@@ -270,6 +279,7 @@
   global.WE_JOBS = {
     esc, human, secs, isRun, isEnded, isZh,
     stateText, phaseText, percentOf, barHtml, errorKind, metaParts, view, aggregate, fingerprint,
+    dlPctOf, packPctOf, isPackingPhase,
     STATE_TEXT, PHASE_TEXT,
   };
 })(typeof window !== 'undefined' ? window : globalThis);

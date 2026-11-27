@@ -244,6 +244,9 @@ function createHub(opts = {}) {
         if (kind === 'packing') {
           if (lastKind === 'download') pushLog(job, '下载完成，开始打包（纹理 / 着色器适配）');
           dlPercent = 100;
+          // 任务状态要跟着阶段走：以前 state 一直停在 downloading，
+          // 于是界面永远显示「下载中」，打包层也画不出来。
+          if (job.state === 'downloading' || job.state === 'queued') job.state = 'packing';
         }
         if (kind === 'done') { dlPercent = 100; packPercent = 100; }
         lastKind = kind;
