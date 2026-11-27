@@ -2076,6 +2076,41 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(dlc.includes("'lostpointercapture'"), 'dlcenter.js 缺少 lostpointercapture 兜底');
   });
 
+  test('设置界面视觉统一：tab 等高、控件同高、间距同节奏', () => {
+    const css = fs.readFileSync(path.join(__dirname, '..', 'public', 'style.css'), 'utf8');
+    const rule = (sel) => {
+      // 只认行首的选择器，避免 ".status .hint {" 抢走 ".hint {" 的匹配
+      const esc = sel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const m = new RegExp('\\n' + esc + ' ?\\{').exec(css);
+      assert.ok(m, `找不到规则 ${sel}`);
+      const start = m.index + m[0].length;
+      return css.slice(start, css.indexOf('}', start));
+    };
+
+    // 1) tab 高度写死 + 单行居中，选中态只加粗不改尺寸
+    const tab = rule('.tabs .tab');
+    assert.ok(/height:\s*40px/.test(tab), 'tab 必须有固定高度');
+    assert.ok(/line-height:\s*38px/.test(tab), 'tab 行高要扣掉 2px 选中下划线');
+    assert.ok(/white-space:\s*nowrap/.test(tab), 'tab 文案不能换行');
+    assert.ok(/text-overflow:\s*ellipsis/.test(tab), 'tab 过长要走省略号而不是撑高');
+    assert.ok(/flex:\s*1 1 0/.test(tab) && /min-width:\s*0/.test(tab), 'tab 要能均分且允许收缩');
+    assert.ok(!/padding:\s*9px/.test(tab), '不要再用上下 padding 撑高度');
+
+    // 2) 表单标签行与输入框高度固定，避免不同字段高度不一致
+    assert.ok(/line-height:\s*18px/.test(rule('.field span')), '字段标签要做成固定 18px 行');
+    const input = rule('.field input');
+    assert.ok(/height:\s*40px/.test(input), '输入框固定 40px 高');
+    assert.ok(/padding:\s*0 12px/.test(input), '输入框不再用上下 padding 撑高度');
+
+    // 3) 单选行与按钮同高，行内容垂直居中
+    assert.ok(/min-height:\s*44px/.test(rule('.radio-row')), '单选行要给最小高度');
+    assert.ok(/align-items:\s*center/.test(rule('.row')), '按钮行要垂直居中');
+    assert.ok(/align-items:\s*center/.test(rule('.primary')), '主按钮文字要垂直居中，和 ghost 一致');
+
+    // 4) 提示文案统一行高，段落高度不再随内容忽高忽低
+    assert.ok(/line-height:\s*1\.5/.test(rule('.hint')), '提示文案统一 1.5 行高');
+  });
+
   test('前端 8 项：顶栏任务条 / 卡片直达 / 类型徽标 / 设置分 tab / 打开文件夹', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     for (const id of ['hubCount', 'hubPct', 'hubBar', 'settingsTabs']) {
