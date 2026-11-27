@@ -78,12 +78,22 @@ Write-Host "==> 内置 Node 运行时: $NodeExe"
 if (-not (Test-Path $NodeExe)) { throw "找不到 Node：$NodeExe（用 -NodeExe 指定）" }
 New-Item -ItemType Directory -Path (Join-Path $dst 'nodejs') -Force | Out-Null
 Copy-Item $NodeExe (Join-Path $dst 'nodejs\node.exe')
-# Node.js 运行时为 MIT 许可，分发时必须随附其许可声明（含内置的 OpenSSL/ICU/V8 等）
+# Node.js 运行时为 MIT 许可，分发时必须随附其许可声明（含内置的 OpenSSL/ICU/V8 等）。
+# 找 LICENSE 的顺序：node.exe 同目录 → 上一级 → 仓库里的 licenses\NodeJS-MIT.txt 兜底。
+# （CI 用 setup-node，node 目录里不一定带 LICENSE；以前这里只会打一句提示，不解决问题。）
 $nodeLicense = Join-Path (Split-Path -Parent $NodeExe) 'LICENSE'
+$fallback = Join-Path $root 'licenses\NodeJS-MIT.txt'
+if (-not (Test-Path $nodeLicense)) {
+  $up = Join-Path (Split-Path -Parent (Split-Path -Parent $NodeExe)) 'LICENSE'
+  if (Test-Path $up) { $nodeLicense = $up }
+}
 if (Test-Path $nodeLicense) {
   Copy-Item $nodeLicense (Join-Path $dst 'nodejs\LICENSE')
+} elseif (Test-Path $fallback) {
+  Copy-Item $fallback (Join-Path $dst 'nodejs\LICENSE')
+  Write-Host '==> Node LICENSE：官方包未随附，已用 licenses\NodeJS-MIT.txt 兜底（MIT 声明）'
 } else {
-  Write-Host '⚠ 未找到 Node 的 LICENSE，请手工补 nodejs\LICENSE'
+  throw '找不到 Node 的 LICENSE，也没有 licenses\NodeJS-MIT.txt 兜底；为了合规不能继续打包'
 }
 
 # 文本文件统一编码：bat 用 CRLF 无 BOM，说明文件用 UTF-8 BOM（记事本才不乱码）

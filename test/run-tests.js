@@ -2498,6 +2498,18 @@ test('PowerShell 脚本必须带 UTF-8 BOM（否则 Windows PowerShell 5.1 会�
   }
 });
 
+test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜底）', () => {
+  const root = path.join(__dirname, '..');
+  const lic = path.join(root, 'licenses', 'NodeJS-MIT.txt');
+  assert.ok(fs.existsSync(lic), 'licenses/NodeJS-MIT.txt 应该存在');
+  const body = fs.readFileSync(lic, 'utf8');
+  assert.ok(/Permission is hereby granted, free of charge/.test(body), '要是 MIT 正文');
+  assert.ok(/Copyright Node\.js contributors/.test(body));
+  const ps = fs.readFileSync(path.join(root, 'build-portable.ps1'), 'utf8');
+  assert.ok(ps.includes("licenses\\NodeJS-MIT.txt"), '脚本要引用这份兜底');
+  assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
+});
+
 async function testAsync(name, fn) {
   try {
     await fn();
