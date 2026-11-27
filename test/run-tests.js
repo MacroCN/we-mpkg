@@ -2490,6 +2490,55 @@ test('关于页显示当前版本，启动时自动检查更新并提示', () =>
   assert.strictEqual(upd.currentVersion(), require('../package.json').version, '关于页版本号要跟 package.json 一致');
 });
 
+/** 极简 zip 读取：只支持 deflate/store，够用来核对 assets 里的 JS 是不是最新的 */
+function readZipEntries(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= 0 && i > buf.length - 22 - 65536; i--) {
+    if (buf.readUInt32LE(i) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new Error('不是有效的 zip（找不到 EOCD）');
+  const count = buf.readUInt16LE(eocd + 10);
+  let ptr = buf.readUInt32LE(eocd + 16);
+  const out = new Map();
+  for (let n = 0; n < count; n++) {
+    if (buf.readUInt32LE(ptr) !== 0x02014b50) throw new Error('zip 中央目录损坏');
+    const method = buf.readUInt16LE(ptr + 10);
+    const compSize = buf.readUInt32LE(ptr + 20);
+    const nameLen = buf.readUInt16LE(ptr + 28);
+    const extraLen = buf.readUInt16LE(ptr + 30);
+    const commentLen = buf.readUInt16LE(ptr + 32);
+    const localOff = buf.readUInt32LE(ptr + 42);
+    const name = buf.toString('utf8', ptr + 46, ptr + 46 + nameLen);
+    const lNameLen = buf.readUInt16LE(localOff + 26);
+    const lExtraLen = buf.readUInt16LE(localOff + 28);
+    const dataStart = localOff + 30 + lNameLen + lExtraLen;
+    const raw = buf.subarray(dataStart, dataStart + compSize);
+    out.set(name, method === 0 ? raw : zlib.inflateRawSync(raw));
+    ptr += 46 + nameLen + extraLen + commentLen;
+  }
+  return out;
+}
+
+test('安卓 assets 里的 JS 必须与仓库源码一致（防止提交旧 zip）', () => {
+  const root = path.join(__dirname, '..');
+  const zipPath = path.join(root, 'android', 'app', 'src', 'main', 'assets', 'nodejs-project.zip');
+  assert.ok(fs.existsSync(zipPath), '缺少 nodejs-project.zip：安卓 assets 必须要有一份 JS');
+  const entries = readZipEntries(fs.readFileSync(zipPath));
+  const dirs = ['bin', 'src', 'public'];
+  let checked = 0;
+  for (const [name, data] of entries) {
+    if (!dirs.some((d) => name.startsWith(d + '/'))) continue;
+    const disk = path.join(root, name);
+    assert.ok(fs.existsSync(disk), `zip 里有仓库不存在的文件：${name}`);
+    assert.strictEqual(data.toString('utf8'), fs.readFileSync(disk, 'utf8'), `assets 里的 ${name} 落后于仓库源码，请重打 zip`);
+    checked++;
+  }
+  assert.ok(checked > 20, 'zip 里 JS 文件数量异常');
+  // 单独兜一道：临时目录修复必须在包里（这个 bug 就是靠它才没进 2.4.13 的 APK）
+  const video = entries.get('src/video.js').toString('utf8');
+  assert.ok(video.includes('function tempRoot'), 'assets 里的 video.js 缺少 tempRoot 修复');
+});
+
 test('首启引导：向导 + 主界面提示条（权限/输出目录/登录/加速器）', () => {
   const root = path.join(__dirname, '..');
   const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
