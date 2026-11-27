@@ -1,0 +1,15 @@
+we-mpkg 3.0.0-beta.8
+
+安卓 Rust 探测：把 nativeLibraryDir 提到最前，并把每条候选的探测结果打进日志。
+
+beta.7 的日志已经能看到真实原因：应用数据目录里的 bin/rust-tex 被系统拒绝执行
+（spawnSync ... EACCES，targetSdk 36 的 W^X 限制），而 nativeLibraryDir 候选排在后面，
+失败了也看不出原因。
+
+改动：
+- 候选顺序改为 WEM_NATIVE_LIB_DIR/librusttex.so → WEM_NATIVE_LIB_DIR/rust-tex → bin → cargo target
+  → .cache/toolchain → PATH → LD_LIBRARY_PATH；
+- 逐条记录探测结果，打包日志里会打一行「探测: ✔/✘ 路径（错误）」，最多 6 条；
+- 其余不变。
+
+versionCode 67，签名不变，可覆盖升级。装好后重打一条，把开头那几行日志发我即可。

@@ -646,7 +646,10 @@ function adaptForMobile(projectDir, opts = {}) {
   const engine0 = rusttex.info();
   onLog(engine0.enabled
     ? `  纹理加速引擎: Rust（${engine0.path}${engine0.version ? ' v' + engine0.version : ''}）`
-    : `  纹理加速引擎: JS（未找到可用的 rust-tex${engine0.error ? '：' + engine0.error : ''}，已回落纯 JS）`);
+    : `  纹理加速引擎: JS（未找到可用的 rust-tex${engine0.error ? '：' + engine0.error : ''}，已回落纯 JS）` +
+      (engine0.attempts && engine0.attempts.length
+        ? `\n    探测: ${engine0.attempts.map((a) => `${a.ok ? '✔' : '✘'} ${a.path}${a.error ? '（' + a.error.split('\n')[0].slice(0, 80) + '）' : ''}`).join(' | ')}`
+        : ''));
   const stats0 = { ...engine0.stats };
 
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));

@@ -31,9 +31,15 @@ let probe; // undefined = 未探测；null = 没有；string = 路径
 const stats = { dxt: 0, lz4: 0, tex: 0, fallback: 0 };
 let binVersion = null;
 let lastError = null;
+let attempts = [];
 
 function candidates() {
   const out = [];
+  // 安卓：nativeLibraryDir 里的 .so 是安装时解出来的可执行文件，优先用 JNI 传进来的路径
+  if (process.env.WEM_NATIVE_LIB_DIR) {
+    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, 'librusttex.so'));
+    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, EXE));
+  }
   const env = process.env.WE_RUST_TEX;
   if (env) out.push(env);
   out.push(path.join(__dirname, '..', 'bin', EXE));
@@ -45,12 +51,8 @@ function candidates() {
       if (dir) out.push(path.join(dir, EXE));
     }
   }
-  // 安卓：可执行文件必须以 .so 形态随 APK 装进 nativeLibraryDir（应用数据目录禁止 exec）。
-  // JNI 启动时会把该目录塞进 WEM_NATIVE_LIB_DIR（最可靠），LD_LIBRARY_PATH 作为兜底。
-  if (process.env.WEM_NATIVE_LIB_DIR) {
-    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, 'librusttex.so'));
-    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, EXE));
-  }
+  // 安卓：应用数据目录禁止 exec（targetSdk 36），nativeLibraryDir 是唯一合法位置，
+  // 这里保留 LD_LIBRARY_PATH 作为兜底。
   if (process.platform === 'android' || process.env.LD_LIBRARY_PATH) {
     for (const dir of String(process.env.LD_LIBRARY_PATH || '').split(':')) {
       if (!dir) continue;
@@ -62,6 +64,8 @@ function candidates() {
 }
 
 function usable(file) {
+  const rec = { path: file, ok: false, error: null };
+  attempts.push(rec);
   try {
     if (!fs.statSync(file).isFile()) return false;
     // 安卓解包出来的文件没有执行位，补一下（失败就算了，exec 会报错回落 JS）
@@ -69,10 +73,12 @@ function usable(file) {
     const out = execFileSync(file, ['version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
     const info = JSON.parse(out.trim().split('\n').pop());
     const ok = info && info.ok === true && Number(info.version.split('.')[0]) >= MIN_VERSION;
-    if (ok) binVersion = info.version;
+    if (ok) { binVersion = info.version; rec.ok = true; }
+    else rec.error = '版本不符或输出异常';
     return ok;
   } catch (e) {
-    if (!lastError) lastError = `${file}: ${(e && e.message) || e}`;
+    rec.error = (e && e.message) || String(e);
+    if (!lastError) lastError = `${file}: ${rec.error}`;
     return false;
   }
 }
@@ -81,6 +87,7 @@ function usable(file) {
 function locate() {
   if (probe !== undefined) return probe;
   probe = null;
+  attempts = [];
   if (process.env.WE_TEX_RUST === 'off') return probe;
   for (const file of candidates()) {
     if (usable(file)) { probe = file; break; }
@@ -101,6 +108,7 @@ function info() {
     path: bin || null,
     version: bin ? binVersion : null,
     error: bin ? null : lastError,
+    attempts: attempts.slice(0, 6),
     stats: { ...stats },
     minPixels: 4096,
   };
