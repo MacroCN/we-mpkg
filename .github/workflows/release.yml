@@ -11,6 +11,10 @@ on:
       tag:
         description: '要发布的 tag（必须已存在，如 v2.2.0）'
         required: true
+      publish_beta:
+        description: 'beta tag 是否也发布到 Releases（默认否：beta 只留 Actions 产物，测得更快）'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -318,6 +322,12 @@ jobs:
           echo "TAG=$tag" >> "$GITHUB_ENV"
           echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
           case "$tag" in *beta*) echo "IS_BETA=1" >> "$GITHUB_ENV" ;; *) echo "IS_BETA=0" >> "$GITHUB_ENV" ;; esac
+          # beta 默认不建 Release：只走 Actions 的 android artifact，省掉发布环节的时间
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.publish_beta }}" = "true" ]; then
+            echo "PUBLISH_BETA=true" >> "$GITHUB_ENV"
+          else
+            echo "PUBLISH_BETA=false" >> "$GITHUB_ENV"
+          fi
 
       - name: Prepare release body
         run: |
@@ -367,8 +377,9 @@ jobs:
           fail_on_unmatched_files: true
 
       # beta 版本只构建安卓 APK：单独一步，避免 fail_on_unmatched_files 因为缺少绿色版/源码包报错
+      # 默认不发布（PUBLISH_BETA=false），APK 留在本次 run 的 android artifact 里；需要发 Release 时手动触发并勾选 publish_beta
       - uses: softprops/action-gh-release@v3
-        if: ${{ env.IS_BETA == '1' }}
+        if: ${{ env.IS_BETA == '1' && env.PUBLISH_BETA == 'true' }}
         with:
           tag_name: ${{ env.TAG }}
           name: we-mpkg ${{ env.VERSION }}
