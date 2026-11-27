@@ -553,16 +553,26 @@ body.modal-open .batchbar { display: none !important; }
 .modal-card {
   width: 100%;
   max-width: 520px;
+  /* 高度写死：五个 tab 的内容长短差很多，卡片若按内容自适应，
+     一切 tab 整个弹窗就跟着长高/变矮。多出来的内容去 .modal-body 里滚。 */
+  height: min(76vh, 640px);
   max-height: 92vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   background: var(--bg-2);
   border-top-left-radius: 18px; border-top-right-radius: 18px;
   border: 1px solid var(--line);
-  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
-.modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; }
+.modal-head { flex: none; display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; }
 .modal-head h2 { margin: 0; font-size: 17px; }
-.modal-body { padding: 6px 16px 0; }
+.modal-body {
+  flex: 1;
+  min-height: 0;               /* flex 子项要能缩，否则内容多时会把卡片撑破 */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 16px calc(16px + env(safe-area-inset-bottom));
+}
 /* 表单行统一节奏：标签行 18px 高、输入框 40px 高，任何一项都不会把整行顶歪 */
 .field { display: block; margin: 12px 0 0; }
 .field span { display: block; font-size: 12px; line-height: 18px; color: var(--dim); margin-bottom: 6px; }
@@ -931,6 +941,7 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
 .tabs {
   display: flex;
   gap: 4px;
+  flex: none;
   padding: 4px 16px 0;
   border-bottom: 1px solid var(--line);
 }

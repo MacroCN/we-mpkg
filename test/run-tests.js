@@ -2115,6 +2115,18 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
 
     // 4) 提示文案统一行高，段落高度不再随内容忽高忽低
     assert.ok(/line-height:\s*1\.5/.test(rule('.hint')), '提示文案统一 1.5 行高');
+
+    // 5) 设置弹窗高度固定：五个 tab 内容长短不同，卡片不能跟着伸缩
+    const card = rule('.modal-card');
+    assert.ok(/height:\s*min\(76vh,\s*640px\)/.test(card), '弹窗高度要写死，否则切 tab 会整卡变高变矮');
+    assert.ok(/display:\s*flex/.test(card) && /flex-direction:\s*column/.test(card), '卡片要能分区：头部/标签固定，内容区自己滚');
+    assert.ok(!/overflow-y:\s*auto/.test(card), '滚动应该交给 .modal-body，卡片本身不滚');
+    const body = rule('.modal-body');
+    assert.ok(/overflow-y:\s*auto/.test(body), '.modal-body 要能独立滚动');
+    assert.ok(/flex:\s*1/.test(body) && /min-height:\s*0/.test(body), '.modal-body 要占满剩余高度并且能缩');
+    assert.ok(/flex:\s*none/.test(rule('.tabs')), 'tab 排不能参与伸缩');
+    const app = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    assert.ok(/body\.scrollTop = 0/.test(app), '换 tab 后内容区要回到顶部');
   });
 
   test('前端 8 项：顶栏任务条 / 卡片直达 / 类型徽标 / 设置分 tab / 打开文件夹', () => {

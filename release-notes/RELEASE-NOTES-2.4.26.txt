@@ -1,0 +1,24 @@
+we-mpkg 2.4.26
+
+【切 tab 时整个设置弹窗高度不再变】
+
+问题：设置弹窗原来是按内容自适应高度的。五个 tab 内容长短差得远（账号页两个输入框
++ 按钮 + 三段提示，关于页只有几行），切一下 tab 整个卡片就长高或变矮，界面在屏幕上
+跳一下；在底部弹出的形态里，卡片底边不动、顶边忽高忽低。
+
+改动：
+
+1. .modal-card 高度写死：height: min(76vh, 640px)，五个 tab 共用同一个高度，切换时
+   卡片尺寸完全不动。
+2. 卡片改成纵向 flex 分区：.modal-head 和 .tabs 固定不参与伸缩（flex: none），
+   内容区 .modal-body 占满剩余高度（flex: 1 + min-height: 0）并独立滚动
+   （overflow-y: auto + overscroll-behavior: contain），长内容（网络页的节点列表）
+   在卡片内部滚，不会把卡片撑高。
+3. 换 tab 时把 .modal-body 的 scrollTop 归零，不会停在上一个 tab 的滚动位置
+   导致新 tab 开头被切掉。
+4. 底部安全区 padding 从卡片移到 .modal-body，滚动到底也能完整露出。
+
+验证：无头浏览器实测，切到内容最少的「关于」页与内容最多的「账号」页，
+卡片高度三次测量均为 613.31px，差值 0.00px。
+
+版本：versionCode 69 / versionName 2.4.26
