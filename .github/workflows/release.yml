@@ -184,6 +184,20 @@ jobs:
           tar -xzf .cache/native-prebuilt/native.tar.gz -C android/app/src/main/jniLibs
           ls -lh android/app/src/main/jniLibs/arm64-v8a
 
+      # 阶段 2 第一步：预编译的 libnode.so 带完整调试符号（62.5MB，其中 .symtab/.strtab/.debug_* 约 12MB）。
+      # 只去掉符号与调试段，动态符号表保留，功能完全不变，APK 直接小一圈。
+      - name: Strip prebuilt native libraries
+        run: |
+          TOOLCHAIN="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for lib in libnode.so libc++_shared.so; do
+            f="android/app/src/main/jniLibs/arm64-v8a/$lib"
+            [ -f "$f" ] || continue
+            before=$(stat -c%s "$f")
+            "$TOOLCHAIN/llvm-strip" --strip-unneeded "$f"
+            after=$(stat -c%s "$f")
+            echo "$lib: $before -> $after bytes"
+          done
+
       - name: Cache Android ffmpeg
         uses: actions/cache@v5
         with:

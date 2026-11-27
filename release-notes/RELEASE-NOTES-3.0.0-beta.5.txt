@@ -1,0 +1,13 @@
+we-mpkg 3.0.0-beta.5
+
+阶段 2（瘦身）第一步：剥掉预编译原生库的调试符号。
+
+预编译的 libnode.so 是未 strip 的构建，62.5 MB 里 .symtab/.strtab/.debug_* 合计约 12 MB
+（实测 .symtab 3.77 MB + .strtab 7.30 MB + 调试段 1.28 MB）。这些只用于崩溃回溯，
+运行时用不到；动态符号表保留，功能完全不变。
+
+- CI 在解包原生库后统一执行 NDK 的 llvm-strip --strip-unneeded（libnode.so / libc++_shared.so）。
+- 目的是先拿到可量化的体积收益，再决定要不要重编译精简版 libnode（关 ICU/intl、裁内置模块）。
+- 其余改动与 beta.4 相同（引擎状态、双主题保留、Rust tex 全链路）。
+
+本版 versionCode 64，签名不变，可直接覆盖升级。
