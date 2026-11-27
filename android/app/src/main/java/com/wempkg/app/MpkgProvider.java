@@ -24,12 +24,12 @@ import java.util.List;
  * 会静默忽略这份 uri（实测：intent 到了 BrowseActivity，但没有导入界面）。
  * 用自己的 provider + FLAG_GRANT_READ_URI_PERMISSION，接收方就能直接读到字节流。
  *
- * uri 形如 content://com.wempkg.app.mpkg/<base64url(绝对路径)>，
+ * uri 形如 content://com.wempkg.rs.app.mpkg/<base64url(绝对路径)>，
  * 只允许读下载目录/输出目录/应用私有目录里的文件。
  */
 public class MpkgProvider extends ContentProvider {
 
-    public static final String AUTHORITY = "com.wempkg.app.mpkg";
+    public static final String AUTHORITY = "com.wempkg.rs.app.mpkg";
     private static final String MIME = "application/vnd.mpkg";
     private static final Charset UTF8 = Charset.forName("UTF-8");
 

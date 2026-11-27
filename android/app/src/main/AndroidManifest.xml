@@ -58,7 +58,7 @@
 
         <!-- 把成品 mpkg 以 content:// 授权给壁纸引擎（不依赖 androidx FileProvider） -->
         <provider            android:name=".MpkgProvider"
-            android:authorities="com.wempkg.app.mpkg"
+            android:authorities="com.wempkg.rs.app.mpkg"
             android:exported="false"
             android:grantUriPermissions="true" />
     </application>

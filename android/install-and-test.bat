@@ -37,8 +37,8 @@ if errorlevel 1 (
 
 echo.
 echo === launch app ===
-"%ADB%" shell am force-stop com.wempkg.app
-"%ADB%" shell am start -n com.wempkg.app/.MainActivity
+"%ADB%" shell am force-stop com.wempkg.rs.app
+"%ADB%" shell am start -n com.wempkg.rs.app/.MainActivity
 
 echo.
 echo === logcat (Ctrl+C to stop) ===

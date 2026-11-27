@@ -53,7 +53,7 @@ public final class NodeRunner {
 
     /**
      * 下载缓存目录：放到外置储存的应用专属目录
-     * (/storage/emulated/0/Android/data/com.wempkg.app/files/downloads)，
+     * (/storage/emulated/0/Android/data/com.wempkg.rs.app/files/downloads)，
      * 不占应用私有空间、不需要「所有文件访问」权限，卸载时系统一并清理。
      * 外置储存没挂载时退回 cacheDir。
      */

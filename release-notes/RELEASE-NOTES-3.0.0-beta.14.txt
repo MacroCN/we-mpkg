@@ -1,0 +1,15 @@
+we-mpkg 3.0.0-beta.14
+
+安卓包名从 com.wempkg.app 改为 com.wempkg.rs.app，3.0（Rust）版可与主线 2.4.x 同时安装，
+互不覆盖、各自独立数据目录。
+
+- 只改 applicationId：Java 包名 / JNI 符号保持 com.wempkg.app 不变，
+  预编译的 libwempkg-node.so（Java_com_wempkg_app_NodeRunner_startNode）继续可用，
+  不需要重编 JNI 桥。
+- 文件共享 authority 同步改为 com.wempkg.rs.app.mpkg，避免两个包同时装时
+  ContentProvider authority 冲突导致安装失败。
+- 下载缓存路径随之变为 Android/data/com.wempkg.rs.app/files/downloads；
+  旧包数据不会迁移，新包首次启动等于全新区。
+- android/install-and-test.bat 里的 adb 包名同步更新。
+
+版本 3.0.0-beta.14 / versionCode 73，不发布 Release，APK 见 Actions artifact。
