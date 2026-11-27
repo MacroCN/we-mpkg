@@ -2544,7 +2544,7 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
 });
 
 /** 黄金样本集：按 manifest 重算一遍，逐字节对照冻结的输出 */
-function replayGolden() {
+function replayGolden(forceRustPng) {
   const rt = require('../src/rusttex');
   const dxtlib = require('../src/dxt');
   const lz4lib = require('../src/lz4');
@@ -2562,6 +2562,9 @@ function replayGolden() {
       bytes = lz4lib.compress(input);
     } else if (c.kind === 'lz4-decompress') {
       bytes = lz4lib.decompress(input, c.expectedSize);
+    } else if (c.kind === 'png-decode') {
+      const fast = forceRustPng ? rt.pngDecode(input, c.width, c.height) : null;
+      bytes = fast || texlib.decodePng(input).data;
     } else if (c.kind === 'tex-convert') {
       const r = texlib.convertTexBuffer(input, { relPath: 'materials/黄金样本.tex', preset: c.preset === 'balanced' ? 'balanced' : 'default' });
       bytes = r.bytes || input;
@@ -2580,7 +2583,7 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
 
   // 第一条：默认路径（装了 rust-tex 就走 Rust，否则 JS）
   if (rt.available()) {
-    const { manifest, out } = replayGolden();
+    const { manifest, out } = replayGolden(true);
     for (const { name, bytes } of out) {
       const c = manifest.cases.find((x) => x.name === name);
       const sha = crypto.createHash('sha256').update(bytes).digest('hex');
@@ -2600,7 +2603,7 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
       const expected = fs.readFileSync(path.join(dir, c.output));
       assert.ok(bytes.equals(expected), `${name}: JS 路径输出与黄金样本不一致`);
     }
-    assert.ok(manifest.cases.length >= 8, '黄金样本集至少要覆盖 8 个格式用例');
+    assert.ok(manifest.cases.length >= 11, '黄金样本集至少要覆盖 11 个格式用例');
   } finally {
     if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
     rt._reset();
@@ -2612,6 +2615,9 @@ test('纹理加速引擎状态：info() 给出 Rust/JS、路径与计数', () =>
   assert.ok(info.engine === 'Rust' || info.engine === 'JS');
   assert.strictEqual(typeof info.enabled, 'boolean');
   assert.ok(info.stats && typeof info.stats.tex === 'number');
+  assert.strictEqual(typeof info.stats.png, 'number', '统计里要有 png 解码计数');
+  const texSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'tex.js'), 'utf8');
+  assert.ok(texSrc.includes('MIN_PIXELS_FOR_PNG'), '直通 PNG 解码要按像素阈值决定走不走 Rust');
   if (info.enabled) assert.ok(info.path, '启用时要有可执行文件路径');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'pack.js'), 'utf8');
   assert.ok(src.includes('纹理加速引擎: Rust'), '打包日志里要打出引擎状态');

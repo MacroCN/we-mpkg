@@ -701,10 +701,11 @@ function adaptForMobile(projectDir, opts = {}) {
     dxt: engine1.stats.dxt - stats0.dxt,
     lz4: engine1.stats.lz4 - stats0.lz4,
     tex: engine1.stats.tex - stats0.tex,
+    png: engine1.stats.png - stats0.png,
     fallback: engine1.stats.fallback - stats0.fallback,
   };
-  if (used.dxt || used.lz4 || used.tex || used.fallback) {
-    const parts = [`dxt ${used.dxt}`, `lz4 ${used.lz4}`, `tex ${used.tex}`];
+  if (used.dxt || used.lz4 || used.tex || used.png || used.fallback) {
+    const parts = [`dxt ${used.dxt}`, `lz4 ${used.lz4}`, `tex ${used.tex}`, `png ${used.png}`];
     if (used.fallback) parts.push(`回落 ${used.fallback}`);
     onLog(`  纹理加速统计: ${parts.join(' / ')}（${engine1.enabled ? 'Rust' : 'JS'}）`);
   }

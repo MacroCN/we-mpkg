@@ -7,11 +7,14 @@
 //   rust-tex dxt-decode   <in> <out> --format dxt1|dxt3|dxt5 --width N --height N
 //   rust-tex lz4-compress <in> <out>
 //   rust-tex lz4-decompress <in> <out> --size N
+//   rust-tex png-decode     <in> <out>
 //   rust-tex selftest
 //   rust-tex version
 
 mod dxt;
+mod inflate;
 mod lz4;
+mod png;
 mod tex;
 
 use std::fs;
@@ -135,6 +138,51 @@ fn main() {
                         raw.len(),
                         started.elapsed().as_micros()
                     ));
+                }
+                Err(e) => fail(&e, 3),
+            }
+        }
+        "png-decode" => {
+            // 输入输出都支持 "-" 走 stdin/stdout：RGBA 动辄几十 MB，走管道比落盘快得多
+            let input = args.get(2).unwrap_or_else(|| fail("缺少输入文件", 2));
+            let output = args.get(3).unwrap_or_else(|| fail("缺少输出文件", 2));
+            let started = Instant::now();
+            let data = if input == "-" {
+                let mut buf = Vec::new();
+                use std::io::Read;
+                std::io::stdin()
+                    .read_to_end(&mut buf)
+                    .unwrap_or_else(|e| fail(&format!("读 stdin 失败: {}", e), 2));
+                buf
+            } else {
+                fs::read(input).unwrap_or_else(|e| fail(&format!("读文件失败 {}: {}", input, e), 2))
+            };
+            // PNG 解码后的 RGBA 上限沿用一个保守值，避免被恶意包撑爆内存
+            match png::decode(&data, 512 * 1024 * 1024) {
+                Ok(p) => {
+                    if output == "-" {
+                        // 管道模式：RGBA 直接吐到 stdout，stderr 留一行 JSON 给调用方记日志
+                        let _ = std::io::stdout().write_all(&p.data);
+                        let _ = std::io::stdout().flush();
+                        eprintln!(
+                            "{{\"ok\":true,\"cmd\":\"png-decode\",\"width\":{},\"height\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                            p.width,
+                            p.height,
+                            data.len(),
+                            p.data.len(),
+                            started.elapsed().as_micros()
+                        );
+                    } else {
+                        write_out(output, &p.data);
+                        emit(&format!(
+                            "{{\"ok\":true,\"cmd\":\"png-decode\",\"width\":{},\"height\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                            p.width,
+                            p.height,
+                            data.len(),
+                            p.data.len(),
+                            started.elapsed().as_micros()
+                        ));
+                    }
                 }
                 Err(e) => fail(&e, 3),
             }

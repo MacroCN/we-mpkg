@@ -102,6 +102,67 @@ function dxtBlocks(w, h, blockBytes, seed) {
   return rnd(Math.ceil(w / 4) * Math.ceil(h / 4) * blockBytes, seed);
 }
 
+
+/** 造一个最小 PNG：只用于黄金样本，过滤方式与 colorType 覆盖常见路径 */
+function makePng({ width, height, colorType, bitDepth, rows, plte, trns }) {
+  const zlib = require('zlib');
+  const chunk = (type, data) => {
+    const b = Buffer.alloc(8 + data.length + 4);
+    b.writeUInt32BE(data.length, 0);
+    b.write(type, 4, 'ascii');
+    data.copy(b, 8);
+    b.writeUInt32BE(zlib.crc32(Buffer.concat([Buffer.from(type, 'ascii'), data])), 8 + data.length);
+    return b;
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = bitDepth;
+  ihdr[9] = colorType;
+  const parts = [
+    Buffer.from('89504e470d0a1a0a', 'hex'),
+    chunk('IHDR', ihdr),
+  ];
+  if (plte) parts.push(chunk('PLTE', plte));
+  if (trns) parts.push(chunk('tRNS', trns));
+  parts.push(chunk('IDAT', zlib.deflateSync(rows, { level: 9 })));
+  parts.push(chunk('IEND', Buffer.alloc(0)));
+  return Buffer.concat(parts);
+}
+
+/** 按给定 filter 列表把像素行编码成 PNG 的 raw 数据（与之字形解码器无关，纯测试素材） */
+function pngRows(pixels, width, height, channels, bitDepth, filters) {
+  const rowBytes = Math.ceil((width * channels * bitDepth) / 8);
+  const bpp = Math.max(1, Math.ceil((channels * bitDepth) / 8));
+  const out = Buffer.alloc(height * (rowBytes + 1));
+  for (let y = 0; y < height; y++) {
+    const f = filters[y % filters.length];
+    out[y * (rowBytes + 1)] = f;
+    for (let x = 0; x < rowBytes; x++) {
+      const cur = pixels[y * rowBytes + x];
+      const left = x >= bpp ? pixels[y * rowBytes + x - bpp] : 0;
+      const up = y > 0 ? pixels[(y - 1) * rowBytes + x] : 0;
+      const ul = y > 0 && x >= bpp ? pixels[(y - 1) * rowBytes + x - bpp] : 0;
+      let v;
+      switch (f) {
+        case 0: v = cur; break;
+        case 1: v = cur - left; break;
+        case 2: v = cur - up; break;
+        case 3: v = cur - ((left + up) >> 1); break;
+        default: {
+          const p = left + up - ul;
+          const pa = Math.abs(p - left);
+          const pb = Math.abs(p - up);
+          const pc = Math.abs(p - ul);
+          v = cur - (pa <= pb && pa <= pc ? left : (pb <= pc ? up : ul));
+        }
+      }
+      out[y * (rowBytes + 1) + 1 + x] = v & 0xff;
+    }
+  }
+  return out;
+}
+
 const cases = [];
 
 function addCase(name, kind, input, build, meta = {}) {
@@ -156,6 +217,41 @@ addCase('tex-keep-mobile-8x8', 'tex-convert', texMobile,
     return r.bytes || buf; // 已适配的纹理不改写，期望输出就是原字节
   },
   { expectUnchanged: true });
+
+
+// ---- PNG 解码（直通纹理路径：Rust 与 JS 必须逐字节一致） ----
+const pngPix = rnd(16 * 16 * 4, 41);
+addCase('png-decode-rgba8-16x16', 'png-decode',
+  makePng({
+    width: 16, height: 16, colorType: 6, bitDepth: 8,
+    rows: pngRows(pngPix, 16, 16, 4, 8, [0, 1, 2, 3, 4]),
+  }),
+  (buf) => tex.decodePng(buf).data,
+  { width: 16, height: 16 });
+
+const pal = Buffer.alloc(16 * 3);
+for (let i = 0; i < pal.length; i++) pal[i] = (i * 19) & 0xff;
+const palTrns = Buffer.alloc(16);
+for (let i = 0; i < 16; i++) palTrns[i] = (i * 17) & 0xff;
+const palIdx = Buffer.alloc(10 * 10);
+for (let i = 0; i < palIdx.length; i++) palIdx[i] = i % 16;
+addCase('png-decode-palette4-10x10', 'png-decode',
+  makePng({
+    width: 10, height: 10, colorType: 3, bitDepth: 4,
+    rows: pngRows(palIdx, 10, 10, 1, 4, [0]),
+    plte: pal, trns: palTrns,
+  }),
+  (buf) => tex.decodePng(buf).data,
+  { width: 10, height: 10 });
+
+const gray16 = rnd(9 * 9 * 2, 43);
+addCase('png-decode-gray16-9x9', 'png-decode',
+  makePng({
+    width: 9, height: 9, colorType: 0, bitDepth: 16,
+    rows: pngRows(gray16, 9, 9, 1, 16, [2]),
+  }),
+  (buf) => tex.decodePng(buf).data,
+  { width: 9, height: 9 });
 
 // ---- 写盘 ----
 fs.rmSync(outRoot, { recursive: true, force: true });

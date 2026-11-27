@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T06:59:49.087Z",
+  "generatedAt": "2026-11-27T21:58:47.420Z",
   "generator": "tools/make-golden-format.js",
   "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
   "cases": [
@@ -88,6 +88,39 @@
       "outputBytes": 347,
       "outputSha256": "8aa31c9ed234f7cacdbec09a689d83a8c2f87e144fb3747f3d54c4e379a237a0",
       "expectUnchanged": true
+    },
+    {
+      "name": "png-decode-rgba8-16x16",
+      "kind": "png-decode",
+      "input": "png-decode-rgba8-16x16/in.bin",
+      "output": "png-decode-rgba8-16x16/out.bin",
+      "inputBytes": 1108,
+      "outputBytes": 1024,
+      "outputSha256": "d5b05644b4f9f3a33edc8812e60c7a36ee7558dd1777c017bc09ca6f06492e83",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "png-decode-palette4-10x10",
+      "kind": "png-decode",
+      "input": "png-decode-palette4-10x10/in.bin",
+      "output": "png-decode-palette4-10x10/out.bin",
+      "inputBytes": 191,
+      "outputBytes": 400,
+      "outputSha256": "85eafab10204642cd40f01b63ed28f4feafeda1092e8723a243f8d176775d45a",
+      "width": 10,
+      "height": 10
+    },
+    {
+      "name": "png-decode-gray16-9x9",
+      "kind": "png-decode",
+      "input": "png-decode-gray16-9x9/in.bin",
+      "output": "png-decode-gray16-9x9/out.bin",
+      "inputBytes": 239,
+      "outputBytes": 324,
+      "outputSha256": "edbc62b0a3ddc21983b3cee966b5a8ff76ff212486abc9dc4188271d3e480333",
+      "width": 9,
+      "height": 9
     }
   ]
 }

@@ -1,0 +1,14 @@
+we-mpkg 3.0.0-beta.12
+
+Rust 纹理加速第二阶段：直通 PNG 解码搬进 rust-tex。
+
+- 新增 `png-decode` 子命令：自带 DEFLATE（inflate）实现，不引入第三方 crate，
+  安卓交叉编译不需要额外依赖；支持非隔行 PNG 的 colorType 0/2/3/4/6 与
+  1/2/4/8/16 位，反滤波 5 种全支持，输出 RGBA8 与 JS decodePng 逐字节一致。
+- 大于 1M 像素的 PNG 走 Rust（4096×4096 实测 0.54s -> 0.44s，且不再产生中间文件），
+  小图继续走 JS，避免进程启动开销盖过收益。
+- 走 stdin/stdout 管道，不落临时文件；失败、尺寸不符或版本不符一律静默回落 JS。
+- 统计行新增 `png N`，便于确认这次到底命中了几张直通图。
+
+黄金样本集新增 3 例 PNG（RGBA8 五种滤波、4 位调色板 + tRNS、16 位灰度），
+JS 与 Rust 两条路径都要逐字节对齐。versionCode 71，不发布 Release，APK 见 Actions artifact。

@@ -28,7 +28,7 @@ const MIN_VERSION = 3;
 
 let probe; // undefined = 未探测；null = 没有；string = 路径
 /** 本次运行实际走 Rust 的次数（给「纹理加速引擎」状态显示用） */
-const stats = { dxt: 0, lz4: 0, tex: 0, fallback: 0 };
+const stats = { dxt: 0, lz4: 0, tex: 0, png: 0, fallback: 0 };
 let binVersion = null;
 let lastError = null;
 let attempts = [];
@@ -241,6 +241,39 @@ function lz4Decompress(buf, expectedSize) {
 }
 
 /**
+ * PNG 解码 -> RGBA8（直通纹理路径）。走 stdin/stdout 管道：
+ * RGBA 动辄几十 MB，落盘再读回比管道更慢，也少一次闪存写入。
+ * 尺寸由调用方从 IHDR 读出后传进来，只用来校验输出长度。
+ */
+function pngDecode(buf, width, height) {
+  const bin = locate();
+  if (!bin) return null;
+  const need = width * height * 4;
+  if (!(need > 0) || need > 512 * 1024 * 1024) return null;
+  try {
+    const r = require('child_process').spawnSync(bin, ['png-decode', '-', '-'], {
+      input: buf,
+      maxBuffer: need + 65536,
+      timeout: 120000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (r.error || r.status !== 0 || !r.stdout) {
+      stats.fallback++;
+      return null;
+    }
+    if (r.stdout.length !== need) {
+      stats.fallback++;
+      return null;
+    }
+    stats.png++;
+    return r.stdout;
+  } catch {
+    stats.fallback++;
+    return null;
+  }
+}
+
+/**
  * 整包 tex 转换（非直通图路径：parse -> 解码 -> 裁 -> 缩放 -> 写 TEXB0004 -> 自校验）。
  * scale 由调用方按整包统一倍率算好传进来，保持 JS 侧单一事实来源。
  */
@@ -287,8 +320,10 @@ module.exports = {
   lz4Compress,
   lz4Decompress,
   texConvert,
+  pngDecode,
   // 测试用：重置探测缓存
   _reset() { probe = undefined; },
   MIN_PIXELS_FOR_RUST: 4096,
   MIN_BYTES_FOR_LZ4: 4096,
+  MIN_PIXELS_FOR_PNG: 1048576,
 };

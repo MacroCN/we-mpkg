@@ -322,6 +322,18 @@ function getJpeg() {
  */
 function decodePng(buf) {
   if (buf.length < 8 || buf.readUInt32BE(0) !== 0x89504e47) return null;
+  // 大图交给 Rust：4096×4096 的 RGBA 展开在 JS 里要 700ms 上下，Rust 约 1/3。
+  // 尺寸从 IHDR 直接读（PNG 规定 IHDR 必须是第一个 chunk），解析失败就走原实现。
+  try {
+    if (buf.length >= 24 && buf.readUInt32BE(12) === 0x49484452) {
+      const w = buf.readUInt32BE(16);
+      const h = buf.readUInt32BE(20);
+      if (w > 0 && h > 0 && w * h >= rusttex.MIN_PIXELS_FOR_PNG) {
+        const rgba = rusttex.pngDecode(buf, w, h);
+        if (rgba) return { width: w, height: h, data: rgba };
+      }
+    }
+  } catch { /* 回落 JS 实现 */ }
   let off = 8;
   let ihdr = null;
   let plte = null;
