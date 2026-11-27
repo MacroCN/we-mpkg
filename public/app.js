@@ -18,7 +18,9 @@ const I18N = {
     needLogin: '先登录再下载', notLogged: '未登录，点右上角 ⚙ 登录',
     hub: '下载中心', openHub: '在下载中心查看（独立进程，关页面也不中断）', cancelTask: '取消任务',
     hubHint: '独立进程运行，关掉本页面任务也会继续',
-    tabAccount: '账号', tabNetwork: '网络', tabOutput: '输出', tabAbout: '关于',
+    tabAccount: '账号', tabNetwork: '网络', tabOutput: '输出', tabDisplay: '显示', tabAbout: '关于',
+    displayTitle: '界面外观', themeAuto: '跟随系统', themeLight: '浅色', themeDark: '深色',
+    themeHint: '只影响这台设备的界面颜色，不影响打包结果。', themeBtn: '当前：{m}，点击切换深浅色',
     outputTip: 'mpkg 和「下载原始资源」的 zip 都存到这里。',
     aboutMeta: 'AppID 431960 · PKGM0020 · 壁纸来源 Wallpaper Engine 创意工坊',
     projectTitle: '项目', projectIssues: '问题反馈 / Issues',
@@ -95,7 +97,9 @@ const I18N = {
     needLogin: 'Sign in first', notLogged: 'Not signed in — tap ⚙ to sign in',
     hub: 'Downloads', openHub: 'Open download center (separate process, closing this page won\'t stop it)',
     cancelTask: 'Cancel task', hubHint: 'runs in a separate process, safe to close this page',
-    tabAccount: 'Account', tabNetwork: 'Network', tabOutput: 'Output', tabAbout: 'About',
+    tabAccount: 'Account', tabNetwork: 'Network', tabOutput: 'Output', tabDisplay: 'Display', tabAbout: 'About',
+    displayTitle: 'Appearance', themeAuto: 'Follow system', themeLight: 'Light', themeDark: 'Dark',
+    themeHint: 'Affects this device only — packing results are unchanged.', themeBtn: 'Current: {m} — tap to switch',
     outputTip: 'Both .mpkg files and raw-asset .zip files are saved here.',
     aboutMeta: 'AppID 431960 · PKGM0020 · Wallpapers from the Wallpaper Engine Workshop',
     projectTitle: 'Project', projectIssues: 'Issues / Feedback',
@@ -792,6 +796,86 @@ async function load() {
   }
 }
 
+// ---------------- 深浅色 ----------------
+const THEME_ICONS = {
+  // 图标用内联 SVG：◐ 这类符号在部分安卓字体里会变成豆腐块
+  auto: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>',
+  light: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><circle cx="12" cy="12" r="4.2" fill="none" stroke="currentColor" stroke-width="1.8"/><g stroke="currentColor" stroke-width="1.6"><path d="M12 2.5v2.2M12 19.3v2.2M2.5 12h2.2M19.3 12h2.2M5.2 5.2l1.6 1.6M17.2 17.2l1.6 1.6M18.8 5.2l-1.6 1.6M6.8 17.2l-1.6 1.6"/></g></svg>',
+  dark: '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M20 14.5a8 8 0 1 1-9.9-9.6 6.5 6.5 0 0 0 9.9 9.6z" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>',
+};
+
+
+const THEME_MODE_KEY = 'themeMode';
+
+/** 系统当前是不是深色（不支持 matchMedia 的老 WebView 按深色处理，和原来一致） */
+function systemPrefersDark() {
+  if (!window.matchMedia) return true;
+  try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; }
+}
+
+/** auto → 跟随系统；light/dark → 用户显式选择 */
+function resolveTheme(mode) {
+  return mode === 'auto' ? (systemPrefersDark() ? 'dark' : 'light') : mode;
+}
+
+function themeModeLabel(mode) {
+  return tr(mode === 'auto' ? 'themeAuto' : (mode === 'dark' ? 'themeDark' : 'themeLight'));
+}
+
+/**
+ * 把模式落到 DOM：data-theme 决定配色，data-theme-mode 只记录用户选择。
+ * persist=false 用于「跟随系统变化」和语言切换时的重绘，不覆盖本地存储。
+ */
+function applyTheme(mode, opts = {}) {
+  const persist = opts.persist !== false;
+  if (!/^(auto|light|dark)$/.test(mode)) mode = 'auto';
+  state.themeMode = mode;
+  const eff = resolveTheme(mode);
+  const root = document.documentElement;
+  root.setAttribute('data-theme', eff);
+  root.setAttribute('data-theme-mode', mode);
+  // 手机浏览器地址栏 / 安卓状态栏附近的底色跟着变
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute('content', eff === 'dark' ? '#0f1720' : '#f4f6f9');
+  const btn = $('themeBtn');
+  if (btn) {
+    btn.innerHTML = mode === 'auto' ? THEME_ICONS.auto : (eff === 'dark' ? THEME_ICONS.dark : THEME_ICONS.light);
+    const label = tr('themeBtn', { m: themeModeLabel(mode) });
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+  }
+  document.querySelectorAll('input[name="themeMode"]').forEach((el) => {
+    el.checked = el.value === mode;
+  });
+  if (persist) {
+    try { localStorage.setItem(THEME_MODE_KEY, mode); } catch { /* 隐私模式 */ }
+  }
+  // 安卓：状态栏/导航栏图标明暗 + WebView 底色
+  if (window.Android && typeof window.Android.setTheme === 'function') {
+    try { window.Android.setTheme(eff === 'dark'); } catch { /* ignore */ }
+  }
+}
+
+/** 顶部按钮：直接切明暗；当前是 auto 时，切到与系统相反的那一档（并退出跟随） */
+function cycleTheme() {
+  const eff = resolveTheme(state.themeMode || 'auto');
+  applyTheme(eff === 'dark' ? 'light' : 'dark');
+}
+
+function initTheme() {
+  let mode = 'auto';
+  try { mode = localStorage.getItem(THEME_MODE_KEY) || 'auto'; } catch { /* ignore */ }
+  applyTheme(mode, { persist: false });
+  if (window.matchMedia) {
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = () => {
+      if (state.themeMode === 'auto') applyTheme('auto', { persist: false });
+    };
+    if (mq.addEventListener) mq.addEventListener('change', onChange);
+    else if (mq.addListener) mq.addListener(onChange);
+  }
+}
+
 const UPDATE_DISMISS_KEY = 'updateDismissedVersion';
 
 /** 关于页顶部的版本号：服务端 /api/update/check 的 current 就是 package.json 的 version */
@@ -1259,7 +1343,7 @@ async function cancelCurrentJob() {
 }
 
 // ---------------- 设置 / 登录 ----------------
-const SETTINGS_TABS = ['account', 'network', 'output', 'about'];
+const SETTINGS_TABS = ['account', 'network', 'output', 'display', 'about'];
 
 function savedSettingsTab() {
   try {
@@ -1729,6 +1813,10 @@ function wire() {
   if ($('saveProxy')) $('saveProxy').onclick = saveProxy;
   if ($('testProxy')) $('testProxy').onclick = testProxyConn;
   if ($('resetProxy')) $('resetProxy').onclick = resetProxy;
+  if ($('themeBtn')) $('themeBtn').onclick = cycleTheme;
+  document.querySelectorAll('input[name="themeMode"]').forEach((el) => {
+    el.onchange = () => applyTheme(el.value);
+  });
   if ($('checkUpdate')) $('checkUpdate').onclick = checkUpdate;
   if ($('updateBannerGo')) {
     $('updateBannerGo').onclick = () => {
@@ -1819,6 +1907,7 @@ async function init() {
   state.filtersOpen = window.innerWidth > 640;
   wire();
   applyLang();
+  initTheme();
   watchStickyLayout();
   state.device = detectDevice();
   syncQualityOptions();

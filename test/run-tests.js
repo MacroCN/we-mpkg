@@ -1927,7 +1927,7 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     for (const id of ['hubCount', 'hubPct', 'hubBar', 'settingsTabs']) {
       assert.ok(html.includes(`id="${id}"`), `缺少 #${id}`);
     }
-    for (const tab of ['account', 'network', 'output', 'about']) {
+    for (const tab of ['account', 'network', 'output', 'display', 'about']) {
       assert.ok(html.includes(`data-tab="${tab}"`), `缺少设置 tab ${tab}`);
       assert.ok(html.includes(`id="tab-${tab}"`), `缺少设置面板 tab-${tab}`);
     }
@@ -2406,6 +2406,46 @@ test('cachegc 的临时目录保留份数容得下 3 并发', () => {
   // 下载中心并发 3，每条任务各留一个 pkg-<ts>/webrender 目录；保留份数必须 ≥ 4，
   // 否则第 4 条任务刚建目录就可能被当成残骸回收，出现「边跑边删」。
   assert.ok(cachegc.DEFAULT.tempKeepNewest >= 4, `tempKeepNewest=${cachegc.DEFAULT.tempKeepNewest}，至少要 4`);
+});
+
+test('深浅色：三态切换、跟随系统、颜色全部走语义令牌', () => {
+  const root = path.join(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  for (const id of ['themeBtn', 'tab-display']) {
+    assert.ok(html.includes(`id="${id}"`) || html.includes(`data-tab="display"`), `index.html 缺少 ${id}`);
+  }
+  assert.ok(html.includes('data-tab="display"'), '设置里要有「显示」tab');
+  for (const v of ['auto', 'light', 'dark']) {
+    assert.ok(html.includes(`name="themeMode" value="${v}"`), `缺少 ${v} 单选`);
+  }
+  // 首屏防闪：data-theme 必须在样式表之前定好
+  const bootAt = html.indexOf("prefers-color-scheme");
+  const cssAt = html.indexOf('style.css?v=');
+  assert.ok(bootAt > 0 && bootAt < cssAt, '主题引导脚本要排在样式表之前');
+
+  const js = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+  for (const q of ['function applyTheme', 'function initTheme', 'function cycleTheme', 'function resolveTheme', 'THEME_MODE_KEY']) {
+    assert.ok(js.includes(q), `app.js 缺少 ${q}`);
+  }
+  assert.ok(js.includes("matchMedia('(prefers-color-scheme: dark)')"), '要监听系统深浅色变化');
+  assert.ok(js.includes('Android.setTheme'), '安卓端要同步状态栏图标');
+  assert.ok(/const SETTINGS_TABS = \['account', 'network', 'output', 'display', 'about'\]/.test(js), '设置 tab 顺序要含 display');
+
+  // 颜色令牌：两套主题 + 组件里不许再出现硬编码色值（令牌区之后）
+  const css = fs.readFileSync(path.join(root, 'public', 'style.css'), 'utf8');
+  assert.ok(/:root\[data-theme="light"\]/.test(css), '缺少浅色令牌块');
+  const marker = css.indexOf('/* ---- theme tokens end ---- */');
+  assert.ok(marker > 0, '缺少令牌区结束标记');
+  const body = css.slice(marker);
+  assert.strictEqual((body.match(/#[0-9a-fA-F]{3,8}/g) || []).length, 0, '组件规则里不能再写死颜色（要用 var(--token)）');
+  assert.strictEqual((body.match(/rgba?\(/g) || []).length, 0, '组件规则里不能再写死 rgba');
+  for (const f of ['dlcenter.css', 'downloads.css']) {
+    const text = fs.readFileSync(path.join(root, 'public', f), 'utf8');
+    assert.strictEqual((text.match(/#[0-9a-fA-F]{3,8}/g) || []).length, 0, `${f} 还有硬编码颜色`);
+  }
+  // 安卓原生侧要接主题
+  const java = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app', 'MainActivity.java'), 'utf8');
+  assert.ok(java.includes('public void setTheme(final boolean dark)'), 'MainActivity 要提供 setTheme 桥');
 });
 
 test('关于页显示当前版本，启动时自动检查更新并提示', () => {

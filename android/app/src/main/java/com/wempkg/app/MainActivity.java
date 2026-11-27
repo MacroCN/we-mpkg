@@ -279,6 +279,36 @@ public class MainActivity extends Activity {
                 downloadsOpen = open;
             }
 
+            /**
+             * 网页切深浅色：同步状态栏/导航栏图标的明暗与 WebView 底色。
+             * 不接这一步的话，浅色主题下白色状态栏图标会看不见。
+             */
+            @android.webkit.JavascriptInterface
+            public void setTheme(final boolean dark) {
+                if (!canUseBridge()) return;
+                runOnUiThread(new Runnable() {
+                    @Override public void run() {
+                        if (web != null) web.setBackgroundColor(dark ? 0xFF0F1720 : 0xFFF4F6F9);
+                        android.view.Window win = getWindow();
+                        if (android.os.Build.VERSION.SDK_INT >= 30) {
+                            android.view.WindowInsetsController c = win.getInsetsController();
+                            if (c != null) {
+                                int mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS
+                                        | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+                                // 浅色背景要「深色图标」→ 打开 LIGHT_* 标记；深色背景则清掉
+                                c.setSystemBarsAppearance(dark ? 0 : mask, mask);
+                            }
+                        } else {
+                            int flags = android.view.View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+                            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                                flags |= android.view.View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+                            }
+                            win.getDecorView().setSystemUiVisibility(dark ? 0 : flags);
+                        }
+                    }
+                });
+            }
+
             /** 从网页里回到启动页（本地/远程切换、导入凭据、退出），不销毁 WebView */
             @android.webkit.JavascriptInterface
             public void openSetup() {

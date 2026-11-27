@@ -5,8 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <meta name="theme-color" content="#0f1720" />
 <title>WE 创意工坊 → MPKG</title>
-<link rel="stylesheet" href="/style.css?v=2.4.12" />
-<link rel="stylesheet" href="/dlcenter.css?v=2.4.12" />
+<script>
+/* 主题引导：在 CSS 生效前定好 data-theme，避免刷新时先闪一下深浅相反的底色 */
+(function () {
+  var mode = 'auto';
+  try { mode = localStorage.getItem('themeMode') || 'auto'; } catch (e) {}
+  if (!/^(auto|light|dark)$/.test(mode)) mode = 'auto';
+  var dark = mode === 'dark' || (mode === 'auto' && window.matchMedia
+    && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  document.documentElement.setAttribute('data-theme-mode', mode);
+})();
+</script>
+<link rel="stylesheet" href="/style.css?v=2.4.13" />
+<link rel="stylesheet" href="/dlcenter.css?v=2.4.13" />
 </head>
 <body>
 
@@ -29,6 +41,7 @@
       <span class="hp-pct hidden" id="hubPct"></span>
       <span class="hp-track" id="hubTrack" aria-hidden="true"><i id="hubBar"></i></span>
     </button>
+    <button id="themeBtn" class="ghost theme-btn" type="button" aria-label="切换深浅色">◐</button>
     <button id="langBtn" class="ghost" title="Language">EN</button>
     <button id="settingsBtn" class="ghost" title="Settings">⚙</button>
   </div>
@@ -169,6 +182,7 @@
       <button class="tab on" type="button" role="tab" data-tab="account" data-i18n="tabAccount">账号</button>
       <button class="tab" type="button" role="tab" data-tab="network" data-i18n="tabNetwork">网络</button>
       <button class="tab" type="button" role="tab" data-tab="output" data-i18n="tabOutput">输出</button>
+      <button class="tab" type="button" role="tab" data-tab="display" data-i18n="tabDisplay">显示</button>
       <button class="tab" type="button" role="tab" data-tab="about" data-i18n="tabAbout">关于</button>
     </div>
     <div class="modal-body">
@@ -239,6 +253,17 @@
         <p class="hint" data-i18n="outputTip">mpkg 与「下载原始资源」的 zip 都存到这里。</p>
       </div>
 
+      <!-- 显示：深浅色只在本地生效，跟账号/服务无关 -->
+      <div class="tabpane" id="tab-display" role="tabpanel">
+        <p class="hint about-title" data-i18n="displayTitle">界面外观</p>
+        <div class="radio-group" role="radiogroup" aria-label="界面颜色">
+          <label class="radio-row"><input type="radio" name="themeMode" value="auto" checked /><span data-i18n="themeAuto">跟随系统</span></label>
+          <label class="radio-row"><input type="radio" name="themeMode" value="light" /><span data-i18n="themeLight">浅色</span></label>
+          <label class="radio-row"><input type="radio" name="themeMode" value="dark" /><span data-i18n="themeDark">深色</span></label>
+        </div>
+        <p class="hint" data-i18n="themeHint">只影响这台设备的界面颜色，不影响打包结果。</p>
+      </div>
+
       <!-- 关于 -->
       <div class="tabpane" id="tab-about" role="tabpanel">
         <p id="aboutVersion" class="hint about-version"></p>
@@ -269,8 +294,8 @@
 <!-- 回到顶部 -->
 <button id="toTop" class="to-top hidden" type="button" aria-label="回到顶部">↑</button>
 
-<script src="/joblib.js?v=2.4.12"></script>
-<script src="/app.js?v=2.4.12"></script>
+<script src="/joblib.js?v=2.4.13"></script>
+<script src="/app.js?v=2.4.13"></script>
 <script src="/dlcenter.js?v=2.4.1" defer></script>
 </body>
 </html>
