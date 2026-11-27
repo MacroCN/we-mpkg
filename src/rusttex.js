@@ -30,6 +30,7 @@ let probe; // undefined = 未探测；null = 没有；string = 路径
 /** 本次运行实际走 Rust 的次数（给「纹理加速引擎」状态显示用） */
 const stats = { dxt: 0, lz4: 0, tex: 0, fallback: 0 };
 let binVersion = null;
+let lastError = null;
 
 function candidates() {
   const out = [];
@@ -44,8 +45,12 @@ function candidates() {
       if (dir) out.push(path.join(dir, EXE));
     }
   }
-  // 安卓：可执行文件必须以 .so 形态随 APK 装进 nativeLibraryDir（应用数据目录禁止 exec），
-  // 该目录在进程的 LD_LIBRARY_PATH 里，直接扫一遍。
+  // 安卓：可执行文件必须以 .so 形态随 APK 装进 nativeLibraryDir（应用数据目录禁止 exec）。
+  // JNI 启动时会把该目录塞进 WEM_NATIVE_LIB_DIR（最可靠），LD_LIBRARY_PATH 作为兜底。
+  if (process.env.WEM_NATIVE_LIB_DIR) {
+    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, 'librusttex.so'));
+    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, EXE));
+  }
   if (process.platform === 'android' || process.env.LD_LIBRARY_PATH) {
     for (const dir of String(process.env.LD_LIBRARY_PATH || '').split(':')) {
       if (!dir) continue;
@@ -66,7 +71,8 @@ function usable(file) {
     const ok = info && info.ok === true && Number(info.version.split('.')[0]) >= MIN_VERSION;
     if (ok) binVersion = info.version;
     return ok;
-  } catch {
+  } catch (e) {
+    if (!lastError) lastError = `${file}: ${(e && e.message) || e}`;
     return false;
   }
 }
@@ -94,6 +100,7 @@ function info() {
     engine: bin ? 'Rust' : 'JS',
     path: bin || null,
     version: bin ? binVersion : null,
+    error: bin ? null : lastError,
     stats: { ...stats },
     minPixels: 4096,
   };

@@ -2520,6 +2520,8 @@ test('纹理加速引擎状态：info() 给出 Rust/JS、路径与计数', () =>
   if (info.enabled) assert.ok(info.path, '启用时要有可执行文件路径');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'pack.js'), 'utf8');
   assert.ok(src.includes('纹理加速引擎: Rust'), '打包日志里要打出引擎状态');
+  const probeSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'rusttex.js'), 'utf8');
+  assert.ok(probeSrc.includes('WEM_NATIVE_LIB_DIR'), '安卓要用 JNI 传入的原生库目录探测 librusttex.so');
 });
 
 test('Rust 纹理 CLI（阶段 0）：探测候选含 .cache/toolchain，可一键关闭回落', () => {

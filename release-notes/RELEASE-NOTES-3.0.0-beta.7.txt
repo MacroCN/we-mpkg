@@ -1,0 +1,16 @@
+we-mpkg 3.0.0-beta.7
+
+修一个真机问题：安卓上「纹理加速引擎」一直显示 JS。
+
+原因：Rust 二进制以 librusttex.so 装进 APK 的 nativeLibraryDir，JNI 启动 Node 时已经把该目录
+写进 WEM_NATIVE_LIB_DIR，但探测代码只扫了 LD_LIBRARY_PATH / PATH / bin 目录，安卓进程里
+LD_LIBRARY_PATH 不含 nativeLibraryDir，所以永远找不到，静默回落 JS。
+
+改动：
+- src/rusttex.js 优先读 WEM_NATIVE_LIB_DIR 下的 librusttex.so / rust-tex；
+- 探测失败会记下第一条错误，打包日志写进「未找到可用的 rust-tex：<原因>」，方便真机排查；
+- 新增守护测试，防止以后再把安卓探测路径删掉。
+
+其余同 beta.6（libnode 不 strip、libc++ strip、双主题、tex 全链路）。
+versionCode 66，签名不变，可覆盖升级。装好后重新打一条，日志应出现
+「纹理加速引擎: Rust（/data/app/.../lib/arm64/librusttex.so v3.0.0）」。
