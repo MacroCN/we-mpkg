@@ -987,15 +987,29 @@ function deferredRunner() {
 
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * 等到条件成立（最多 timeout 毫秒）。
+ * 调度靠事件循环推进：Windows 上跑全量测试时固定的 10ms 等待会被杀毒/文件写入拖过去，
+ * 从而出现「running 还是 0」的假失败。改成轮询后慢机器也不会误报。
+ */
+async function waitUntil(fn, timeout = 2000, step = 10) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeout) {
+    if (fn()) return true;
+    await sleepMs(step);
+  }
+  return !!fn();
+}
+
 await testAsync('并发上限 3：第 4 条任务排队，前一条结束后自动补位', async () => {
   const d = deferredRunner();
   const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub1'), 'state.json'), maxConcurrent: 3 });
   const ids = [1, 2, 3, 4, 5].map((i) => hub.add({ id: String(i), title: `t${i}` }).id);
-  await sleepMs(10);
+  await waitUntil(() => hub.stats().running === 3 && hub.stats().queued === 2);
   assert.strictEqual(hub.stats().running, 3, '只应有 3 条在跑');
   assert.strictEqual(hub.stats().queued, 2);
   d.calls[0].resolve({ result: { outFile: '/tmp/a.mpkg', size: 1, type: 'scene' } });
-  await sleepMs(20);
+  await waitUntil(() => d.calls.length >= 4 && hub.stats().running === 3);
   assert.strictEqual(hub.stats().running, 3, '空出一个位置应立刻补上第 4 条');
   assert.strictEqual(hub.get(ids[0]).state, 'done');
   for (const c of d.calls) c.resolve({ result: {} });
