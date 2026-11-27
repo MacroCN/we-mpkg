@@ -1444,6 +1444,9 @@ function switchSettingsTab(name) {
     b.setAttribute('aria-selected', on ? 'true' : 'false');
   });
   document.querySelectorAll('.tabpane').forEach((p) => p.classList.toggle('on', p.id === `tab-${name}`));
+  // 卡片高度固定，滚动在 .modal-body 里；换 tab 时回到顶部，别停在上一个 tab 的滚动位置
+  const body = document.querySelector('.modal-body');
+  if (body) body.scrollTop = 0;
   state.settingsTab = name;
   try { localStorage.setItem('settingsTab', name); } catch { /* ignore */ }
 }
