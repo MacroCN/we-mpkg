@@ -33,6 +33,13 @@ public class MainActivity extends Activity {
     private TextView txtStatus;
     private EditText editRemote;
     private EditText editRemoteToken;
+    private View onboardPanel;
+    private TextView onboardPermText;
+    private TextView onboardDirText;
+    /** 首启向导里正在选输出目录：选完结果留在启动页，不往网页回填 */
+    private boolean onboardMode = false;
+    /** 是否已完成首启向导（存 prefs，装一次只走一次） */
+    private boolean onboarded = false;
 
     /** 当前 WebView 允许加载/调用原生桥的 origin（本地 127.0.0.1 或用户配置的远程主机） */
     private Uri trustedOrigin;
@@ -89,6 +96,37 @@ public class MainActivity extends Activity {
         editRemote = findViewById(R.id.editRemote);
         editRemoteToken = findViewById(R.id.editRemoteToken);
 
+        // 首启向导：只读一次 prefs，后面决定是否自动进本地模式
+        onboarded = getPreferences(MODE_PRIVATE).getBoolean("onboarded", false);
+        onboardPanel = findViewById(R.id.onboardPanel);
+        onboardPermText = findViewById(R.id.onboardPermText);
+        onboardDirText = findViewById(R.id.onboardDirText);
+        if (onboardPanel != null) onboardPanel.setVisibility(onboarded ? View.GONE : View.VISIBLE);
+        if (!onboarded) refreshOnboardState();
+        Button btnOnboardStorage = findViewById(R.id.btnOnboardStorage);
+        if (btnOnboardStorage != null) {
+            btnOnboardStorage.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { requestStorage(); }
+            });
+        }
+        Button btnOnboardDir = findViewById(R.id.btnOnboardDir);
+        if (btnOnboardDir != null) {
+            btnOnboardDir.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { onboardMode = true; openTreePicker(); }
+            });
+        }
+        Button btnOnboardDone = findViewById(R.id.btnOnboardDone);
+        if (btnOnboardDone != null) {
+            btnOnboardDone.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) {
+                    onboarded = true;
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("onboarded", true).apply();
+                    if (onboardPanel != null) onboardPanel.setVisibility(View.GONE);
+                    startLocal();
+                }
+            });
+        }
+
         WebSettings s = web.getSettings();        s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setUseWideViewPort(true);
@@ -106,6 +144,7 @@ public class MainActivity extends Activity {
                 sentTopDp = -1;
                 sentBottomDp = -1;
                 pushSafeAreaToWeb(safeTopPx, safeBottomPx);
+                pushOnboardOutput();
             }
 
             @Override
@@ -358,6 +397,10 @@ public class MainActivity extends Activity {
             if (!portOpen()) startLocal();     // 进程被杀过：页面是旧的，重新起服务
             return;
         }
+        if (!onboarded) {
+            status("首次使用：授予权限、选好输出目录后，点「开始使用」进入本地模式");
+            return;
+        }
         String mode = getPreferences(MODE_PRIVATE).getString("mode", "");
         if (!"remote".equals(mode)) startLocal();
     }
@@ -470,6 +513,7 @@ public class MainActivity extends Activity {
         super.onActivityResult(req, result, data);
         if (req != REQ_PICK_TREE) return;
         if (result != RESULT_OK || data == null || data.getData() == null) {
+            onboardMode = false;
             callJsPick(null);
             return;
         }
@@ -477,6 +521,7 @@ public class MainActivity extends Activity {
         String path = treeToPath(tree);
         if (path == null) {
             status("✘ 这个位置拿不到真实路径，请换「内部存储」下的目录");
+            onboardMode = false;
             callJsPick(null);
             return;
         }
@@ -487,6 +532,18 @@ public class MainActivity extends Activity {
         } catch (Exception ignored) { }
         File f = new File(path);
         if (!f.exists()) f.mkdirs();
+        if (onboardMode) {
+            onboardMode = false;
+            getPreferences(MODE_PRIVATE).edit()
+                    .putString("outputDir", path)
+                    .putBoolean("onboarded", true)
+                    .apply();
+            onboarded = true;
+            refreshOnboardState();
+            pushOnboardOutput();
+            status("✔ 输出目录已设为 " + path + "，点「开始使用」进入本地模式");
+            return;
+        }
         callJsPick(path);
     }
 
@@ -803,6 +860,45 @@ public class MainActivity extends Activity {
             return;
         }
         moveTaskToBack(true);
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // 从系统授权页回来：刷新向导里的权限状态
+        if (!onboarded && onboardPanel != null && onboardPanel.getVisibility() == View.VISIBLE) refreshOnboardState();
+    }
+
+    /** 首启向导：把向导里选的输出目录同步给网页（网页落盘到 settings.json） */
+    private void pushOnboardOutput() {
+        final String dir = getPreferences(MODE_PRIVATE).getString("outputDir", "");
+        if (dir == null || dir.isEmpty() || web == null) return;
+        final String arg = "'" + dir.replace("\\", "\\\\").replace("'", "\\'") + "'";
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                web.evaluateJavascript(
+                    "window.__weOnboardDir=" + arg + ";" +
+                    "window.WE_SET_OUTPUT && window.WE_SET_OUTPUT(" + arg + ")", null);
+            }
+        });
+    }
+
+    /** 首启向导：刷新「权限 / 目录」两个勾选项 */
+    private void refreshOnboardState() {
+        boolean allFiles = android.os.Build.VERSION.SDK_INT < 30 || Environment.isExternalStorageManager();
+        if (onboardPermText != null) {
+            onboardPermText.setText(allFiles
+                    ? "① 文件访问权限 ✔ 已授予"
+                    : "① 文件访问权限：未授予，mpkg 只能存到应用私有目录");
+            onboardPermText.setTextColor(allFiles ? 0xFF7EE7B8 : 0xFFF0B060);
+        }
+        String dir = getPreferences(MODE_PRIVATE).getString("outputDir", "");
+        if (onboardDirText != null) {
+            onboardDirText.setText(dir == null || dir.isEmpty()
+                    ? "② 输出目录：默认 下载/mpkg，可改到别的文件夹"
+                    : "② 输出目录 ✔ " + dir);
+            onboardDirText.setTextColor(dir == null || dir.isEmpty() ? 0xFF8FA3B8 : 0xFF7EE7B8);
+        }
     }
 
     /** Android 13+ 前台服务通知需要运行时授权；拒绝也不影响下载，只是通知不显示 */

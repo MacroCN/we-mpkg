@@ -131,6 +131,8 @@ const I18N = {
     pickFolder: 'Choose folder…', pickDone: 'Selected: {d}', pickUnsupported: 'System folder picker unavailable — type a path',
     pickFail: 'No folder returned. Try again or type a path',
     account: 'Steam account', accountField: 'Steam account', passField: 'Password (used once, not saved)',
+    onboardText: 'First run: sign in with your Steam account under Settings → Account. In mainland China, turn on an accelerator (e.g. Watt Toolkit / Steam++) first — the Workshop often fails to load otherwise.',
+    onboardGo: 'Sign in',
     login: 'Sign in', loginTip: 'Accounts with the Steam app get a “confirm sign-in” prompt — just approve it on your phone. Or run get-token.bat on a PC and import the credential.',
     submitCode: 'Submit', codePh: 'Steam Guard code', needCode: 'Steam Guard code required',
     loading: 'Loading Workshop items…', empty: 'No results. Try fewer filters or set a proxy (WE_MPKG_PROXY).',
@@ -948,6 +950,43 @@ function closeUpdateBanner(remember) {
 }
 
 /** 启动时自动查一次（服务端 6 小时缓存）：失败就静默，不打扰用户 */
+const ONBOARD_KEY = 'onboardHintDone';
+
+/** 首启提示：只在没登录且没关过时出现，关掉写 localStorage（同一设备不再打扰） */
+function maybeShowOnboardHint() {
+  const bar = $('onboardBanner');
+  if (!bar || state.loggedIn) return;
+  try {
+    if (localStorage.getItem(ONBOARD_KEY) === 'done') return;
+  } catch { /* 隐私模式 */ }
+  $('onboardBannerText').textContent = tr('onboardText');
+  bar.classList.remove('hidden');
+}
+
+function closeOnboardHint() {
+  const bar = $('onboardBanner');
+  if (bar) bar.classList.add('hidden');
+  try { localStorage.setItem(ONBOARD_KEY, 'done'); } catch { /* ignore */ }
+}
+
+/** 安卓首启向导里选好的输出目录：写进服务端设置，之后网页与打包都用它 */
+window.WE_SET_OUTPUT = async function (dir) {
+  if (!dir) return;
+  try {
+    const r = await api('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ outputDir: dir }),
+    });
+    if (r && r.outputDir) {
+      state.outputDir = r.outputDir;
+      if ($('cfg') && state.loggedIn) $('cfg').textContent = `${state.engine} · ${r.outputDir}`;
+    }
+  } catch (e) {
+    if ($('cfg')) $('cfg').textContent = '⚠ ' + e.message;
+  }
+};
+
 async function autoCheckUpdate() {
   try {
     const d = await api('/api/update/check');
@@ -1733,6 +1772,8 @@ function toggleDays() {
 }
 
 function wire() {
+  if ($('onboardBannerClose')) $('onboardBannerClose').onclick = closeOnboardHint;
+  if ($('onboardBannerGo')) $('onboardBannerGo').onclick = function () { closeOnboardHint(); openSettings('account'); };
   $('go').onclick = () => { state.search = $('search').value.trim(); state.page = 1; load(); };
   $('search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { $('search').blur(); $('go').click(); } });
   $('sort').onchange = (e) => {
@@ -1923,6 +1964,9 @@ async function init() {
     $('cfg').textContent = e.message;
   }
   setDownloadLabel();
+  maybeShowOnboardHint();
+  // 安卓向导可能比页面加载更早把目录塞过来（页面还没 init 完），这里补一次
+  if (typeof window.__weOnboardDir === 'string' && window.__weOnboardDir) window.WE_SET_OUTPUT(window.__weOnboardDir);
   load();
   loadFilters();
   // 启动时自动检测更新；有新版本才弹提示，失败静默

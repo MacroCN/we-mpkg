@@ -17,8 +17,8 @@
   document.documentElement.setAttribute('data-theme-mode', mode);
 })();
 </script>
-<link rel="stylesheet" href="/style.css?v=2.4.13" />
-<link rel="stylesheet" href="/dlcenter.css?v=2.4.13" />
+<link rel="stylesheet" href="/style.css?v=2.4.14" />
+<link rel="stylesheet" href="/dlcenter.css?v=2.4.14" />
 </head>
 <body>
 
@@ -47,6 +47,13 @@
   <span id="updateBannerText" class="update-banner-text"></span>
   <button id="updateBannerGo" class="ghost update-banner-go" type="button" data-i18n="updateGo">去更新</button>
   <button id="updateBannerClose" class="update-banner-close" type="button" aria-label="忽略本次提示">×</button>
+</div>
+
+<!-- 首启引导：没登录时提示先登录，并提醒开加速器（只提示一次，关掉就不再出现） -->
+<div id="onboardBanner" class="update-banner hidden" role="status" aria-live="polite">
+  <span id="onboardBannerText" class="update-banner-text"></span>
+  <button id="onboardBannerGo" class="ghost update-banner-go" type="button" data-i18n="onboardGo">去登录</button>
+  <button id="onboardBannerClose" class="update-banner-close" type="button" aria-label="关闭提示">×</button>
 </div>
 
 <section class="searchbar">
@@ -289,8 +296,8 @@
 <!-- 回到顶部 -->
 <button id="toTop" class="to-top hidden" type="button" aria-label="回到顶部">↑</button>
 
-<script src="/joblib.js?v=2.4.13"></script>
-<script src="/app.js?v=2.4.13"></script>
+<script src="/joblib.js?v=2.4.14"></script>
+<script src="/app.js?v=2.4.14"></script>
 <script src="/dlcenter.js?v=2.4.1" defer></script>
 </body>
 </html>

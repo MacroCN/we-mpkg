@@ -28,6 +28,70 @@
             android:textColor="#8FA3B8"
             android:textSize="13sp" />
 
+        <!-- 首次使用向导：权限 → 输出目录 → 登录/加速器提醒；「开始使用」后才自动进本地模式 -->
+        <LinearLayout
+            android:id="@+id/onboardPanel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:orientation="vertical"
+            android:background="#12242F"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="首次使用，先做三件事"
+                android:textColor="#6EE7FF"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/onboardPermText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="① 文件访问权限：未授予，mpkg 只能存到应用私有目录"
+                android:textColor="#F0B060"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnOnboardStorage"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="授予文件访问权限" />
+
+            <TextView
+                android:id="@+id/onboardDirText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="② 输出目录：默认 下载/mpkg，可改到别的文件夹"
+                android:textColor="#8FA3B8"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnOnboardDir"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="选择输出目录" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="③ 登录与网络：进界面后到「设置 → 账号」登录 Steam；国内网络建议先打开加速器（如 Watt Toolkit / Steam++），否则创意工坊与下载容易连不上。"
+                android:textColor="#8FA3B8"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnOnboardDone"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="12dp"
+                android:text="开始使用（进入本地模式）" />
+        </LinearLayout>
+
         <Button
             android:id="@+id/btnLocal"
             android:layout_width="match_parent"

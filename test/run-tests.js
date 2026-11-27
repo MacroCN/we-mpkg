@@ -2490,6 +2490,31 @@ test('关于页显示当前版本，启动时自动检查更新并提示', () =>
   assert.strictEqual(upd.currentVersion(), require('../package.json').version, '关于页版本号要跟 package.json 一致');
 });
 
+test('首启引导：向导 + 主界面提示条（权限/输出目录/登录/加速器）', () => {
+  const root = path.join(__dirname, '..');
+  const html = fs.readFileSync(path.join(root, 'public', 'index.html'), 'utf8');
+  for (const id of ['onboardBanner', 'onboardBannerText', 'onboardBannerGo', 'onboardBannerClose']) {
+    assert.ok(html.includes(`id="${id}"`), `index.html 缺少 #${id}`);
+  }
+  const js = fs.readFileSync(path.join(root, 'public', 'app.js'), 'utf8');
+  for (const q of ['function maybeShowOnboardHint', 'function closeOnboardHint', 'window.WE_SET_OUTPUT',
+                   'onboardText', 'onboardGo', 'ONBOARD_KEY']) {
+    assert.ok(js.includes(q), `app.js 缺少 ${q}`);
+  }
+  assert.ok(js.includes('加速器'), '提示文案要提到加速器');
+  // 已登录不该弹，关掉后不再弹
+  assert.ok(/if \(!bar \|\| state.loggedIn\) return;/.test(js), '已登录时不显示首启提示');
+  const java = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app', 'MainActivity.java'), 'utf8');
+  for (const q of ['onboardPanel', 'btnOnboardStorage', 'btnOnboardDir', 'btnOnboardDone',
+                   '"onboarded"', 'refreshOnboardState', 'pushOnboardOutput']) {
+    assert.ok(java.includes(q), `MainActivity 缺少 ${q}`);
+  }
+  const xml = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'res', 'layout', 'activity_main.xml'), 'utf8');
+  for (const id of ['onboardPanel', 'onboardPermText', 'onboardDirText', 'btnOnboardStorage', 'btnOnboardDir', 'btnOnboardDone']) {
+    assert.ok(xml.includes(`"@+id/${id}"`), `activity_main.xml 缺少 ${id}`);
+  }
+});
+
 test('ffmpeg 候选：只用新版，旧版 lite 彻底移除', () => {
   const video = require('../src/video');
   const webrender = require('../src/webrender');
