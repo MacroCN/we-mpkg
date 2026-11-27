@@ -2502,11 +2502,20 @@ test('首启引导：向导 + 主界面提示条（权限/输出目录/登录/�
     assert.ok(js.includes(q), `app.js 缺少 ${q}`);
   }
   assert.ok(js.includes('加速器'), '提示文案要提到加速器');
+  // 中英文表都要有，否则界面上会直接显示 onboardText 这种键名
+  const zhBlock = js.slice(js.indexOf('zh: {'), js.indexOf('en: {'));
+  const enBlock = js.slice(js.indexOf('en: {'));
+  for (const block of [zhBlock, enBlock]) {
+    for (const key of ['onboardText:', 'onboardGo:']) {
+      assert.ok(block.includes(key), `i18n 表缺少 ${key}`);
+    }
+  }
   // 已登录不该弹，关掉后不再弹
   assert.ok(/if \(!bar \|\| state.loggedIn\) return;/.test(js), '已登录时不显示首启提示');
   const java = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app', 'MainActivity.java'), 'utf8');
   for (const q of ['onboardPanel', 'btnOnboardStorage', 'btnOnboardDir', 'btnOnboardDone',
-                   '"onboarded"', 'refreshOnboardState', 'pushOnboardOutput']) {
+                   '"onboarded"', 'refreshOnboardState', 'pushOnboardOutput',
+                   'btnStorage.setVisibility(onboarded ? View.VISIBLE : View.GONE)']) {
     assert.ok(java.includes(q), `MainActivity 缺少 ${q}`);
   }
   const xml = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'res', 'layout', 'activity_main.xml'), 'utf8');

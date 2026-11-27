@@ -44,6 +44,8 @@ const I18N = {
     updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
     updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
     aboutVersionLabel: '当前版本 {v}', updateGo: '去更新',
+    onboardText: '首次使用：先在「设置 → 账号」登录 Steam 账号；国内网络建议先打开加速器（如 Watt Toolkit / Steam++），否则创意工坊和下载容易连不上。',
+    onboardGo: '去登录',
     updateBannerText: '发现新版本 {v}（当前 {c}）', updateBannerDismissed: '已忽略本次更新提示',
     exitApp: '退出程序（关闭后台服务）',
     exitConfirm: '确定退出？后台服务会被关闭，本页随即失效。',

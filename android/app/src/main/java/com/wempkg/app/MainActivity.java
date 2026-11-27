@@ -383,6 +383,8 @@ public class MainActivity extends Activity {
             @Override public void onClick(View v) { startRemote(); }
         });
         Button btnStorage = findViewById(R.id.btnStorage);
+        // 向导里已经有「授予文件访问权限」，旧按钮先藏起来，免得同一件事出现两次
+        if (btnStorage != null) btnStorage.setVisibility(onboarded ? View.VISIBLE : View.GONE);
         btnStorage.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) { requestStorage(); }
         });
