@@ -543,6 +543,11 @@ function compensateAutosizeScale(projectDir, info, outcomes) {
  * 结果本应隐藏的主题/图层全部叠加显示（例如双主题模式下两套图层同时出现）。
  * 这里按当前属性值求值一次，保证导入后的画面和作者当前预设一致。
  * 带 script 的动态 visible 保持原样。
+ *
+ * 由「用户属性」控制、且该属性确实写在 project.json 里的图层默认**保留原样**，
+ * 交给壁纸引擎在运行时切换（双主题壁纸的另一套主题就靠它调出来）；
+ * 其余求不出值的图层仍然固化，避免两套图层无意义地叠在一起。
+ * 想要旧行为（全部固化）设 WEM_PRESERVE_VISIBLE=0 或传 preservePropertyLayers:false。
  */
 function flattenSceneVisibility(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
@@ -555,6 +560,9 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     props = (project.general && project.general.properties) || {};
   } catch { /* 没有 project.json 就只按 value 处理 */ }
 
+  const preservePropLayers = opts.preservePropertyLayers !== undefined
+    ? !!opts.preservePropertyLayers
+    : process.env.WEM_PRESERVE_VISIBLE !== '0';
   const propValue = (name) => {
     const p = props[name];
     return p && Object.prototype.hasOwnProperty.call(p, 'value') ? p.value : undefined;
@@ -587,15 +595,30 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     return v.value;
   };
 
+  // 属性真的存在时才算「能交给引擎切换」，否则保留它也没人改得动
+  const propGated = (v) => {
+    if (!v || typeof v !== 'object' || v.script) return false;
+    if (typeof v.user === 'string') return propValue(v.user) !== undefined;
+    if (v.user && typeof v.user === 'object' && !v.user.script && v.user.name) {
+      return propValue(v.user.name) !== undefined;
+    }
+    return false;
+  };
+
   let changed = 0;
   let hidden = 0;
+  let kept = 0;
   const visit = (obj) => {
     if (!obj || typeof obj !== 'object') return;
     if (Object.prototype.hasOwnProperty.call(obj, 'visible')) {
+      if (preservePropLayers && propGated(obj.visible)) {
+        kept++;
+      } else {
       const b = resolve(obj.visible);
       if (typeof b === 'boolean') {
         if (!b && obj.visible !== false) hidden++;
         if (b !== obj.visible) { obj.visible = b; changed++; }
+      }
       }
     }
     for (const arr of ['objects', 'subobjects']) {
@@ -605,7 +628,9 @@ function flattenSceneVisibility(projectDir, opts = {}) {
   visit(scene);
   if (changed) {
     fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
-    onLog(`  已固化 ${changed} 个图层可见性（其中隐藏 ${hidden} 个，避免双主题图层叠加）`);
+    let msg = `  已固化 ${changed} 个图层可见性（其中隐藏 ${hidden} 个）`;
+    if (kept) msg += `；保留 ${kept} 个属性控制的图层，交 WE 运行时切换`;
+    onLog(msg);
   }
   return changed;
 }
@@ -656,7 +681,7 @@ function adaptForMobile(projectDir, opts = {}) {
   const dropped = repairSceneCompat(projectDir, { onLog, dropAudioLayers: opts.dropAudioLayers });
   warnings.push(...dropped.warnings);
 
-  flattenSceneVisibility(projectDir, { onLog });
+  flattenSceneVisibility(projectDir, { onLog, preservePropertyLayers: opts.preservePropertyLayers });
   const autoAdjusted = compensateAutosizeScale(projectDir, autosizeInfo, texRes.outcomes);
   if (autoAdjusted) onLog(`  已补偿 ${autoAdjusted} 个 autosize 图层的缩放，保持原始布局`);
 
@@ -1038,7 +1063,7 @@ function analyze(inputPath) {
 
 module.exports = {
   packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
-  detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
+  detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo, flattenSceneVisibility,
   stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum, sceneHasAudioReactive,
 };
 

@@ -868,6 +868,39 @@ test('音频频谱层：shader 改写后仍不可移植时才移除，并把子�
   assert.strictEqual(scene.objects.find((o) => o.id === 114).parent, 113, '子层要重挂到祖父层，不能变孤儿');
 });
 
+test('双主题图层：由用户属性控制的 visible 保留原样，交给 WE 运行时切换', () => {
+  const dir = tmp('themes');
+  fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({
+    general: { properties: { theme: { value: 1 }, glow: { value: true } } },
+  }));
+  const writeScene = () => fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 1, name: '主题2', visible: { user: { name: 'theme', condition: '== 1' }, value: true } },
+      { id: 2, name: '主题2-简写', visible: { user: 'theme', value: true } },
+      { id: 3, name: '未知属性', visible: { user: { name: 'nope' }, value: true } },
+      { id: 4, name: '纯值', visible: { value: false } },
+    ],
+  }));
+  writeScene();
+  const logs = [];
+  const changed = packer.flattenSceneVisibility(dir, { onLog: (m) => logs.push(m) });
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(typeof scene.objects[0].visible, 'object', '属性控制的主题层必须保留对象形式');
+  assert.deepStrictEqual(scene.objects[0].visible, { user: { name: 'theme', condition: '== 1' }, value: true });
+  assert.strictEqual(typeof scene.objects[1].visible, 'object', 'user 写成字符串的也要保留');
+  assert.strictEqual(scene.objects[2].visible, true, '属性不存在的照样固化成布尔');
+  assert.strictEqual(scene.objects[3].visible, false);
+  assert.strictEqual(changed, 2, '只剩两条没有属性控制的图层被固化');
+  assert.ok(logs.some((m) => m.includes('保留 2 个属性控制的图层')), logs.join('|'));
+
+  // 旧行为仍可用：全部固化
+  writeScene();
+  packer.flattenSceneVisibility(dir, { onLog: () => {}, preservePropertyLayers: false });
+  const frozen = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(frozen.objects[0].visible, true, 'theme=1 时主题2 应可见');
+  assert.strictEqual(frozen.objects[1].visible, true);
+});
+
 test('叠加层：alpha 字符串归一为数字，孤儿父级断开', () => {
   const dir = tmp('overlay');
   fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
