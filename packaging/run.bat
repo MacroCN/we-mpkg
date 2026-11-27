@@ -2,9 +2,6 @@
 setlocal
 cd /d "%~dp0"
 
-rem default to the built-in pure-JS engine (no SteamCMD, no system Node needed)
-if not defined WE_MPKG_ENGINE set "WE_MPKG_ENGINE=steamjs"
-
 set "NODE_EXE="
 if exist "%~dp0nodejs\node.exe" set "NODE_EXE=%~dp0nodejs\node.exe"
 if not defined NODE_EXE (

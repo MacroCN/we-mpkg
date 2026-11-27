@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /**
  * web 类型壁纸 -> 视频 转换器
  *
@@ -34,7 +34,7 @@ const BROWSER_CANDIDATES = [
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
 ];
 
-// 顺序与 src/video.js 保持一致：只用新版，不内置 2018 年那版（详见 src/ffmpeg.js）。
+// 顺序与 src/video.js 保持一致：只用新版，不内置旧版（详见 src/ffmpeg.js）。
 // 网页壁纸的音频解码同样是「用不可信的工坊媒体喂解码器」，没有理由退回旧版本。
 const FFMPEG_CANDIDATES = [
   process.env.WEM_FFMPEG,

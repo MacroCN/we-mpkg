@@ -2,8 +2,6 @@
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
-rem default to the built-in pure-JS engine (no SteamCMD, no system Node needed)
-if not defined WE_MPKG_ENGINE set "WE_MPKG_ENGINE=steamjs"
 title we-mpkg - desktop web UI
 
 set "PORT=3090"

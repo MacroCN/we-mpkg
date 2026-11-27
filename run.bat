@@ -23,6 +23,6 @@ exit /b %errorlevel%
 :nonode
 echo [ERROR] Node.js not found.
 echo   Portable build expected at: %~dp0..\nodejs\node.exe
-echo   Or install Node 16+ from https://nodejs.org/ and try again.
+echo   Or install Node 18+ from https://nodejs.org/ and try again.
 pause
 exit /b 1

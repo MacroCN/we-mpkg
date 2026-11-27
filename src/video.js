@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /**
  * 视频转码工具：画质档位按「最长边」缩放到目标尺寸。
  *
@@ -99,8 +99,8 @@ function ffmpegCandidates(opts = {}) {
     ...nativeCandidates,
     process.env.FFMPEG,
     // 只用新版（用户自带 / 官方 9.x 构建 / 绿色版内置的那份）。
-    // 工坊里的媒体文件不可信：2018 年那版 ffmpeg（≈4.1-dev）要把七年间的已知
-    // 容器/解码器漏洞全部暴露给用户，所以这里不留任何旧版兜底——
+    // 工坊里的媒体文件不可信：旧版 ffmpeg 会把多年积累的已知容器/解码器漏洞
+    // 暴露给用户，所以这里不留任何旧版兜底——
     // 找不到就报错并给出下载地址（见 src/ffmpeg.js）。
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),

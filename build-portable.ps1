@@ -1,14 +1,15 @@
 ﻿# 打绿色版（免安装、自带 Node 运行时）
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\build-portable.ps1
-#   powershell ... -File .\build-portable.ps1 -Version 1.1.0
+#   powershell ... -File .\build-portable.ps1 -Version 2.4.11
+#   （不写 -Version 就取 package.json 里的 version）
 #
 # 产物：
 #   dist\we-mpkg-portable\            可直接运行的绿色目录
 #   dist\we-mpkg-portable-<版本>.zip  分发包
 #
 param(
-  [string]$Version = '1.0.0',
+  [string]$Version = '',
   [string]$NodeExe = ''
 )
 
@@ -25,6 +26,11 @@ if (-not $NodeExe -or -not (Test-Path $NodeExe)) {
 Write-Host "==> node: $NodeExe"
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
+if (-not $Version) {
+  $pkg = Join-Path $root 'package.json'
+  if (Test-Path $pkg) { $Version = (Get-Content $pkg -Raw | ConvertFrom-Json).version }
+}
+if (-not $Version) { throw '拿不到版本号：用 -Version 指定' }
 $dst = Join-Path $root 'dist\we-mpkg-portable'
 $robocopy = Join-Path $env:SystemRoot 'System32\robocopy.exe'
 
@@ -59,8 +65,8 @@ if (Test-Path (Join-Path $root 'tools\test-resume.js')) {
 }
 
 # ffmpeg：4K / 竖屏视频纹理转码、网页壁纸音频解码要用。
-# 只取新版（.cache\toolchain\ffmpeg\bin，CI 从 gyan.dev 拉的官方 essentials），
-# 不再内置 2018 年那版 lite —— 旧解码器处理不受信的工坊媒体风险太大。
+# 只认新版（.cache\toolchain\ffmpeg\bin，CI 从 gyan.dev 拉的官方 essentials）：
+# 工坊媒体不可信，不给旧版解码器留任何兜底。
 $ffSrc = Join-Path $root '.cache\toolchain\ffmpeg\bin\ffmpeg.exe'
 if (Test-Path $ffSrc) {
   $ffDst = Join-Path $dst 'tools\ffmpeg'

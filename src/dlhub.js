@@ -1,4 +1,4 @@
-'use strict';
+﻿'use strict';
 /**
  * 下载中心（独立进程）
  *
@@ -18,6 +18,10 @@ const { spawn } = require('child_process');
 const configMod = require('./config');
 const { config, ensureDirs } = configMod;
 const guard = require('./guard');
+
+// /api/hub/ping 报的版本号直接取 package.json，避免改版本时漏改一处
+let PKG_VERSION = 'unknown';
+try { PKG_VERSION = require('../package.json').version || PKG_VERSION; } catch { /* 资源包被裁剪时退 unknown */ }
 
 const DEFAULT_PORT = parseInt(String(process.env.WE_MPKG_DLHUB_PORT || '').trim() || '3091', 10);
 const MAX_CONCURRENT = 3;
@@ -599,7 +603,7 @@ function createServer({ hub, port = DEFAULT_PORT, host = '127.0.0.1', onShutdown
         return json(res, 403, { error: '拒绝跨站请求' });
       }
       if (pn === '/api/hub/ping') {
-        return json(res, 200, { ok: true, pid: process.pid, version: '2.0.1', maxConcurrent: hub.maxConcurrent, ...hub.stats() });
+        return json(res, 200, { ok: true, pid: process.pid, version: PKG_VERSION, maxConcurrent: hub.maxConcurrent, ...hub.stats() });
       }
       if (pn === '/api/hub/jobs' && req.method === 'GET') {
         return json(res, 200, {

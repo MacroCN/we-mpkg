@@ -11,7 +11,7 @@
     "test": "node test/run-tests.js"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=18"
   },
   "dependencies": {
     "jpeg-js": "^0.4.4",
