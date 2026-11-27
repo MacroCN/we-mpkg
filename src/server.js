@@ -448,6 +448,15 @@ const server = http.createServer(async (req, res) => {
       });
     }
     // 自动更新：查 GitHub 最新 Release（默认 6 小时缓存，?force=1 强制刷新）
+    if (pn === '/api/engine' && req.method === 'GET') {
+      // 只是探测，不发请求也不改任何状态；打包日志里还会打一条本次实际用的引擎
+      try {
+        const info = require('./rusttex').info();
+        return json(res, 200, { ok: true, ...info });
+      } catch (e) {
+        return json(res, 200, { ok: false, engine: 'JS', error: e.message });
+      }
+    }
     if (pn === '/api/update/check') {
       try {
         const data = await require('./update').check({ force: u.searchParams.get('force') === '1' });

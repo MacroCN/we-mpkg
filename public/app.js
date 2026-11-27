@@ -44,6 +44,7 @@ const I18N = {
     updateChecking: '正在检查 GitHub 最新版本…', updateLatest: '已是最新版本（{v}）',
     updateFound: '发现新版本 {v}（当前 {c}）', updateFail: '检查失败：',
     aboutVersionLabel: '当前版本 {v}', updateGo: '去更新',
+    engineRust: '纹理加速引擎：Rust（{v}）', engineJs: '纹理加速引擎：JS（未找到 rust-tex，已回落纯 JS）',
     onboardText: '首次使用：先在「设置 → 账号」登录 Steam 账号；国内网络建议先打开加速器（如 Watt Toolkit / Steam++），否则创意工坊和下载容易连不上。',
     onboardGo: '去登录',
     updateBannerText: '发现新版本 {v}（当前 {c}）', updateBannerDismissed: '已忽略本次更新提示',
@@ -125,6 +126,7 @@ const I18N = {
     updateChecking: 'Checking the latest GitHub release…', updateLatest: 'You are up to date ({v})',
     updateFound: 'New version {v} available (current {c})', updateFail: 'Check failed: ',
     aboutVersionLabel: 'Current version {v}', updateGo: 'Update',
+    engineRust: 'Texture engine: Rust ({v})', engineJs: 'Texture engine: JS (rust-tex not found)',
     updateBannerText: 'New version {v} available (current {c})', updateBannerDismissed: 'Update notice dismissed',
     exitApp: 'Quit (stop background service)',
     exitConfirm: 'Quit now? The background service will be stopped and this page will stop working.',
@@ -886,6 +888,19 @@ const UPDATE_DISMISS_KEY = 'updateDismissedVersion';
 function renderAboutVersion(v) {
   const el = $('aboutVersion');
   if (el) el.textContent = v ? tr('aboutVersionLabel', { v }) : '';
+  refreshEngine();
+
+  async function refreshEngine() {
+    const hint = $('engineHint');
+    if (!hint) return;
+    try {
+      const r = await api('/api/engine');
+      if (hint !== $('engineHint')) return;
+      if (r && r.enabled) hint.textContent = tr('engineRust', { v: r.version || 'rust-tex' });
+      else hint.textContent = tr('engineJs');
+      if (r && r.path) hint.title = r.path;
+    } catch { /* 状态显示失败不影响使用 */ }
+  }
 }
 
 /**

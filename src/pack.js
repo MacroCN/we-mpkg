@@ -641,6 +641,14 @@ function adaptForMobile(projectDir, opts = {}) {
   const warnings = [];
   const textureTotal = Math.max(0, Number(opts.textureTotal) || 0);
   let textureDone = 0;
+  // 纹理加速引擎：让用户一眼看出这次是 Rust 还是纯 JS 在跑（两条路结果一致，只影响速度）
+  const rusttex = require('./rusttex');
+  const engine0 = rusttex.info();
+  onLog(engine0.enabled
+    ? `  纹理加速引擎: Rust（${engine0.path}${engine0.version ? ' v' + engine0.version : ''}）`
+    : '  纹理加速引擎: JS（未找到 rust-tex，已回落纯 JS）');
+  const stats0 = { ...engine0.stats };
+
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
   onLog(`  画质档位: ${preset.label}（reduction=${preset.reduction}, maxDimension=${preset.maxDimension || '不限'}）`);
 
@@ -684,6 +692,19 @@ function adaptForMobile(projectDir, opts = {}) {
   flattenSceneVisibility(projectDir, { onLog, preservePropertyLayers: opts.preservePropertyLayers });
   const autoAdjusted = compensateAutosizeScale(projectDir, autosizeInfo, texRes.outcomes);
   if (autoAdjusted) onLog(`  已补偿 ${autoAdjusted} 个 autosize 图层的缩放，保持原始布局`);
+
+  const engine1 = rusttex.info();
+  const used = {
+    dxt: engine1.stats.dxt - stats0.dxt,
+    lz4: engine1.stats.lz4 - stats0.lz4,
+    tex: engine1.stats.tex - stats0.tex,
+    fallback: engine1.stats.fallback - stats0.fallback,
+  };
+  if (used.dxt || used.lz4 || used.tex || used.fallback) {
+    const parts = [`dxt ${used.dxt}`, `lz4 ${used.lz4}`, `tex ${used.tex}`];
+    if (used.fallback) parts.push(`回落 ${used.fallback}`);
+    onLog(`  纹理加速统计: ${parts.join(' / ')}（${engine1.enabled ? 'Rust' : 'JS'}）`);
+  }
 
   return { warnings, tex: texRes.stats, shader: shaderStats, outcomes: texRes.outcomes, droppedLayers: dropped.removed, sceneRepairs: dropped.repaired };
 }

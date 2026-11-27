@@ -1,0 +1,20 @@
+we-mpkg 3.0.0-beta.4
+
+Rust 迁移继续推进 + 引擎状态可见，并带上 beta.3 的双主题修复。
+
+新增：纹理加速引擎状态
+- 设置 → 关于里多一行「纹理加速引擎：Rust（rust-tex 3.0.0）」；找不到二进制时显示
+  「JS（未找到 rust-tex，已回落纯 JS）」，鼠标悬停可以看到具体路径。
+- 打包日志开头固定打一条引擎状态，结尾再打一条本次实际用量，例如：
+  纹理加速引擎: Rust（…/bin/rust-tex v3.0.0）
+  纹理加速统计: dxt 14 / lz4 3 / tex 87（Rust）
+- 新接口 GET /api/engine 返回 enabled / engine / path / version / 计数，不需要登录。
+
+双主题（beta.3 修复，本版包含）
+- 由用户属性控制、且属性确实写在 project.json 里的 visible 图层，打包时保留对象形式，
+  交给壁纸引擎运行时切换，不再被固化成 visible:false。日志里会写「保留 N 个属性控制的图层」。
+- 想回到旧行为（全部固化）：WEM_PRESERVE_VISIBLE=0。旧 mpkg 需要重打一次才会生效。
+
+其它
+- 自检 144 通过 / 0 失败 / 1 跳过（新增引擎状态用例）。
+- 3.0.0-beta.4，versionCode 63，签名与 2.4.x / 3.0.0-beta.x 一致，可直接覆盖升级。

@@ -27,6 +27,9 @@ const EXE = process.platform === 'win32' ? 'rust-tex.exe' : 'rust-tex';
 const MIN_VERSION = 3;
 
 let probe; // undefined = 未探测；null = 没有；string = 路径
+/** 本次运行实际走 Rust 的次数（给「纹理加速引擎」状态显示用） */
+const stats = { dxt: 0, lz4: 0, tex: 0, fallback: 0 };
+let binVersion = null;
 
 function candidates() {
   const out = [];
@@ -60,7 +63,9 @@ function usable(file) {
     if (process.platform !== 'win32') { try { fs.chmodSync(file, 0o755); } catch { /* ignore */ } }
     const out = execFileSync(file, ['version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
     const info = JSON.parse(out.trim().split('\n').pop());
-    return info && info.ok === true && Number(info.version.split('.')[0]) >= MIN_VERSION;
+    const ok = info && info.ok === true && Number(info.version.split('.')[0]) >= MIN_VERSION;
+    if (ok) binVersion = info.version;
+    return ok;
   } catch {
     return false;
   }
@@ -79,6 +84,19 @@ function locate() {
 
 function available() {
   return locate() !== null;
+}
+
+/** 引擎状态：给界面/日志显示「纹理加速引擎: Rust/JS」 */
+function info() {
+  const bin = locate();
+  return {
+    enabled: !!bin,
+    engine: bin ? 'Rust' : 'JS',
+    path: bin || null,
+    version: bin ? binVersion : null,
+    stats: { ...stats },
+    minPixels: 4096,
+  };
 }
 
 let tmpRoot = null;
@@ -113,8 +131,10 @@ function dxtDecode(buf, fmtName, width, height) {
   try {
     fs.writeFileSync(inFile, buf);
     run(bin, ['dxt-decode', inFile, outFile, '--format', fmtName, '--width', String(width), '--height', String(height)]);
+    stats.dxt++;
     return fs.readFileSync(outFile);
   } catch {
+    stats.fallback++;
     return null;
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
@@ -129,8 +149,10 @@ function lz4Compress(buf) {
   try {
     fs.writeFileSync(inFile, buf);
     run(bin, ['lz4-compress', inFile, outFile]);
+    stats.lz4++;
     return fs.readFileSync(outFile);
   } catch {
+    stats.fallback++;
     return null;
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
@@ -145,8 +167,10 @@ function lz4Decompress(buf, expectedSize) {
   try {
     fs.writeFileSync(inFile, buf);
     run(bin, ['lz4-decompress', inFile, outFile, '--size', String(expectedSize)]);
+    stats.lz4++;
     return fs.readFileSync(outFile);
   } catch {
+    stats.fallback++;
     return null;
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
@@ -164,16 +188,18 @@ function texConvert(buf, scale, framesTail) {
   const outFile = scratch('tex-out.tex');
   try {
     fs.writeFileSync(inFile, buf);
-    const info = run(bin, ['tex-convert', inFile, outFile,
+    const r = run(bin, ['tex-convert', inFile, outFile,
       '--scale', String(scale),
       '--frames-tail', framesTail ? '1' : '0'], 120000);
+    stats.tex++;
     return {
       bytes: fs.readFileSync(outFile),
-      width: info.width,
-      height: info.height,
-      downsampled: info.downsampled === true,
+      width: r.width,
+      height: r.height,
+      downsampled: r.downsampled === true,
     };
   } catch {
+    stats.fallback++;
     return null;
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
@@ -190,6 +216,8 @@ process.on('exit', cleanup);
 
 module.exports = {
   available,
+  info,
+  stats,
   locate,
   dxtDecode,
   lz4Compress,
