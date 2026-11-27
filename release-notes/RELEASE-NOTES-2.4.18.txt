@@ -1,0 +1,33 @@
+we-mpkg 2.4.18
+==============
+
+这一版针对安卓端：把文件、缓存路径和后台服务按 Android 16 的规范过了一遍，
+顺手修掉本地构建出来的 APK 在 16 KB 页设备上会进「兼容模式」的老问题。
+
+## 修复
+- 后台前台服务补上超时回调：Android 15 起 dataSync 类型前台服务在 24 小时内累计最多跑 6 小时，
+  超时后系统会停掉它；现在收到回调会自己撤掉通知收尾，不再出现「超时后再次 startForeground
+  直接崩」的情况。任务本身（Node 线程）不受影响，能跑完就继续跑完。
+- 默认输出目录不再写死 /storage/emulated/0：改由系统给（Environment），通过 WEM_PUBLIC_DOWNLOAD
+  传给 Node。应用分身、工作资料（存储 userId 不是 0）以及挂了外置存储的设备，输出会落到真实
+  的「下载/mpkg」，不再静默退回应用私有目录。
+- 用系统目录选择器选到 SD 卡 / U 盘时，路径改用 StorageManager 按卷查真实挂载点，不再手工拼
+  /storage/<uuid>（部分 ROM 上是错的）。
+- HOME 从 cacheDir 移到应用私有 files 目录：系统「清除缓存」或低存储回收不会再连带清掉 Node 的
+  缓存；TMPDIR 仍留在 cache，临时文件照旧可以被系统回收。
+- 清单新增 NEARBY_WIFI_DEVICES（neverForLocation），远程模式点「连接电脑」时按需申请，前瞻
+  Android 16 逐步收紧的「本地网络保护」；拒绝授权不影响本地模式。
+
+## 构建
+- 新增 tools/check-16k.js，构建时自动校验所有 .so 的 LOAD 段是否满足 16 KB 页要求；不达标的
+  （旧 toolchain 里的 libnode.so 实测是 4 KB 对齐）自动用 tools/align16k.js 就地重排。
+  之前在 16 KB 页设备上安装会弹「此应用不是 16 KB 兼容」并进兼容模式，现在是干净的 16 KB 对齐。
+- android/assets 的 nodejs-project.zip 已重打，APK 内 JS 与仓库源码一致。
+
+## 验证
+- 本地全量测试 141 通过 / 0 失败 / 1 跳过。
+- 本地 debug APK 构建通过；从产物里解出的 libnode / libc++_shared / libwempkg-node 三个 .so
+  均满足「4 个 LOAD 段 >= 16 KB」；aapt2 确认 NEARBY_WIFI_DEVICES 已进包。
+
+## 签名与升级
+本版沿用同一 release 签名，versionCode 61（上一版 60），可直接覆盖 2.4.17 安装。
