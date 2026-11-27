@@ -453,6 +453,9 @@
     head.addEventListener('pointermove', onHeadMove);
     head.addEventListener('pointerup', onHeadUp);
     head.addEventListener('pointercancel', onHeadUp);
+    // 触摸被系统/其它手势抢走时不会来 pointerup，捕获一丢就收手，
+    // 否则 drag 残留，面板会一直跟着之后的手指走
+    head.addEventListener('lostpointercapture', onHeadUp);
 
     panel.querySelector('#dlc-min').addEventListener('click', closePanel);
     panel.querySelector('#dlc-close').addEventListener('click', closePanel);

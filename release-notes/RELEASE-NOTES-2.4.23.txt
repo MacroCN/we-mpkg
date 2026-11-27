@@ -1,0 +1,31 @@
+we-mpkg 2.4.23
+
+【修复触摸后控件「点完还亮着」】
+
+现象：车机 / 手机上点一下按钮或卡片，手指抬起后控件仍保持高亮、边框发亮，
+像还按着一样，直到点别的地方才恢复。原因是车机 WebView 把触摸合成为鼠标事件：
+
+1. :hover 被「粘住」——触摸没有 mouseleave，之后没有东西把它清掉；
+2. 元素拿到焦点后，焦点环与 :focus 样式一直留在屏幕上；
+3. 缺少 touch-action，按下态有时要等系统再算一次才结束。
+
+改动：
+
+1. hover 只留给真鼠标：所有 :hover 规则包进
+   @media (hover: hover) and (pointer: fine)，触屏不参与。
+   涉及 style.css（ghost 按钮 / 卡片快捷按钮 / 更新提示关闭 / 单选行）、
+   dlcenter.css（下载中心头部与操作按钮、页脚链接）、downloads.css（输出项 / ghost 按钮）。
+2. 触屏改用等价反馈：同样的强调色改成 :active，按下亮、抬起即恢复。
+3. 触摸抬起后释放焦点：app.js / downloads.js 监听 touchend，
+   把非输入控件的 activeElement blur 掉（输入框保留，键盘不受影响）。
+4. 全局 touch-action: manipulation，并把焦点环只留给键盘用户
+   （*:focus:not(:focus-visible) 不画 outline）。
+5. 下载中心拖动面板加了 lostpointercapture 兜底，触摸被系统抢走时立即收手，
+   不会出现面板之后一直跟着手指走。
+
+说明：
+- 跟随指针的壁纸（如 xray 透视笔刷类）松手后笔触停在最后触点，属于壁纸效果本身，
+  不在本次改动范围内。
+- 下载页 / 主界面样式与脚本都带了版本戳，升级后不会再吃到旧缓存。
+
+版本：versionCode 66 / versionName 2.4.23

@@ -209,6 +209,10 @@
 
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* 触摸屏上不要留「点过就一直亮」的痕迹：touch-action 去掉点击延迟，
+   focus 环只给键盘用户（触摸后元素拿到焦点不该继续套一圈框） */
+html, body { touch-action: manipulation; }
+*:focus:not(:focus-visible) { outline: none; }
 
 html, body {
   margin: 0;
@@ -269,6 +273,8 @@ body { padding-bottom: var(--sab, 0px); }
 .ghost:active { background: var(--hover); }
 
 .primary {
+  display: inline-flex; align-items: center; justify-content: center;
+  line-height: 1;
   background: linear-gradient(160deg, var(--accent), var(--accent-2));
   color: var(--on-accent);
   border: none;
@@ -557,20 +563,22 @@ body.modal-open .batchbar { display: none !important; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; }
 .modal-head h2 { margin: 0; font-size: 17px; }
 .modal-body { padding: 6px 16px 0; }
-.field { display: block; margin: 10px 0; }
-.field span { display: block; font-size: 12px; color: var(--dim); margin-bottom: 6px; }
+/* 表单行统一节奏：标签行 18px 高、输入框 40px 高，任何一项都不会把整行顶歪 */
+.field { display: block; margin: 12px 0 0; }
+.field span { display: block; font-size: 12px; line-height: 18px; color: var(--dim); margin-bottom: 6px; }
 .field input {
   width: 100%;
+  height: 40px;
   background: var(--bg-3);
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 10px 12px;
+  padding: 0 12px;
   color: var(--text); font-size: 14px;
 }
-.row { display: flex; gap: 10px; margin-top: 6px; }
+.row { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .check { display: flex; align-items: center; gap: 8px; margin: 12px 0 0; font-size: 13px; color: var(--text); cursor: pointer; }
 .check input { width: 18px; height: 18px; accent-color: var(--accent); margin: 0; }
-.hint { font-size: 12px; color: var(--dim); margin: 8px 0 0; word-break: break-all; }
+.hint { font-size: 12px; line-height: 1.5; color: var(--dim); margin: 8px 0 0; word-break: break-all; }
 
 /* CDN 节点测速 */
 .cdn-head { align-items: center; justify-content: space-between; }
@@ -753,7 +761,13 @@ button.ghost, a.ghost {
   text-decoration: none;
   font-family: inherit;
 }
-button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+/* hover 只在「真鼠标」上生效：触摸屏点一下之后 :hover 会一直粘着，
+   表现为按钮/卡片一直是高亮态，直到点别的地方才恢复。 */
+@media (hover: hover) and (pointer: fine) {
+  button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+}
+/* 触屏的等价反馈：按下时亮，抬起就恢复 */
+button.ghost:active, a.ghost:active { border-color: var(--accent); }
 button.ghost:disabled { opacity: 0.45; cursor: default; }
 
 /* ---- 卡片多选 / 批量下载 ---- */
@@ -902,7 +916,10 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.qbtn:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .qbtn:hover { border-color: var(--accent); }
+}
+.qbtn:active { border-color: var(--accent); }
 .qbtn:disabled { opacity: 0.45; cursor: default; }
 .qbtn.on { border-color: var(--info); color: var(--info-ink); background: var(--info-bg); }
 .card-quick .dl-btn { border-color: var(--accent-edge); color: var(--accent-ink); }
@@ -917,19 +934,27 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   padding: 4px 16px 0;
   border-bottom: 1px solid var(--line);
 }
+/* 五个 tab 等高：高度写死、文字单行居中。
+   选中态只加粗不加尺寸，英文长词走省略号，不会把某一个 tab 顶高。 */
 .tabs .tab {
   flex: 1 1 0;
-  padding: 9px 4px 8px;
+  min-width: 0;
+  height: 40px;
+  line-height: 38px;          /* 40 - 2px 选中下划线 */
+  padding: 0 8px;
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--dim);
   font-size: 13px;
   font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   cursor: pointer;
 }
 .tabs .tab.on { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
-.tabpane { display: none; padding-top: 4px; }
+.tabpane { display: none; padding-top: 10px; }
 .tabpane.on { display: block; }
 
 /* 关于页的项目信息 */
@@ -997,7 +1022,10 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   background: transparent; color: var(--dim);
   font-size: 18px; line-height: 1; cursor: pointer;
 }
-.update-banner-close:hover { color: var(--text); background: var(--band-close); }
+@media (hover: hover) and (pointer: fine) {
+  .update-banner-close:hover { color: var(--text); background: var(--band-close); }
+}
+.update-banner-close:active { color: var(--text); background: var(--band-close); }
 .about-version { font-weight: 600; color: var(--accent); }
 
 /* ---------- 深浅色切换 ---------- */
@@ -1005,12 +1033,17 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
 .radio-group { display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px; }
 .radio-row {
   display: flex; align-items: center; gap: 10px;
+  min-height: 44px;
   padding: 10px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--bg-2);
   font-size: 14px;
+  line-height: 1.3;
   cursor: pointer;
 }
-.radio-row:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .radio-row:hover { border-color: var(--accent); }
+}
+.radio-row:active { border-color: var(--accent); }
 .radio-row input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }

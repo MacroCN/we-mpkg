@@ -59,7 +59,11 @@
   font-family: inherit;
   cursor: pointer;
 }
-.dlc-head button:hover { border-color: var(--accent); }
+/* hover 只在真鼠标上生效，触屏改按下反馈（否则点过的按钮会一直高亮） */
+@media (hover: hover) and (pointer: fine) {
+  .dlc-head button:hover { border-color: var(--accent); }
+}
+.dlc-head button:active { border-color: var(--accent); }
 .dlc-head button:disabled { opacity: 0.4; cursor: default; }
 .dlc-head .dlc-x { font-size: 15px; line-height: 1; }
 
@@ -144,7 +148,10 @@
   text-decoration: none;
   cursor: pointer;
 }
-.dlc-acts button:hover, .dlc-acts a:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .dlc-acts button:hover, .dlc-acts a:hover { border-color: var(--accent); }
+}
+.dlc-acts button:active, .dlc-acts a:active { border-color: var(--accent); }
 .dlc-acts button:disabled { opacity: 0.45; cursor: default; }
 .dlc-acts a.primary-act,
 .dlc-acts button.primary-act {
@@ -186,7 +193,10 @@
   display: flex; justify-content: space-between; gap: 8px;
 }
 .dlc-foot a { color: var(--dim); text-decoration: none; }
-.dlc-foot a:hover { color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .dlc-foot a:hover { color: var(--accent); }
+}
+.dlc-foot a:active { color: var(--accent); }
 
 /* 窄屏不需要额外规则：宽度已由 min(420px, calc(100vw - 24px)) 自适应，
    这里只保证初始位置不贴边（拖动后仍由 JS 统一按 left/top 摆放） */

@@ -345,12 +345,9 @@ pub struct Converted {
 
 pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
     let tex = parse(buf)?;
-    // 直通图里的 PNG / JPEG 都能在 Rust 里解，其余（GIF、MP4 等）交给 JS 侧
-    let passthrough_png = tex.image_format == FREE_IMAGE_PNG;
-    let passthrough_jpeg = tex.image_format == FREE_IMAGE_JPEG;
-    if tex.image_format >= 0 && !passthrough_png && !passthrough_jpeg {
-        return Err("passthrough-unsupported".into());
-    }
+    // 直通图（PNG / JPEG / GIF 帧都是 PNG/JPEG 载荷）按载荷 magic 解码，
+    // 认不出的图种（BMP 等）交给 JS 侧
+    let passthrough = tex.image_format >= 0;
     if tex.images.is_empty() {
         return Err("没有可写入的图像".into());
     }
@@ -364,14 +361,26 @@ pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
         let mip = mips.first().ok_or("帧没有 mip")?;
         let logical_w = tex.image_w as usize;
         let logical_h = tex.image_h as usize;
-        let mut pixels = if passthrough_png || passthrough_jpeg {
-            let payload = &buf[mip.start..mip.start + mip.len];
-            let (w, h, data) = if passthrough_png {
+        let mut pixels = if passthrough {
+            let raw = &buf[mip.start..mip.start + mip.len];
+            let owned;
+            let payload: &[u8] = if mip.lz4 == 1 {
+                if mip.decompressed == 0 {
+                    return Err("直通图载荷被 LZ4 压缩但缺少解压长度".into());
+                }
+                owned = crate::lz4::decompress(raw, mip.decompressed)?;
+                &owned
+            } else {
+                raw
+            };
+            let (w, h, data) = if payload.len() >= 8 && payload[..4] == [0x89, 0x50, 0x4E, 0x47] {
                 let p = crate::png::decode(payload, 512 * 1024 * 1024)?;
                 (p.width, p.height, p.data)
-            } else {
+            } else if payload.len() >= 3 && payload[0] == 0xFF && payload[1] == 0xD8 {
                 let j = crate::jpeg::decode(payload)?;
                 (j.width, j.height, j.data)
+            } else {
+                return Err("passthrough-unsupported（未知图种）".into());
             };
             if w != mip.width || h != mip.height {
                 return Err(format!(
