@@ -886,11 +886,12 @@ function convertTexBuffer(buf, opts = {}) {
 
   // 非直通图（DXT / RGBA8 / R8 / RG88）以及直通 PNG，整包交给 Rust：
   // 容器读写、解码、裁剪、缩放、LZ4 都在一个进程里做完，不再每张图拆成多次调用。
-  // 动图（GIF）帧表由 JS 处理，这类继续走下面的原实现。
+  // 动图（GIF）连帧表和尾巴一起进 Rust：帧载荷都是 PNG/JPEG，尺寸不变、不缩放。
   const rustPacket = tex.container.imageFormat < 0
     || tex.container.imageFormat === FREE_IMAGE.PNG
-    || tex.container.imageFormat === FREE_IMAGE.JPEG;
-  if (rustPacket && !animated && opts.scale === undefined && rusttex.enabled()) {
+    || tex.container.imageFormat === FREE_IMAGE.JPEG
+    || (animated && tex.container.imageFormat === FREE_IMAGE.GIF);
+  if (rustPacket && opts.scale === undefined && rusttex.enabled()) {
     const fast = rusttex.texConvert(buf, scale, animated);
     verifyMobileTex(fast.bytes, {
       width: fast.width,

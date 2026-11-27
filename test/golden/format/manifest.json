@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T23:08:40.092Z",
+  "generatedAt": "2026-11-27T23:31:09.729Z",
   "generator": "tools/make-golden-format.js",
   "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
   "cases": [
@@ -182,6 +182,16 @@
       "inputBytes": 839,
       "outputBytes": 4216,
       "outputSha256": "2b2bf65915f1b1797d25802bce009d9687f4da6808029b51fa185c5c8d60d3b8",
+      "preset": "default"
+    },
+    {
+      "name": "tex-convert-gif-animated-8x8",
+      "kind": "tex-convert",
+      "input": "tex-convert-gif-animated-8x8/in.bin",
+      "output": "tex-convert-gif-animated-8x8/out.bin",
+      "inputBytes": 785,
+      "outputBytes": 633,
+      "outputSha256": "43f4c3f2df0d2d5a4474121ea70ca5a350f27fe028b73500d907a865ffb42f62",
       "preset": "default"
     }
   ]

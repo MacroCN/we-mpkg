@@ -56,7 +56,7 @@ function buildTex(opts) {
     format = tex.TEX_FORMAT.DXT1, flags = 0,
     texW = 4, texH = 4, imgW = texW, imgH = texH,
     imageFormat = -1, videoMp4 = 0, container = 'TEXB0004',
-    images = [],
+    images = [], tail = null,
   } = opts;
   const parts = [Buffer.from('TEXV0005\0'), Buffer.from('TEXI0001\0')];
   const head = Buffer.alloc(28);
@@ -95,6 +95,7 @@ function buildTex(opts) {
       parts.push(rec, len, m.bytes);
     }
   }
+  if (tail) parts.push(tail);
   return Buffer.concat(parts);
 }
 
@@ -311,6 +312,23 @@ const texJpegProg = buildTex({
 });
 addCase('tex-convert-jpeg-progressive-48x40', 'tex-convert', texJpegProg,
   (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg渐进.tex' }).bytes,
+  { preset: 'default' });
+
+
+// ---- 动图（GIF）纹理：帧表 + 尾巴一起进 Rust，尺寸不缩 ----
+const gifA = makePng({ width: 8, height: 8, colorType: 6, bitDepth: 8, rows: pngRows(rnd(8 * 8 * 4, 71), 8, 8, 4, 8, [0]) });
+const gifB = makePng({ width: 8, height: 8, colorType: 6, bitDepth: 8, rows: pngRows(rnd(8 * 8 * 4, 73), 8, 8, 4, 8, [1]) });
+const texGif = buildTex({
+  format: tex.TEX_FORMAT.RGBA8888, flags: tex.TEX_FLAGS.IsGif,
+  texW: 8, texH: 8, imageFormat: tex.FREE_IMAGE.GIF,
+  images: [
+    { mips: [{ w: 8, h: 8, bytes: gifA }] },
+    { mips: [{ w: 8, h: 8, bytes: gifB }] },
+  ],
+  tail: Buffer.from([9, 8, 7, 6, 5, 4]),
+});
+addCase('tex-convert-gif-animated-8x8', 'tex-convert', texGif,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/动图.tex' }).bytes,
   { preset: 'default' });
 
 // ---- 写盘 ----

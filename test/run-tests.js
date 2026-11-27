@@ -2679,7 +2679,7 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
       const expected = fs.readFileSync(path.join(dir, c.output));
       assert.ok(bytes.equals(expected), `${name}: JS 路径输出与黄金样本不一致`);
     }
-    assert.ok(manifest.cases.length >= 17, '黄金样本集至少要覆盖 17 个格式用例');
+    assert.ok(manifest.cases.length >= 18, '黄金样本集至少要覆盖 17 个格式用例');
   } finally {
     if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
     rt._reset();

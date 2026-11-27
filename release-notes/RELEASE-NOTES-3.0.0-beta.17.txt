@@ -1,0 +1,12 @@
+we-mpkg 3.0.0-beta.17
+
+合入主线 2.4.23 / 2.4.24 与 PR #2/#3，并把动图（GIF）纹理整包接进 Rust。
+
+- 合并冲突只集中在版本号和 assets 生成物：版本号保留 3.0 侧，assets 按合并后源码重打。
+- 主线带来的改动：触屏按下反馈（hover 只给真鼠标）、设置页 tab 与表单控件高度对齐。
+- 直通图解码改为按载荷 magic 识别（PNG / JPEG），GIF 动图的每一帧都是 PNG/JPEG
+  载荷，因此帧表 + 尾巴可以整包进 tex-convert：一只动图从「每帧一次进程」变成一次。
+- 直通帧若被 LZ4 压缩，Rust 侧一并解压，不再依赖 JS 的 lz4.decompress。
+- 黄金样本新增「动图 2 帧 + 尾巴」一例（共 18 例），Rust/JS 输出逐字节一致。
+
+版本 3.0.0-beta.17 / versionCode 76，不发布 Release，APK 见 Actions artifact。
