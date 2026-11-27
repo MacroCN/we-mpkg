@@ -137,8 +137,23 @@ function info() {
 
 let tmpRoot = null;
 function tmpDir() {
-  if (!tmpRoot) tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wempkg-rusttex-'));
-  return tmpRoot;
+  if (tmpRoot) return tmpRoot;
+  // 安卓上 os.tmpdir() 是 /tmp（不存在且不可写）；JNI 设置 TMPDIR 的那版二进制又没打进去，
+  // 所以按「环境变量 → 系统临时目录 → 项目 .cache」逐个试，都失败就放弃（回落 JS）。
+  const bases = [
+    process.env.TMPDIR, process.env.TEMP, process.env.TMP,
+    os.tmpdir(),
+    path.join(__dirname, '..', '.cache'),
+    process.cwd() ? path.join(process.cwd(), '.cache') : null,
+  ];
+  for (const base of bases) {
+    if (!base) continue;
+    try {
+      tmpRoot = fs.mkdtempSync(path.join(base, 'wempkg-rusttex-'));
+      return tmpRoot;
+    } catch { /* 换下一个 */ }
+  }
+  return null;
 }
 
 function run(bin, args, timeout = 60000) {
@@ -155,7 +170,9 @@ function run(bin, args, timeout = 60000) {
 }
 
 function scratch(name) {
-  return path.join(tmpDir(), `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
+  const root = tmpDir();
+  if (!root) return null;
+  return path.join(root, `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
 }
 
 /** DXT 块解码 -> RGBA8；失败返回 null（调用方回落 JS） */
@@ -164,6 +181,7 @@ function dxtDecode(buf, fmtName, width, height) {
   if (!bin) return null;
   const inFile = scratch('dxt.bin');
   const outFile = scratch('dxt.rgba');
+  if (!inFile || !outFile) return null;
   try {
     fs.writeFileSync(inFile, buf);
     run(bin, ['dxt-decode', inFile, outFile, '--format', fmtName, '--width', String(width), '--height', String(height)]);
@@ -182,6 +200,7 @@ function lz4Compress(buf) {
   if (!bin) return null;
   const inFile = scratch('lz4-in.bin');
   const outFile = scratch('lz4-out.lz4');
+  if (!inFile || !outFile) return null;
   try {
     fs.writeFileSync(inFile, buf);
     run(bin, ['lz4-compress', inFile, outFile]);
@@ -200,6 +219,7 @@ function lz4Decompress(buf, expectedSize) {
   if (!bin) return null;
   const inFile = scratch('lz4-c.bin');
   const outFile = scratch('lz4-d.bin');
+  if (!inFile || !outFile) return null;
   try {
     fs.writeFileSync(inFile, buf);
     run(bin, ['lz4-decompress', inFile, outFile, '--size', String(expectedSize)]);
@@ -222,6 +242,7 @@ function texConvert(buf, scale, framesTail) {
   if (!bin) return null;
   const inFile = scratch('tex-in.tex');
   const outFile = scratch('tex-out.tex');
+  if (!inFile || !outFile) return null;
   try {
     fs.writeFileSync(inFile, buf);
     const r = run(bin, ['tex-convert', inFile, outFile,

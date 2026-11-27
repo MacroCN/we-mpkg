@@ -1,0 +1,16 @@
+we-mpkg 3.0.0-beta.10
+
+beta.9 真机已经找到并成功执行了 librusttex.so：
+
+  纹理加速引擎: Rust（/data/app/.../lib/arm64/librusttex.so v3.0.0）
+
+但所有纹理转换都报 EACCES: mkdtemp '/tmp/wempkg-rusttex-XXXXXX'：安卓上 os.tmpdir() 是 /tmp，
+既不存在也不可写；本来 JNI 会设 TMPDIR，可那版预编译 JNI 不包含这个环境变量。
+
+改动：
+- 临时目录改为逐个试：TMPDIR / TEMP / TMP → os.tmpdir() → 项目 .cache → cwd/.cache，
+  第一个能 mkdtemp 的胜出；
+- 全部不可写时返回 null，静默回落 JS，不再把 EACCES 抛到纹理转换层；
+- 顺手把 dxt/lz4/tex 三条路径都补了空目录早退。
+
+versionCode 69。本版不发布 Release，APK 在 Actions 的 android artifact 里。
