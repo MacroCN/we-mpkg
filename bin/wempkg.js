@@ -398,6 +398,7 @@ function packOptions(args) {
   if (args['keep-audio']) o.preserveAudio = true;
   if (args['drop-audio']) o.autoKeepAudioReactive = false;
   if (args['drop-audio-layers']) o.dropAudioLayers = true;
+  if (args['flatten-visible']) o.flattenAll = true;
   if (args.resume) o.resume = true;
   if (typeof args['video-magic'] === 'string') o.videoMagic = args['video-magic'];
   const mb = Number(args['max-texture-mb']);
@@ -465,6 +466,7 @@ async function main() {
             --keep-audio   保留壁纸自带音频（默认：检测到音频交互才保留）
             --drop-audio   强制剥离音频（即使检测到音频交互）
             --drop-audio-layers  强制移除音频频谱可视化层（默认修复后保留）
+            --flatten-visible  把所有图层可见性固化成当前值（兼容模式；默认保留壁纸的选项绑定）
             --resume       沿用上次工作目录与断点，中断后接着转
             --max-texture-mb N  单张纹理解码内存预算（默认 192）
   inspect  查看目录或容器的内部结构

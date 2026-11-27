@@ -884,6 +884,60 @@ test('叠加层：alpha 字符串归一为数字，孤儿父级断开', () => {
   assert.deepStrictEqual(r.repaired.map((x) => x.action).sort(), ['alpha-numeric', 'orphan-parent-dropped']);
 });
 
+test('可见性：绑定用户属性的图层保留绑定，元素选项不再失效', () => {
+  const dir = tmp('visBind');
+  fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({
+    general: { properties: { snake: { type: 'bool', value: true }, time: { type: 'bool', value: true } } },
+  }));
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 1, name: '蛇', visible: { user: 'snake', value: true } },
+      { id: 2, name: '时间', visible: { user: 'time', value: true } },
+      { id: 3, name: '常显', visible: true },
+    ],
+  }));
+  const changed = packer.flattenSceneVisibility(dir, {});
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(changed, 0, '选项绑定不该被改写成布尔');
+  assert.deepStrictEqual(scene.objects[0].visible, { user: 'snake', value: true });
+  assert.deepStrictEqual(scene.objects[1].visible, { user: 'time', value: true });
+  assert.strictEqual(scene.objects[2].visible, true);
+});
+
+test('可见性：条件绑定与属性缺失仍固化，避免双主题图层叠加', () => {
+  const dir = tmp('visFlatten');
+  fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({
+    general: { properties: { theme: { type: 'combo', value: 'dark' } } },
+  }));
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 1, name: '命中条件', visible: { user: { name: 'theme', condition: 'dark' }, value: true } },
+      { id: 2, name: '不命中条件', visible: { user: { name: 'theme', condition: 'light' }, value: true } },
+      { id: 3, name: '属性不存在', visible: { user: 'ghost', value: true } },
+    ],
+  }));
+  const changed = packer.flattenSceneVisibility(dir, {});
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(changed, 3);
+  assert.strictEqual(scene.objects[0].visible, true);
+  assert.strictEqual(scene.objects[1].visible, false, '不命中的主题层要隐藏');
+  assert.strictEqual(scene.objects[2].visible, true);
+});
+
+test('可见性：flattenAll 兼容模式把绑定全部固化', () => {
+  const dir = tmp('visFlattenAll');
+  fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({
+    general: { properties: { snake: { type: 'bool', value: false } } },
+  }));
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [{ id: 1, name: '蛇', visible: { user: 'snake', value: true } }],
+  }));
+  const changed = packer.flattenSceneVisibility(dir, { flattenAll: true });
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(changed, 1);
+  assert.strictEqual(scene.objects[0].visible, false, '按属性当前值求值');
+});
+
 test('--drop-audio-layers 可强制移除音频频谱层', () => {
   const dir = makeLayerProject('forceDrop', 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
   fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({

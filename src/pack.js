@@ -538,11 +538,20 @@ function compensateAutosizeScale(projectDir, info, outcomes) {
 }
 
 /**
- * 把场景里「对象形式」的 visible 固化成布尔值。
- * PC 引擎能按 {user, value} 在运行时求值；手机端对对象形式支持不好，常把整个对象当成真，
- * 结果本应隐藏的主题/图层全部叠加显示（例如双主题模式下两套图层同时出现）。
- * 这里按当前属性值求值一次，保证导入后的画面和作者当前预设一致。
- * 带 script 的动态 visible 保持原样。
+ * 处理场景里「对象形式」的 visible。
+ *
+ * 编辑器里勾选「绑定用户属性」生成的写法是 {user:"选项名", value:true}，这是标准形式：
+ * 手机端和 PC 用同一套属性系统，保留它，壁纸设置里的「元素选项」才能实时切换图层。
+ * 一刀切固化成布尔会让选项彻底失效（开关拨了画面不动）。
+ *
+ * 只有下面几种手机端拿不准的写法才按当前属性值固化：
+ *   - 条件绑定 {user:{name, condition}, value}：条件表达式在移动端解析不稳定；
+ *   - 绑定的属性在 project.json 里不存在，或者不是 bool：引擎取不到值，只能按 value 兜底；
+ *   - 没有 user 的裸对象 {value:...}。
+ * 这些以前会造成「双主题两套图层同时显示」，固化是兜底手段。
+ * 带 script 的动态 visible 一律保持原样。
+ *
+ * opts.flattenAll = true 时退回旧行为（全部固化），给个别壁纸兜底用。
  */
 function flattenSceneVisibility(projectDir, opts = {}) {
   const onLog = opts.onLog || (() => {});
@@ -555,8 +564,11 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     props = (project.general && project.general.properties) || {};
   } catch { /* 没有 project.json 就只按 value 处理 */ }
 
+  const propOf = (name) => (Object.prototype.hasOwnProperty.call(props, name) ? props[name] : undefined);
+  // 只有 bool 属性才能当可见性开关；type 缺省时按当前值推断
+  const isBoolProp = (p) => !!p && (p.type === 'bool' || (!p.type && typeof p.value === 'boolean'));
   const propValue = (name) => {
-    const p = props[name];
+    const p = propOf(name);
     return p && Object.prototype.hasOwnProperty.call(p, 'value') ? p.value : undefined;
   };
   const condMatches = (cond, val) => {
@@ -569,7 +581,7 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     }
     return false;
   };
-  const resolve = (v) => {
+  const evalVisible = (v) => {
     if (typeof v === 'boolean') return v;
     if (!v || typeof v !== 'object' || v.script) return undefined;
     if (typeof v.value !== 'boolean') return undefined;
@@ -587,15 +599,32 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     return v.value;
   };
 
+  /**
+   * 判断这条 visible 要不要保留用户属性绑定。
+   * 单属性布尔绑定（编辑器 UI 生成的形式）保留，其余走固化求值。
+   */
+  const keepBinding = (v) => {
+    if (opts.flattenAll) return false;
+    if (!v || typeof v !== 'object' || v.script) return false;
+    if (typeof v.user === 'string') return isBoolProp(propOf(v.user));
+    return false;
+  };
+
+  let keptBindings = 0;
   let changed = 0;
   let hidden = 0;
   const visit = (obj) => {
     if (!obj || typeof obj !== 'object') return;
     if (Object.prototype.hasOwnProperty.call(obj, 'visible')) {
-      const b = resolve(obj.visible);
-      if (typeof b === 'boolean') {
-        if (!b && obj.visible !== false) hidden++;
-        if (b !== obj.visible) { obj.visible = b; changed++; }
+      const v = obj.visible;
+      if (keepBinding(v)) {
+        keptBindings++;
+      } else {
+        const b = evalVisible(v);
+        if (typeof b === 'boolean') {
+          if (!b && v !== false) hidden++;
+          if (b !== v) { obj.visible = b; changed++; }
+        }
       }
     }
     for (const arr of ['objects', 'subobjects']) {
@@ -603,10 +632,9 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     }
   };
   visit(scene);
-  if (changed) {
-    fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
-    onLog(`  已固化 ${changed} 个图层可见性（其中隐藏 ${hidden} 个，避免双主题图层叠加）`);
-  }
+  if (changed) fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
+  if (keptBindings) onLog(`  保留 ${keptBindings} 个图层可见性绑定（壁纸选项可在手机端切换）`);
+  if (changed) onLog(`  已固化 ${changed} 个图层可见性（其中隐藏 ${hidden} 个，避免双主题图层叠加）`);
   return changed;
 }
 
@@ -656,7 +684,7 @@ function adaptForMobile(projectDir, opts = {}) {
   const dropped = repairSceneCompat(projectDir, { onLog, dropAudioLayers: opts.dropAudioLayers });
   warnings.push(...dropped.warnings);
 
-  flattenSceneVisibility(projectDir, { onLog });
+  flattenSceneVisibility(projectDir, { onLog, flattenAll: !!opts.flattenAll });
   const autoAdjusted = compensateAutosizeScale(projectDir, autosizeInfo, texRes.outcomes);
   if (autoAdjusted) onLog(`  已补偿 ${autoAdjusted} 个 autosize 图层的缩放，保持原始布局`);
 
@@ -851,6 +879,7 @@ async function packFromItemDir(itemDir, opts = {}) {
     textureTotal,
     onProgress,
     dropAudioLayers: !!opts.dropAudioLayers,
+    flattenAll: !!opts.flattenAll,
   });
   warnings.push(...adapted.warnings);
   if (!checkpoint.flush()) warnings.push('转换断点写入失败，本次结果不能续转（不影响打包）');
@@ -977,7 +1006,7 @@ async function packFromPath(inputPath, opts = {}) {
   const checkpoint = new convertplan.Checkpoint(checkpointFile);
   checkpoint.bind(`${preset.id}|v3|audio=${opts.preserveAudio ? 1 : 0}`);
   onLog('纹理/着色器适配（手机端）...');
-  const adapted = adaptForMobile(projectDir, { onLog, preset, maxRgbaBytes: opts.maxRgbaBytes, checkpoint });
+  const adapted = adaptForMobile(projectDir, { onLog, preset, maxRgbaBytes: opts.maxRgbaBytes, checkpoint, flattenAll: !!opts.flattenAll });
   warnings.push(...adapted.warnings);
   checkpoint.flush();
   if (opts.reference) {
@@ -1040,5 +1069,6 @@ module.exports = {
   packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
   detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo,
   stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum, sceneHasAudioReactive,
+  flattenSceneVisibility,
 };
 
