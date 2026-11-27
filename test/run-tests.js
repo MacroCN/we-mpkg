@@ -2578,6 +2578,14 @@ test('深浅色：三态切换、跟随系统、颜色全部走语义令牌', ()
   // 安卓原生侧要接主题
   const java = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'java', 'com', 'wempkg', 'app', 'MainActivity.java'), 'utf8');
   assert.ok(java.includes('public void setTheme(final boolean dark)'), 'MainActivity 要提供 setTheme 桥');
+  // 「跟随系统」：安卓主题固定，WebView 的 prefers-color-scheme 恒为浅色，必须由原生报 uiMode
+  assert.ok(java.includes('public boolean isNightMode()'), 'MainActivity 要提供 isNightMode 桥');
+  assert.ok(java.includes('UI_MODE_NIGHT_MASK'), '要读系统 uiMode');
+  assert.ok(java.includes('onConfigurationChanged'), '系统切深浅色要通知网页');
+  assert.ok(js.includes('window.Android.isNightMode'), 'app.js 的跟随系统要优先问原生');
+  assert.ok(html.includes('Android.isNightMode'), '首屏引导脚本也要问原生，否则加载瞬间会闪');
+  const manifest = fs.readFileSync(path.join(root, 'android', 'app', 'src', 'main', 'AndroidManifest.xml'), 'utf8');
+  assert.ok(/configChanges="[^"]*uiMode/.test(manifest), 'Activity 要接 uiMode，切深浅色时不重建 WebView');
 });
 
 test('关于页显示当前版本，启动时自动检查更新并提示', () => {

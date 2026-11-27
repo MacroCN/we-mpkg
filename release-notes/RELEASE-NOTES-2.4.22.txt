@@ -1,0 +1,25 @@
+we-mpkg 2.4.22
+
+【修复「颜色跟随系统」不生效】
+
+原因：应用的 window 主题是固定的 Theme.Material.Light.NoActionBar，
+WebView 里 prefers-color-scheme 因此恒为「浅色」——不管系统开没开夜间模式，
+matchMedia 永远返回 false。网页唯一的判断依据失效，跟随系统就等于永远浅色。
+
+改动：
+1. 原生把真实系统状态报给网页：MainActivity 新增 isNightMode() JS 桥，
+   读 Resources 的 uiMode（NIGHT_MASK），不受固定主题影响。
+2. 网页优先问原生：app.js 的 systemPrefersDark() 先调 Android.isNightMode()，
+   没有桥（桌面浏览器）才回落 matchMedia；index.html / downloads.html 的首屏引导
+   脚本同样先问原生，避免加载瞬间闪一下反色。
+3. 系统在线切换深浅色时实时生效：manifest 的 configChanges 加 uiMode，
+   Activity 不重建；onConfigurationChanged 里主动回调 window.WE_APP.onSystemThemeChange，
+   auto 模式下立即重算配色（手动 light/dark 不受影响）。
+4. 冷启动底色跟随上次实际主题：setTheme 桥把明暗记进 SharedPreferences，
+   onCreate 里据此设置 window 背景，深色用户不会再看到浅色闪屏。
+
+说明：
+- 设置里的三档含义不变：跟随系统 / 始终浅色 / 始终深色。
+- 车机若把「系统夜间」设成固定浅色，跟随系统就表现为浅色，这是系统值，不是 App 的问题。
+
+版本：versionCode 65 / versionName 2.4.22

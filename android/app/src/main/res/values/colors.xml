@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#0B1220</color>
+    <!-- 启动窗口底色：主题固定成 Light，资源层跟不了系统；
+         冷启动时由 MainActivity 按上次网页实际用的明暗覆盖（见 onCreate / setTheme 桥）。 -->
+    <color name="window_bg">#0F1720</color>
 </resources>
