@@ -2096,6 +2096,12 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(/flex:\s*1 1 0/.test(tab) && /min-width:\s*0/.test(tab), 'tab 要能均分且允许收缩');
     assert.ok(!/padding:\s*9px/.test(tab), '不要再用上下 padding 撑高度');
 
+    // 1b) 选中态不许改字重：字重一变文字宽度就变，居中后整行会左右挪，点 tab 像跳一下
+    const tabOn = rule('.tabs .tab.on');
+    assert.ok(/font-weight:\s*500/.test(tab), 'tab 字重要固定，别让选中态切换字重');
+    assert.ok(!/font-weight/.test(tabOn), '选中态不能改 font-weight');
+    assert.ok(/text-shadow/.test(tabOn), '加粗观感要用 text-shadow 模拟，不占布局');
+
     // 2) 表单标签行与输入框高度固定，避免不同字段高度不一致
     assert.ok(/line-height:\s*18px/.test(rule('.field span')), '字段标签要做成固定 18px 行');
     const input = rule('.field input');
