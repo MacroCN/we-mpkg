@@ -1,0 +1,93 @@
+{
+  "generatedAt": "2026-11-27T06:59:49.087Z",
+  "generator": "tools/make-golden-format.js",
+  "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
+  "cases": [
+    {
+      "name": "dxt1-decode-8x8",
+      "kind": "dxt-decode",
+      "input": "dxt1-decode-8x8/in.bin",
+      "output": "dxt1-decode-8x8/out.bin",
+      "inputBytes": 32,
+      "outputBytes": 256,
+      "outputSha256": "dfbe4759d6cbb15abe97892addad5e118f2183578538375984d6c246fb257ab1",
+      "format": "dxt1",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "name": "dxt3-decode-8x8",
+      "kind": "dxt-decode",
+      "input": "dxt3-decode-8x8/in.bin",
+      "output": "dxt3-decode-8x8/out.bin",
+      "inputBytes": 64,
+      "outputBytes": 256,
+      "outputSha256": "bc7cee9257d472db4f224e10ef3be1243158af09ce2531ecef5ae7490e15d762",
+      "format": "dxt3",
+      "width": 8,
+      "height": 8
+    },
+    {
+      "name": "dxt5-decode-13x7",
+      "kind": "dxt-decode",
+      "input": "dxt5-decode-13x7/in.bin",
+      "output": "dxt5-decode-13x7/out.bin",
+      "inputBytes": 128,
+      "outputBytes": 364,
+      "outputSha256": "0d458a89068f42cbf7da1dbcdd9375aa852b94b49e735426cf4cba8f716fb544",
+      "format": "dxt5",
+      "width": 13,
+      "height": 7
+    },
+    {
+      "name": "lz4-compress-4k",
+      "kind": "lz4-compress",
+      "input": "lz4-compress-4k/in.bin",
+      "output": "lz4-compress-4k/out.bin",
+      "inputBytes": 4096,
+      "outputBytes": 2635,
+      "outputSha256": "9c82e6a0d06051be7e86ed66aa3c9016d88a028253df17d570cac06684161f62"
+    },
+    {
+      "name": "lz4-decompress-4k",
+      "kind": "lz4-decompress",
+      "input": "lz4-decompress-4k/in.bin",
+      "output": "lz4-decompress-4k/out.bin",
+      "inputBytes": 2635,
+      "outputBytes": 4096,
+      "outputSha256": "df39934bc070c1a4c175cf6ef779c9849ea0df77a38746b4667f21df7ea834e5",
+      "expectedSize": 4096,
+      "expectedSha256": "df39934bc070c1a4c175cf6ef779c9849ea0df77a38746b4667f21df7ea834e5"
+    },
+    {
+      "name": "tex-convert-dxt1-4x4",
+      "kind": "tex-convert",
+      "input": "tex-convert-dxt1-4x4/in.bin",
+      "output": "tex-convert-dxt1-4x4/out.bin",
+      "inputBytes": 99,
+      "outputBytes": 138,
+      "outputSha256": "f7bd95453dfa3fda2be941f2610fc95a7ba0cbb553e374991f187ab21ccf3afa",
+      "preset": "default"
+    },
+    {
+      "name": "tex-convert-dxt1-32x32",
+      "kind": "tex-convert",
+      "input": "tex-convert-dxt1-32x32/in.bin",
+      "output": "tex-convert-dxt1-32x32/out.bin",
+      "inputBytes": 603,
+      "outputBytes": 1095,
+      "outputSha256": "1572bb8ab2c3486daa87538180e8def1626ec7409e43358b319ae13e7f21b880",
+      "preset": "balanced"
+    },
+    {
+      "name": "tex-keep-mobile-8x8",
+      "kind": "tex-convert",
+      "input": "tex-keep-mobile-8x8/in.bin",
+      "output": "tex-keep-mobile-8x8/out.bin",
+      "inputBytes": 347,
+      "outputBytes": 347,
+      "outputSha256": "8aa31c9ed234f7cacdbec09a689d83a8c2f87e144fb3747f3d54c4e379a237a0",
+      "expectUnchanged": true
+    }
+  ]
+}

@@ -1,0 +1,174 @@
+/*
+ * SPDX-License-Identifier: MIT
+ * Copyright (c) 2026 MacroCN
+ */
+'use strict';
+/**
+ * rust-tex CLI 桥（阶段 1：DXT 解码 + LZ4 块编解码）。
+ *
+ * 调用方式完全对齐 ffmpeg：execFileSync + 参数数组，输入输出走临时文件，
+ * 结果从 stdout 的 JSON 读。找不到可执行文件、版本不对、或执行失败时，
+ * 调用方一律回落到纯 JS 实现，属于零风险灰度。
+ *
+ * 探测顺序（第一个能跑通的胜出）：
+ *   1. 环境变量 WE_RUST_TEX（显式指定）
+ *   2. 仓库 bin/rust-tex[.exe]（打包时随应用附带）
+ *   3. rust/target/release/rust-tex[.exe]（本地 cargo build 产物）
+ *   4. .cache/toolchain/bin/rust-tex[.exe]
+ *   5. PATH 里的 rust-tex
+ */
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { execFileSync } = require('child_process');
+
+const EXE = process.platform === 'win32' ? 'rust-tex.exe' : 'rust-tex';
+const MIN_VERSION = 3;
+
+let probe; // undefined = 未探测；null = 没有；string = 路径
+
+function candidates() {
+  const out = [];
+  const env = process.env.WE_RUST_TEX;
+  if (env) out.push(env);
+  out.push(path.join(__dirname, '..', 'bin', EXE));
+  out.push(path.join(__dirname, '..', 'rust', 'tex-cli', 'target', 'release', EXE));
+  out.push(path.join(__dirname, '..', '.cache', 'toolchain', 'bin', EXE));
+  if (process.env.PATH) {
+    const sep = process.platform === 'win32' ? ';' : ':';
+    for (const dir of process.env.PATH.split(sep)) {
+      if (dir) out.push(path.join(dir, EXE));
+    }
+  }
+  // 安卓：可执行文件必须以 .so 形态随 APK 装进 nativeLibraryDir（应用数据目录禁止 exec），
+  // 该目录在进程的 LD_LIBRARY_PATH 里，直接扫一遍。
+  if (process.platform === 'android' || process.env.LD_LIBRARY_PATH) {
+    for (const dir of String(process.env.LD_LIBRARY_PATH || '').split(':')) {
+      if (!dir) continue;
+      out.push(path.join(dir, 'librusttex.so'));
+      out.push(path.join(dir, EXE));
+    }
+  }
+  return out;
+}
+
+function usable(file) {
+  try {
+    if (!fs.statSync(file).isFile()) return false;
+    // 安卓解包出来的文件没有执行位，补一下（失败就算了，exec 会报错回落 JS）
+    if (process.platform !== 'win32') { try { fs.chmodSync(file, 0o755); } catch { /* ignore */ } }
+    const out = execFileSync(file, ['version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
+    const info = JSON.parse(out.trim().split('\n').pop());
+    return info && info.ok === true && Number(info.version.split('.')[0]) >= MIN_VERSION;
+  } catch {
+    return false;
+  }
+}
+
+/** 返回可用的 rust-tex 路径，没有就 null（结果缓存） */
+function locate() {
+  if (probe !== undefined) return probe;
+  probe = null;
+  if (process.env.WE_TEX_RUST === 'off') return probe;
+  for (const file of candidates()) {
+    if (usable(file)) { probe = file; break; }
+  }
+  return probe;
+}
+
+function available() {
+  return locate() !== null;
+}
+
+let tmpRoot = null;
+function tmpDir() {
+  if (!tmpRoot) tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'wempkg-rusttex-'));
+  return tmpRoot;
+}
+
+function run(bin, args, timeout = 60000) {
+  const out = execFileSync(bin, args, {
+    encoding: 'utf8',
+    timeout,
+    maxBuffer: 1 << 20,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const line = out.trim().split('\n').pop();
+  const info = JSON.parse(line);
+  if (!info.ok) throw new Error(info.error || 'rust-tex 失败');
+  return info;
+}
+
+function scratch(name) {
+  return path.join(tmpDir(), `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
+}
+
+/** DXT 块解码 -> RGBA8；失败返回 null（调用方回落 JS） */
+function dxtDecode(buf, fmtName, width, height) {
+  const bin = locate();
+  if (!bin) return null;
+  const inFile = scratch('dxt.bin');
+  const outFile = scratch('dxt.rgba');
+  try {
+    fs.writeFileSync(inFile, buf);
+    run(bin, ['dxt-decode', inFile, outFile, '--format', fmtName, '--width', String(width), '--height', String(height)]);
+    return fs.readFileSync(outFile);
+  } catch {
+    return null;
+  } finally {
+    for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+}
+
+function lz4Compress(buf) {
+  const bin = locate();
+  if (!bin) return null;
+  const inFile = scratch('lz4-in.bin');
+  const outFile = scratch('lz4-out.lz4');
+  try {
+    fs.writeFileSync(inFile, buf);
+    run(bin, ['lz4-compress', inFile, outFile]);
+    return fs.readFileSync(outFile);
+  } catch {
+    return null;
+  } finally {
+    for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+}
+
+function lz4Decompress(buf, expectedSize) {
+  const bin = locate();
+  if (!bin) return null;
+  const inFile = scratch('lz4-c.bin');
+  const outFile = scratch('lz4-d.bin');
+  try {
+    fs.writeFileSync(inFile, buf);
+    run(bin, ['lz4-decompress', inFile, outFile, '--size', String(expectedSize)]);
+    return fs.readFileSync(outFile);
+  } catch {
+    return null;
+  } finally {
+    for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+}
+
+/** 进程退出前清掉临时目录（失败也无所谓，系统会回收） */
+function cleanup() {
+  if (!tmpRoot) return;
+  try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch { /* ignore */ }
+  tmpRoot = null;
+}
+process.on('exit', cleanup);
+
+module.exports = {
+  available,
+  locate,
+  dxtDecode,
+  lz4Compress,
+  lz4Decompress,
+  // 测试用：重置探测缓存
+  _reset() { probe = undefined; },
+  MIN_PIXELS_FOR_RUST: 4096,
+  MIN_BYTES_FOR_LZ4: 4096,
+};

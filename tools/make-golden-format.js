@@ -1,0 +1,191 @@
+#!/usr/bin/env node
+'use strict';
+/**
+ * 生成「格式黄金样本集」（阶段 0）。
+ *
+ * 每个用例 = 固定输入 + 期望输出字节，用来锁住当前的格式行为：
+ *   - 任何语言重写（Rust / WASM / 其他）都必须逐字节对齐这些输出；
+ *   - 现有 JS 实现改动后也要重新对照，避免悄悄改坏兼容性。
+ *
+ * 产物：test/golden/format/<case>/{in.bin,out.bin} + manifest.json
+ * 生成时强制走纯 JS 实现（WE_TEX_RUST=off），避免用 Rust 结果给自己当基准。
+ *
+ * 用法：node tools/make-golden-format.js
+ */
+process.env.WE_TEX_RUST = 'off';
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const root = path.join(__dirname, '..');
+const outRoot = path.join(root, 'test', 'golden', 'format');
+const dxt = require(path.join(root, 'src', 'dxt'));
+const lz4 = require(path.join(root, 'src', 'lz4'));
+const tex = require(path.join(root, 'src', 'tex'));
+
+/** 确定性伪随机：同一个 seed 每次生成的字节完全一样 */
+function rnd(n, seed) {
+  const buf = Buffer.alloc(n);
+  let s = seed >>> 0;
+  for (let i = 0; i < n; i++) {
+    s = (Math.imul(s, 1103515245) + 12345) >>> 0;
+    buf[i] = (s >>> 8) & 0xff;
+  }
+  return buf;
+}
+
+/** 可压缩数据：重复片段 + 少量噪声，用来让 LZ4 真正走匹配分支 */
+function compressible(n, seed) {
+  const base = rnd(64, seed);
+  const buf = Buffer.alloc(n);
+  let s = seed >>> 0;
+  for (let i = 0; i < n; i++) {
+    if (i % 7 === 0) {
+      s = (Math.imul(s, 1103515245) + 12345) >>> 0;
+      buf[i] = (s >>> 9) & 0xff;
+    } else {
+      buf[i] = base[i % base.length];
+    }
+  }
+  return buf;
+}
+
+function buildTex(opts) {
+  const {
+    format = tex.TEX_FORMAT.DXT1, flags = 0,
+    texW = 4, texH = 4, imgW = texW, imgH = texH,
+    imageFormat = -1, videoMp4 = 0, container = 'TEXB0004',
+    images = [],
+  } = opts;
+  const parts = [Buffer.from('TEXV0005\0'), Buffer.from('TEXI0001\0')];
+  const head = Buffer.alloc(28);
+  head.writeInt32LE(format, 0);
+  head.writeInt32LE(flags, 4);
+  head.writeInt32LE(texW, 8);
+  head.writeInt32LE(texH, 12);
+  head.writeInt32LE(imgW, 16);
+  head.writeInt32LE(imgH, 20);
+  head.writeUInt32LE(0, 24);
+  parts.push(head, Buffer.from(container + '\0'));
+  const ic = Buffer.alloc(4);
+  ic.writeInt32LE(images.length, 0);
+  parts.push(ic);
+  if (container === 'TEXB0003' || container === 'TEXB0004') {
+    const ifmt = Buffer.alloc(container === 'TEXB0004' ? 8 : 4);
+    ifmt.writeInt32LE(imageFormat, 0);
+    if (container === 'TEXB0004') ifmt.writeInt32LE(videoMp4, 4);
+    parts.push(ifmt);
+  }
+  for (const img of images) {
+    const mc = Buffer.alloc(4);
+    mc.writeInt32LE(img.mips.length, 0);
+    parts.push(mc);
+    for (const m of img.mips) {
+      const recLen = container === 'TEXB0001' ? 8 : 16;
+      const rec = Buffer.alloc(recLen);
+      rec.writeInt32LE(m.w, 0);
+      rec.writeInt32LE(m.h, 4);
+      if (recLen === 16) {
+        rec.writeInt32LE(m.lz4 ? 1 : 0, 8);
+        rec.writeInt32LE(m.decompressed || m.bytes.length, 12);
+      }
+      const len = Buffer.alloc(4);
+      len.writeInt32LE(m.bytes.length, 0);
+      parts.push(rec, len, m.bytes);
+    }
+  }
+  return Buffer.concat(parts);
+}
+
+function dxtBlocks(w, h, blockBytes, seed) {
+  return rnd(Math.ceil(w / 4) * Math.ceil(h / 4) * blockBytes, seed);
+}
+
+const cases = [];
+
+function addCase(name, kind, input, build, meta = {}) {
+  cases.push({ name, kind, input, build, meta });
+}
+
+// ---- DXT 解码（三种最常用格式） ----
+addCase('dxt1-decode-8x8', 'dxt-decode', dxtBlocks(8, 8, 8, 11),
+  (buf) => dxt.decode(buf, dxt.TEX_FORMAT.DXT1, 8, 8),
+  { format: 'dxt1', width: 8, height: 8 });
+addCase('dxt3-decode-8x8', 'dxt-decode', dxtBlocks(8, 8, 16, 13),
+  (buf) => dxt.decode(buf, dxt.TEX_FORMAT.DXT3, 8, 8),
+  { format: 'dxt3', width: 8, height: 8 });
+addCase('dxt5-decode-13x7', 'dxt-decode', dxtBlocks(13, 7, 16, 17),
+  (buf) => dxt.decode(buf, dxt.TEX_FORMAT.DXT5, 13, 7),
+  { format: 'dxt5', width: 13, height: 7 });
+
+// ---- LZ4 块编解码 ----
+const lz4Raw = compressible(4096, 19);
+addCase('lz4-compress-4k', 'lz4-compress', lz4Raw, (buf) => lz4.compress(buf), {});
+const lz4Packed = lz4.compress(lz4Raw);
+addCase('lz4-decompress-4k', 'lz4-decompress', lz4Packed,
+  (buf) => lz4.decompress(buf, lz4Raw.length),
+  { expectedSize: lz4Raw.length, expectedSha256: crypto.createHash('sha256').update(lz4Raw).digest('hex') });
+
+// ---- 整包纹理转换（容器 + 缩放 + LZ4 一起覆盖） ----
+const texSrc = buildTex({
+  texW: 4, texH: 4,
+  images: [{ mips: [{ w: 4, h: 4, bytes: dxtBlocks(4, 4, 8, 23) }] }],
+});
+addCase('tex-convert-dxt1-4x4', 'tex-convert', texSrc,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/黄金样本.tex' }).bytes,
+  { preset: 'default' });
+
+const texBig = buildTex({
+  texW: 32, texH: 32,
+  images: [{ mips: [{ w: 32, h: 32, bytes: dxtBlocks(32, 32, 8, 29) }] }],
+});
+addCase('tex-convert-dxt1-32x32', 'tex-convert', texBig,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/大图.tex', preset: 'balanced' }).bytes,
+  { preset: 'balanced' });
+
+// ---- 直通形态（不该改写字节） ----
+const texMobile = buildTex({
+  format: tex.TEX_FORMAT.RGBA8888,
+  texW: 8, texH: 8,
+  images: [{ mips: [{ w: 8, h: 8, bytes: rnd(8 * 8 * 4, 31), lz4: 0, decompressed: 8 * 8 * 4 }] }],
+});
+addCase('tex-keep-mobile-8x8', 'tex-convert', texMobile,
+  (buf) => {
+    const r = tex.convertTexBuffer(buf, { relPath: 'materials/已适配.tex' });
+    return r.bytes || buf; // 已适配的纹理不改写，期望输出就是原字节
+  },
+  { expectUnchanged: true });
+
+// ---- 写盘 ----
+fs.rmSync(outRoot, { recursive: true, force: true });
+fs.mkdirSync(outRoot, { recursive: true });
+
+const manifest = [];
+for (const c of cases) {
+  const dir = path.join(outRoot, c.name);
+  fs.mkdirSync(dir, { recursive: true });
+  const output = c.build(c.input);
+  fs.writeFileSync(path.join(dir, 'in.bin'), c.input);
+  fs.writeFileSync(path.join(dir, 'out.bin'), output);
+  manifest.push({
+    name: c.name,
+    kind: c.kind,
+    input: `${c.name}/in.bin`,
+    output: `${c.name}/out.bin`,
+    inputBytes: c.input.length,
+    outputBytes: output.length,
+    outputSha256: crypto.createHash('sha256').update(output).digest('hex'),
+    ...c.meta,
+  });
+  console.log(`  ✔ ${c.name}  in=${c.input.length}B out=${output.length}B`);
+}
+
+fs.writeFileSync(path.join(outRoot, 'manifest.json'), JSON.stringify({
+  generatedAt: new Date().toISOString(),
+  generator: 'tools/make-golden-format.js',
+  note: '期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐',
+  cases: manifest,
+}, null, 2) + '\n');
+
+console.log(`\n黄金样本集: ${cases.length} 个用例 -> ${path.relative(root, outRoot)}`);

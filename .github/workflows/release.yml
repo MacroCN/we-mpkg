@@ -77,6 +77,13 @@ jobs:
           }
           & $dst -version | Select-Object -First 1
 
+      - name: Build rust-tex (windows)
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+          cargo build --release --target x86_64-pc-windows-msvc --manifest-path rust/tex-cli/Cargo.toml
+          copy rust\tex-cli\target\x86_64-pc-windows-msvc\release\rust-tex.exe bin\rust-tex.exe
+          Get-Item bin\rust-tex.exe | Select-Object Name, Length
+
       - name: Build portable zip
         shell: pwsh
         run: |
@@ -195,6 +202,21 @@ jobs:
           chmod +x .cache/toolchain/ffmpeg-android/ffmpeg
           cp .cache/toolchain/ffmpeg-android/ffmpeg android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
           ls -lh android/app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+
+      - name: Build rust-tex (android arm64)
+        run: |
+          rustup target add aarch64-linux-android
+          TOOLCHAIN="$ANDROID_HOME/ndk/${ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export CC_aarch64_linux_android="$TOOLCHAIN/aarch64-linux-android24-clang"
+          export AR_aarch64_linux_android="$TOOLCHAIN/llvm-ar"
+          cargo build --release --target aarch64-linux-android --manifest-path rust/tex-cli/Cargo.toml
+          cp rust/tex-cli/target/aarch64-linux-android/release/rust-tex bin/rust-tex
+          # 安卓禁止 exec 应用数据目录里的文件：可执行文件必须以 .so 形态进 nativeLibraryDir
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          cp rust/tex-cli/target/aarch64-linux-android/release/rust-tex android/app/src/main/jniLibs/arm64-v8a/librusttex.so
+          file bin/rust-tex
+          ls -lh bin/rust-tex
 
       - name: Sync JS project into assets
         run: |

@@ -1,0 +1,27 @@
+we-mpkg 3.0.0-beta.1
+===================
+
+Rust 化的第一个 beta：先做「可验证的地基」和首次热点移植，跑不通一律自动回落 JS。
+
+## 阶段 0：前置准备（本次落地）
+- 新增黄金样本集 test/golden/format：8 个格式用例，每个都带输入包与期望输出字节
+  （DXT1/DXT3/DXT5 解码、LZ4 压缩/解压、整包纹理转换 ×2、已是移动端形态的直通）。
+  基准由纯 JS 实现生成，之后任何语言重写都必须逐字节对齐；测试会同时校验 JS 与 Rust 两条路径。
+- 新增 rust-tex 工具链探测（src/rusttex.js），候选顺序同 ffmpeg 模式：
+  WE_RUST_TEX → bin/rust-tex → rust/target/release → .cache/toolchain/bin → PATH → 安卓 nativeLibraryDir。
+  找不到或执行失败一律静默回落纯 JS，可用 WE_TEX_RUST=off 一键关闭。
+
+## 阶段 1：热点 CLI 化（首批）
+- 新 Rust 工程 rust/tex-cli（无第三方 crate，单文件产物约 340 KB）：
+  dxt-decode / lz4-compress / lz4-decompress，输入输出走文件，结果 JSON 到 stdout，
+  与 JS 实现逐字节一致（LZ4 压缩输出可以直接互换）。
+- Node 侧接入：dxt.js 与 lz4.js 在数据量达到阈值（4096 像素 / 4096 字节）时走 CLI，否则留在 JS。
+- 安卓：CI 同时产出 arm64 版本，以 librusttex.so 形态随 APK 装进 nativeLibraryDir
+  （安卓 10+ 禁止 exec 应用数据目录，普通可执行文件方式跑不起来）。
+
+## 未做（留给后续 beta）
+- tex 容器读写、缩放/裁剪仍在 JS；整包转换的像素核心只有 DXT 解码这一半走 Rust。
+- 阶段 2（Rust 宿主 + Steam Node sidecar）未开始。
+
+## 签名与升级
+同一 release 签名，versionCode 60（2.4.16 是 59），可直接覆盖安装。

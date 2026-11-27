@@ -25,6 +25,10 @@ steamcmd/
 *.zip
 *.exe
 
+# Rust 编译产物（CI 构建时临时放进 bin/ 打包，不进仓库）
+rust/tex-cli/target/
+bin/rust-tex
+
 # ---- 系统与编辑器 ----
 .DS_Store
 Thumbs.db

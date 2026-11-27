@@ -2415,6 +2415,88 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
   assert.strictEqual(shifted.tags['Scene'], '场景');
 });
 
+/** 黄金样本集：按 manifest 重算一遍，逐字节对照冻结的输出 */
+function replayGolden() {
+  const rt = require('../src/rusttex');
+  const dxtlib = require('../src/dxt');
+  const lz4lib = require('../src/lz4');
+  const texlib = require('../src/tex');
+  const dir = path.join(__dirname, 'golden', 'format');
+  const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  const out = [];
+  for (const c of manifest.cases) {
+    const input = fs.readFileSync(path.join(dir, c.input));
+    let bytes;
+    if (c.kind === 'dxt-decode') {
+      const fmtId = { dxt1: dxtlib.TEX_FORMAT.DXT1, dxt3: dxtlib.TEX_FORMAT.DXT3, dxt5: dxtlib.TEX_FORMAT.DXT5 }[c.format];
+      bytes = dxtlib.decode(input, fmtId, c.width, c.height);
+    } else if (c.kind === 'lz4-compress') {
+      bytes = lz4lib.compress(input);
+    } else if (c.kind === 'lz4-decompress') {
+      bytes = lz4lib.decompress(input, c.expectedSize);
+    } else if (c.kind === 'tex-convert') {
+      const r = texlib.convertTexBuffer(input, { relPath: 'materials/黄金样本.tex', preset: c.preset === 'balanced' ? 'balanced' : 'default' });
+      bytes = r.bytes || input;
+    } else {
+      throw new Error(`未知用例类型: ${c.kind}`);
+    }
+    out.push({ name: c.name, bytes });
+  }
+  return { manifest, out };
+}
+
+test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 两条路径都要对齐', () => {
+  const rt = require('../src/rusttex');
+  const crypto = require('crypto');
+  const dir = path.join(__dirname, 'golden', 'format');
+
+  // 第一条：默认路径（装了 rust-tex 就走 Rust，否则 JS）
+  if (rt.available()) {
+    const { manifest, out } = replayGolden();
+    for (const { name, bytes } of out) {
+      const c = manifest.cases.find((x) => x.name === name);
+      const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+      assert.strictEqual(bytes.length, c.outputBytes, `${name}: Rust 路径输出长度不符`);
+      assert.strictEqual(sha, c.outputSha256, `${name}: Rust 路径输出与黄金样本不一致`);
+    }
+  }
+
+  // 第二条：强制纯 JS（WE_TEX_RUST=off），保证两套实现都过同一份基准
+  const oldEnv = process.env.WE_TEX_RUST;
+  process.env.WE_TEX_RUST = 'off';
+  rt._reset();
+  try {
+    const { manifest, out } = replayGolden();
+    for (const { name, bytes } of out) {
+      const c = manifest.cases.find((x) => x.name === name);
+      const expected = fs.readFileSync(path.join(dir, c.output));
+      assert.ok(bytes.equals(expected), `${name}: JS 路径输出与黄金样本不一致`);
+    }
+    assert.ok(manifest.cases.length >= 8, '黄金样本集至少要覆盖 8 个格式用例');
+  } finally {
+    if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
+    rt._reset();
+  }
+});
+
+test('Rust 纹理 CLI（阶段 0）：探测候选含 .cache/toolchain，可一键关闭回落', () => {
+  const rt = require('../src/rusttex');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'rusttex.js'), 'utf8');
+  assert.ok(src.includes(path.join('.cache', 'toolchain', 'bin', 'rust-tex')), '探测要覆盖 .cache/toolchain/bin');
+  assert.ok(src.includes('WE_RUST_TEX'), '要支持环境变量显式指定');
+  assert.ok(src.includes('WE_TEX_RUST'), '要支持一键关闭（回落 JS）');
+
+  const old = process.env.WE_TEX_RUST;
+  process.env.WE_TEX_RUST = 'off';
+  rt._reset();
+  try {
+    assert.strictEqual(rt.available(), false, 'WE_TEX_RUST=off 时不应启用 Rust');
+    assert.strictEqual(rt.dxtDecode(Buffer.alloc(8), 'dxt1', 4, 4), null, '关闭时应返回 null 让调用方回落');
+  } finally {
+    if (old === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = old;
+    rt._reset();
+  }
+});
 
   console.log(`\n结果: ${passed} 通过 / ${failed} 失败${skipped ? ` / ${skipped} 跳过` : ''}`);
   if (failed) {
@@ -2544,6 +2626,8 @@ test('安卓 assets 里的 JS 必须与仓库源码一致（防止提交旧 zip�
   let checked = 0;
   for (const [name, data] of entries) {
     if (!dirs.some((d) => name.startsWith(d + '/'))) continue;
+    // 编译产物（rust-tex / rust-tex.exe）是二进制，不能按文本比对
+    if (/^bin\/rust-tex(\.exe)?$/.test(name)) continue;
     const disk = path.join(root, name);
     assert.ok(fs.existsSync(disk), `zip 里有仓库不存在的文件：${name}`);
     // Windows 检出会把工作区换成 CRLF，zip 里是 LF：比较前统一换行符

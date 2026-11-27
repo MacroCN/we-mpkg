@@ -18,6 +18,9 @@
  * 末尾必须是一段纯字面量，且最后 5 个字节不参与匹配（LZ4 规范）。
  */
 
+/** 阶段 1：热点走 Rust CLI（失败一律回落下面的纯 JS 实现） */
+const rusttex = require('./rusttex');
+
 /** 4 字节小端读取 */
 function read32(buf, i) {
   return buf[i] | (buf[i + 1] << 8) | (buf[i + 2] << 16) | (buf[i + 3] << 24);
@@ -39,6 +42,10 @@ function hash32(v) {
 function compress(src) {
   const n = src.length;
   if (n === 0) return Buffer.alloc(0);
+  if (n >= rusttex.MIN_BYTES_FOR_LZ4) {
+    const fast = rusttex.lz4Compress(src);
+    if (fast && fast.length > 0) return fast;
+  }
   // 纯字面量编码是最坏情况：n + 1 + ceil((n-15)/255) 左右，留一点余量
   const out = Buffer.alloc(n + Math.ceil(n / 255) + 16);
   let op = 0;
@@ -126,6 +133,10 @@ function compress(src) {
  * @returns {Buffer}
  */
 function decompress(src, expectedSize) {
+  if (expectedSize > 0 && src.length >= rusttex.MIN_BYTES_FOR_LZ4) {
+    const fast = rusttex.lz4Decompress(src, expectedSize);
+    if (fast && fast.length === expectedSize) return fast;
+  }
   const out = Buffer.alloc(expectedSize);
   let ip = 0;
   let op = 0;

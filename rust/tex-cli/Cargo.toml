@@ -1,0 +1,18 @@
+[package]
+name = "rust-tex"
+version = "3.0.0"
+edition = "2021"
+description = "we-mpkg 纹理热点 CLI（DXT 解码 / LZ4 块编解码），与 JS 实现逐字节对齐"
+license = "MIT"
+
+[[bin]]
+name = "rust-tex"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+# 手机端体积优先：strip + 不用 unwinding
+strip = true

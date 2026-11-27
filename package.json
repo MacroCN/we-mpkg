@@ -1,6 +1,6 @@
 {
   "name": "we-mpkg",
-  "version": "2.4.16",
+  "version": "3.0.0-beta.1",
   "private": true,
   "description": "浏览 Wallpaper Engine 创意工坊 -> 内置纯 JS 下载 -> 打包为手机版 .mpkg",
   "bin": {
@@ -8,7 +8,8 @@
   },
   "scripts": {
     "start": "node bin/wempkg.js serve",
-    "test": "node test/run-tests.js"
+    "test": "node test/run-tests.js",
+    "build:rust": "cargo build --release --manifest-path rust/tex-cli/Cargo.toml"
   },
   "engines": {
     "node": ">=18"

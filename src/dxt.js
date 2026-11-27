@@ -22,6 +22,10 @@
 
 const TEX_FORMAT = { DXT5: 4, DXT3: 6, DXT1: 7 };
 
+// 阶段 1：热点走 Rust CLI（找不到可执行文件时静默回落纯 JS）
+const rusttex = require('./rusttex');
+const RUST_NAME = { [TEX_FORMAT.DXT1]: 'dxt1', 5: 'dxt2', [TEX_FORMAT.DXT3]: 'dxt3', 8: 'dxt4', [TEX_FORMAT.DXT5]: 'dxt5' };
+
 const round = (v) => Math.max(0, Math.min(255, Math.round(v)));
 
 /** 565 -> {r,g,b}（各通道扩展到 8 位，用位移补低位，与 GPU 一致） */
@@ -72,6 +76,11 @@ function decode(buf, format, width, height) {
   const isDxt1 = format === TEX_FORMAT.DXT1;
   const hasAlpha4 = format === TEX_FORMAT.DXT2 || format === TEX_FORMAT.DXT3;
   const hasAlpha8 = format === TEX_FORMAT.DXT4 || format === TEX_FORMAT.DXT5;
+
+  if (width * height >= rusttex.MIN_PIXELS_FOR_RUST && RUST_NAME[format]) {
+    const fast = rusttex.dxtDecode(buf.subarray(0, need), RUST_NAME[format], width, height);
+    if (fast && fast.length === width * height * 4) return fast;
+  }
 
   const out = Buffer.alloc(width * height * 4);
   let off = 0;
