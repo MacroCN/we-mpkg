@@ -209,6 +209,10 @@
 
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+/* 触摸屏上不要留「点过就一直亮」的痕迹：touch-action 去掉点击延迟，
+   focus 环只给键盘用户（触摸后元素拿到焦点不该继续套一圈框） */
+html, body { touch-action: manipulation; }
+*:focus:not(:focus-visible) { outline: none; }
 
 html, body {
   margin: 0;
@@ -753,7 +757,13 @@ button.ghost, a.ghost {
   text-decoration: none;
   font-family: inherit;
 }
-button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+/* hover 只在「真鼠标」上生效：触摸屏点一下之后 :hover 会一直粘着，
+   表现为按钮/卡片一直是高亮态，直到点别的地方才恢复。 */
+@media (hover: hover) and (pointer: fine) {
+  button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+}
+/* 触屏的等价反馈：按下时亮，抬起就恢复 */
+button.ghost:active, a.ghost:active { border-color: var(--accent); }
 button.ghost:disabled { opacity: 0.45; cursor: default; }
 
 /* ---- 卡片多选 / 批量下载 ---- */
@@ -902,7 +912,10 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   text-overflow: ellipsis;
   cursor: pointer;
 }
-.qbtn:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .qbtn:hover { border-color: var(--accent); }
+}
+.qbtn:active { border-color: var(--accent); }
 .qbtn:disabled { opacity: 0.45; cursor: default; }
 .qbtn.on { border-color: var(--info); color: var(--info-ink); background: var(--info-bg); }
 .card-quick .dl-btn { border-color: var(--accent-edge); color: var(--accent-ink); }
@@ -997,7 +1010,10 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   background: transparent; color: var(--dim);
   font-size: 18px; line-height: 1; cursor: pointer;
 }
-.update-banner-close:hover { color: var(--text); background: var(--band-close); }
+@media (hover: hover) and (pointer: fine) {
+  .update-banner-close:hover { color: var(--text); background: var(--band-close); }
+}
+.update-banner-close:active { color: var(--text); background: var(--band-close); }
 .about-version { font-weight: 600; color: var(--accent); }
 
 /* ---------- 深浅色切换 ---------- */
@@ -1012,5 +1028,8 @@ button.ghost:disabled { opacity: 0.45; cursor: default; }
   font-size: 14px;
   cursor: pointer;
 }
-.radio-row:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .radio-row:hover { border-color: var(--accent); }
+}
+.radio-row:active { border-color: var(--accent); }
 .radio-row input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }

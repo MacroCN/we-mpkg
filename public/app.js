@@ -1987,6 +1987,16 @@ document.addEventListener('visibilitychange', () => {
 
 async function init() {
   state.lang = localStorage.getItem('lang') || (/^zh/i.test(navigator.language || '') ? 'zh' : 'en');
+  // 车机 / 手机 WebView 会把触摸合成为鼠标事件：点完的按钮会一直保持 focus，
+  // 焦点环和 :focus 样式留在屏幕上，看起来像「手指走了却还亮着」。
+  // 触摸抬起后主动把焦点还给 body（输入框除外，它们需要保持以弹出键盘）。
+  document.addEventListener('touchend', () => {
+    const el = document.activeElement;
+    if (!el || el === document.body) return;
+    const tag = (el.tagName || '').toUpperCase();
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    try { el.blur(); } catch { /* ignore */ }
+  }, { passive: true });
   state.filtersOpen = window.innerWidth > 640;
   wire();
   applyLang();
