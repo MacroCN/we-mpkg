@@ -52,6 +52,7 @@ function writeFileAtomic(file, bytes) {
   }
 }
 const dxt = require('./dxt');
+const rusttex = require('./rusttex');
 const { sha256Buffer } = require('./convertplan');
 
 // ---- 枚举（数值对照 notscuffed/repkg：TexFormat / TexFlags / FreeImageFormat）----
@@ -861,6 +862,32 @@ function convertTexBuffer(buf, opts = {}) {
   const scale = (!animated && semantic !== 'data')
     ? (typeof opts.scale === 'number' ? opts.scale : uniformScale(Math.max(logicalW, logicalH), preset))
     : 1;
+
+  // 阶段 1：非直通图（DXT / RGBA8 / R8 / RG88）整包交给 Rust，容器读写与像素处理一起搬过去；
+  // 直通图要 PNG/JPEG 解码器，仍留给 JS。失败一律回落下面的原实现。
+  if (tex.container.imageFormat < 0 && opts.scale === undefined) {
+    const fast = rusttex.texConvert(buf, scale, animated);
+    if (fast) {
+      try {
+        verifyMobileTex(fast.bytes, {
+          width: fast.width,
+          height: fast.height,
+          framesTail: animated ? framesTail : null,
+        });
+        return {
+          changed: true,
+          bytes: fast.bytes,
+          route: info.route,
+          reason: info.reason + (fast.downsampled ? '（已降采样）' : ''),
+          width: fast.width,
+          height: fast.height,
+          sourceWidth: tex.header.textureWidth || fast.width,
+          sourceHeight: tex.header.textureHeight || fast.height,
+          downsampled: fast.downsampled,
+        };
+      } catch { /* 自校验没过就走 JS */ }
+    }
+  }
 
   const images = [];
   let downsampled = false;

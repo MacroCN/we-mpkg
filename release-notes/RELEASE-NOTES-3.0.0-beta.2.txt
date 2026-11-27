@@ -1,0 +1,20 @@
+we-mpkg 3.0.0-beta.2
+===================
+
+Rust 化第二阶段：把 .tex 容器读写与缩放整体搬到 Rust，直通图（PNG/JPEG）仍走 JS。
+
+## 变更
+- rust-tex 新增 tex-convert：解析 TEXV0005/TEXB0001-0004 容器 -> 解 LZ4/DXT/RGBA8/R8/RG88
+  -> 裁到逻辑尺寸 -> 面积平均降采样 -> 写 TEXB0004（RGBA8888 / 单 mip / LZ4）-> 自校验。
+- tex.js 的 convertTexBuffer 在「非直通图 + 未指定显式 scale」时改走 CLI，
+  输出再跑一遍 verifyMobileTex；任何异常（不支持的格式、自校验失败、CLI 缺失）都回落原 JS 实现。
+- 黄金样本集扩充校验范围：tex 转换的两个用例现在会同时比对 JS 与 Rust 两条路径的整包输出字节。
+- 缩放倍率仍由 JS 按「整包统一倍率」算好传给 CLI，保持单一事实来源，避免两边算法漂移。
+
+## 未做
+- 直通图（TEXB0003/0004 + imageFormat>=0）仍需 PNG/JPEG 解码，留在 JS。
+- 视频纹理缩封（shrinkVideoTex）依赖 ffmpeg，不在本次范围。
+- 阶段 2（Rust 宿主 + Steam Node sidecar）未开始。
+
+## 签名与升级
+同一 release 签名，versionCode 61（beta.1 是 60），可直接覆盖安装。

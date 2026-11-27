@@ -12,6 +12,7 @@
 
 mod dxt;
 mod lz4;
+mod tex;
 
 use std::fs;
 use std::io::Write;
@@ -132,6 +133,35 @@ fn main() {
                         "{{\"ok\":true,\"cmd\":\"lz4-decompress\",\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
                         data.len(),
                         raw.len(),
+                        started.elapsed().as_micros()
+                    ));
+                }
+                Err(e) => fail(&e, 3),
+            }
+        }
+        "tex-convert" => {
+            let input = args.get(2).unwrap_or_else(|| fail("缺少输入文件", 2));
+            let output = args.get(3).unwrap_or_else(|| fail("缺少输出文件", 2));
+            let scale: f64 = match arg_value(&args, "--scale") {
+                Some(v) => match v.parse::<f64>() {
+                    Ok(x) if x > 0.0 => x,
+                    _ => fail(&format!("--scale 非法: {}", v), 2),
+                },
+                None => 1.0,
+            };
+            let frames_tail = arg_value(&args, "--frames-tail").map(|v| v == "1").unwrap_or(false);
+            let started = Instant::now();
+            let data = fs::read(input).unwrap_or_else(|e| fail(&format!("读文件失败 {}: {}", input, e), 2));
+            match tex::convert(&data, &tex::ConvertOpts { scale, frames_tail }) {
+                Ok(res) => {
+                    let out_bytes = res.bytes.len();
+                    write_out(output, &res.bytes);
+                    emit(&format!(
+                        "{{\"ok\":true,\"cmd\":\"tex-convert\",\"width\":{},\"height\":{},\"downsampled\":{},\"framesTailLen\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                        res.width, res.height,
+                        if res.downsampled { "true" } else { "false" },
+                        res.frames_tail_len,
+                        data.len(), out_bytes,
                         started.elapsed().as_micros()
                     ));
                 }

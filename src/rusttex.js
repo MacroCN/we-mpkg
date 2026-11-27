@@ -153,6 +153,33 @@ function lz4Decompress(buf, expectedSize) {
   }
 }
 
+/**
+ * 整包 tex 转换（非直通图路径：parse -> 解码 -> 裁 -> 缩放 -> 写 TEXB0004 -> 自校验）。
+ * scale 由调用方按整包统一倍率算好传进来，保持 JS 侧单一事实来源。
+ */
+function texConvert(buf, scale, framesTail) {
+  const bin = locate();
+  if (!bin) return null;
+  const inFile = scratch('tex-in.tex');
+  const outFile = scratch('tex-out.tex');
+  try {
+    fs.writeFileSync(inFile, buf);
+    const info = run(bin, ['tex-convert', inFile, outFile,
+      '--scale', String(scale),
+      '--frames-tail', framesTail ? '1' : '0'], 120000);
+    return {
+      bytes: fs.readFileSync(outFile),
+      width: info.width,
+      height: info.height,
+      downsampled: info.downsampled === true,
+    };
+  } catch {
+    return null;
+  } finally {
+    for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+}
+
 /** 进程退出前清掉临时目录（失败也无所谓，系统会回收） */
 function cleanup() {
   if (!tmpRoot) return;
@@ -167,6 +194,7 @@ module.exports = {
   dxtDecode,
   lz4Compress,
   lz4Decompress,
+  texConvert,
   // 测试用：重置探测缓存
   _reset() { probe = undefined; },
   MIN_PIXELS_FOR_RUST: 4096,
