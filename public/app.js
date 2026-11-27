@@ -811,8 +811,15 @@ const THEME_ICONS = {
 
 const THEME_MODE_KEY = 'themeMode';
 
-/** 系统当前是不是深色（不支持 matchMedia 的老 WebView 按深色处理，和原来一致） */
+/**
+ * 系统当前是不是深色。
+ * 安卓壳里必须问原生：应用主题固定，WebView 的 prefers-color-scheme 恒为浅色，
+ * 只看 matchMedia 的话「跟随系统」永远不会生效。浏览器里（没有桥）才走 matchMedia。
+ */
 function systemPrefersDark() {
+  if (window.Android && typeof window.Android.isNightMode === 'function') {
+    try { return !!window.Android.isNightMode(); } catch { /* 桥异常时退回 matchMedia */ }
+  }
   if (!window.matchMedia) return true;
   try { return window.matchMedia('(prefers-color-scheme: dark)').matches; } catch { return true; }
 }
@@ -2010,7 +2017,14 @@ async function init() {
   const wantTab = new URLSearchParams(location.search).get('settings');
   if (wantTab) openSettings(wantTab);
   // 供浮层/其它页面复用：打开设置并落到指定 tab
-  window.WE_APP = { openSettings: (tab) => openSettings(tab) };
+  window.WE_APP = {
+    openSettings: (tab) => openSettings(tab),
+    /** 原生侧系统切了深浅色（Activity 不重建）时回调这里，auto 模式下重算一次 */
+    onSystemThemeChange: () => {
+      if ((state.themeMode || 'auto') === 'auto') applyTheme('auto', { persist: false });
+      else applyTheme(state.themeMode, { persist: false });
+    },
+  };
 }
 
 init();
