@@ -1,0 +1,12 @@
+we-mpkg 3.0.0-beta.9
+
+安卓 Rust 探测第二轮：预编译的 libwempkg-node.so 里根本没有 WEM_NATIVE_LIB_DIR，
+所以 beta.8 的探测列表里连 nativeLibraryDir 都没出现（只有 bin / cargo / .cache / PATH）。
+
+改动：
+- 新增 androidNativeDirs()：环境变量没有时，直接读 /proc/self/maps，反查 libnode.so
+  的加载路径（形如 /data/app/.../lib/arm64/libnode.so），把同目录当原生库目录；
+- 候选顺序不变：原生库目录（librusttex.so / rust-tex）→ bin → cargo → .cache → PATH → LD_LIBRARY_PATH；
+- 日志仍打印逐条探测结果。
+
+versionCode 68，签名不变。本版按约定不发布 Release，APK 在 Actions 的 android artifact 里。

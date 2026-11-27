@@ -33,12 +33,33 @@ let binVersion = null;
 let lastError = null;
 let attempts = [];
 
+/**
+ * 安卓的原生库目录：优先用 JNI 传的 WEM_NATIVE_LIB_DIR，没有就从 /proc/self/maps 里
+ * 反查 libnode.so 的加载路径（预编译的 libwempkg-node.so 可能没设置这个环境变量）。
+ */
+function androidNativeDirs() {
+  const dirs = [];
+  const add = (d) => { if (d && dirs.indexOf(d) === -1) dirs.push(d); };
+  if (process.env.WEM_NATIVE_LIB_DIR) add(process.env.WEM_NATIVE_LIB_DIR);
+  if (process.platform === 'android') {
+    try {
+      const maps = fs.readFileSync('/proc/self/maps', 'utf8');
+      for (const line of maps.split('\n')) {
+        const m = line.match(/(\/\S*\/lib\/[^/]+\/libnode\.so)/);
+        if (m) add(path.dirname(m[1]));
+      }
+    } catch { /* ignore */ }
+  }
+  for (const d of String(process.env.LD_LIBRARY_PATH || '').split(':')) add(d);
+  return dirs;
+}
+
 function candidates() {
   const out = [];
-  // 安卓：nativeLibraryDir 里的 .so 是安装时解出来的可执行文件，优先用 JNI 传进来的路径
-  if (process.env.WEM_NATIVE_LIB_DIR) {
-    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, 'librusttex.so'));
-    out.push(path.join(process.env.WEM_NATIVE_LIB_DIR, EXE));
+  // 安卓：nativeLibraryDir 里的 .so 是安装时解出来的可执行文件，先试这里
+  for (const dir of androidNativeDirs()) {
+    out.push(path.join(dir, 'librusttex.so'));
+    out.push(path.join(dir, EXE));
   }
   const env = process.env.WE_RUST_TEX;
   if (env) out.push(env);
