@@ -2038,6 +2038,44 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(v4.packPct, null, '完成后收掉深色层，整条恢复成完成色');
   });
 
+  test('触摸不粘滞：hover 只给真鼠标，触屏走按下反馈并释放焦点', () => {
+    const read = (p) => fs.readFileSync(path.join(__dirname, '..', 'public', p), 'utf8');
+    const styles = ['style.css', 'dlcenter.css', 'downloads.css'].map(read);
+
+    // 1) 所有 :hover 规则都必须待在「真鼠标」媒体查询里，否则触屏点完会一直高亮
+    for (const css of styles) {
+      const hoverRules = css.split('\n').filter((l) => l.includes(':hover') && !l.trim().startsWith('/*'));
+      for (const line of hoverRules) {
+        const idx = css.indexOf(line);
+        const before = css.slice(0, idx);
+        const openIdx = before.lastIndexOf('@media (hover: hover) and (pointer: fine)');
+        assert.ok(openIdx >= 0, `hover 规则必须包进真鼠标媒体查询：${line.trim()}`);
+        // 媒体查询块在规则之前且还没闭合
+        const opened = (before.slice(openIdx).match(/\{/g) || []).length;
+        const closed = (before.slice(openIdx).match(/\}/g) || []).length;
+        assert.ok(opened > closed, `hover 规则落在了媒体查询外面：${line.trim()}`);
+      }
+    }
+
+    // 2) 触屏要有等价的按下反馈（:active），不然点完毫无反馈
+    for (const css of styles) assert.ok(css.includes(':active'), '缺少触屏按下反馈 :active');
+
+    // 3) 两个页面都要在 touchend 后释放焦点
+    for (const js of ['app.js', 'downloads.js']) {
+      const src = read(js);
+      assert.ok(src.includes("addEventListener('touchend'"), `${js} 缺少 touchend 处理`);
+      assert.ok(src.includes('activeElement') && src.includes('.blur()'), `${js} 触摸抬起后没有释放焦点`);
+      assert.ok(src.includes("tag === 'INPUT'"), `${js} 不该 blur 输入框`);
+    }
+
+    // 4) 全局 touch-action，去掉按下态的延迟
+    assert.ok(read('style.css').includes('touch-action: manipulation'), '缺少 touch-action: manipulation');
+
+    // 5) 下载中心拖拽：丢捕获要收手，否则面板会跟着之后的手指走
+    const dlc = read('dlcenter.js');
+    assert.ok(dlc.includes("'lostpointercapture'"), 'dlcenter.js 缺少 lostpointercapture 兜底');
+  });
+
   test('前端 8 项：顶栏任务条 / 卡片直达 / 类型徽标 / 设置分 tab / 打开文件夹', () => {
     const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
     for (const id of ['hubCount', 'hubPct', 'hubBar', 'settingsTabs']) {

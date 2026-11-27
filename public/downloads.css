@@ -135,7 +135,10 @@
   max-width: 100%;
 }
 .dl-out span { color: var(--dim); }
-.dl-out:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  .dl-out:hover { border-color: var(--accent); }
+}
+.dl-out:active { border-color: var(--accent); }
 
 button.ghost, a.ghost {
   font-size: 12px;
@@ -147,7 +150,10 @@ button.ghost, a.ghost {
   cursor: pointer;
   text-decoration: none;
 }
-button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+@media (hover: hover) and (pointer: fine) {
+  button.ghost:hover, a.ghost:hover { border-color: var(--accent); }
+}
+button.ghost:active, a.ghost:active { border-color: var(--accent); }
 button.ghost:disabled { opacity: 0.45; cursor: default; }
 
 a.download.small {

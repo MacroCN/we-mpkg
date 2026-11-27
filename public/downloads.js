@@ -206,3 +206,12 @@ tick();
 loadOutputs();
 setInterval(tick, POLL_MS);
 setInterval(loadOutputs, 5000);
+
+// 触摸抬起后释放焦点（同 app.js）：避免按钮点过一直套着焦点环
+document.addEventListener('touchend', () => {
+  const el = document.activeElement;
+  if (!el || el === document.body) return;
+  const tag = (el.tagName || '').toUpperCase();
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  try { el.blur(); } catch { /* ignore */ }
+}, { passive: true });
