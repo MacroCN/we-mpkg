@@ -295,6 +295,10 @@ function createHub(opts = {}) {
         if (Number(p.total) > 0 && Number(p.done) >= 0) {
           packDone = Number(p.done);
           packTotal = Number(p.total);
+        } else {
+          // 当前子阶段没有细粒度计数（如写入 mpkg）：清掉上一阶段的 x/y，改按时间爬
+          packDone = 0;
+          packTotal = 0;
         }
         if (span) {
           if (packStage !== raw) { packStage = raw; stageAt = now; }

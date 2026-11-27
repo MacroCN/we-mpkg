@@ -2050,6 +2050,7 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(v1.dlPct, 62);
     assert.strictEqual(v1.packPct, null, '下载阶段不该有打包层');
     assert.ok(!v1.bar.includes('class="pack"'), '下载阶段不该画深色层');
+    assert.strictEqual(J.aggregate([downloading]).pct, 62, '下载阶段顶栏不该被未开始的打包层拉低一半');
 
     const packing = { id: '2', state: 'packing', progress: { phase: 'convert', percent: 43, dlPercent: 100, packPercent: 43, bytes: 72, total: 72 } };
     const v2 = J.view(packing, { zh: true });

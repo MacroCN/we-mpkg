@@ -941,7 +941,8 @@ public class MainActivity extends Activity {
     }
 
     /** Android 13+ 前台服务通知需要运行时授权；拒绝也不影响下载，只是通知不显示 */
-    private void requestNotifPermission() {        if (android.os.Build.VERSION.SDK_INT < 33) return;
+    private void requestNotifPermission() {
+        if (android.os.Build.VERSION.SDK_INT < 33) return;
         try {
             if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {

@@ -252,8 +252,9 @@
       speed += Number(p.speed) || 0;
       totalBytes += t;
       if (typeof p.dlPercent === 'number' && Number.isFinite(p.dlPercent)) {
-        // 下载占前半程、打包占后半程：顶栏那一条用两层的平均值，别让一段走完就 100%
-        const pk = typeof p.packPercent === 'number' && Number.isFinite(p.packPercent) ? p.packPercent : null;
+        // 只有真的进打包阶段才把两层平均：packPercent 默认就是 0，
+        // 无条件取平均会让纯下载任务在顶栏只显示一半进度
+        const pk = packPctOf(j);
         const prog = pk === null ? p.dlPercent : (p.dlPercent + pk) / 2;
         known += prog * (t || 1);
         weight += (t || 1);
@@ -271,6 +272,7 @@
     return JSON.stringify((jobs || []).map((j) => [
       j.id, j.state, !!j.paused, j.progress && j.progress.percent, j.progress && j.progress.bytes,
       j.progress && j.progress.phase, j.progress && j.progress.detail,
+      j.progress && j.progress.dlPercent, j.progress && j.progress.packPercent,
       j.error, (j.log || []).length, (j.result && j.result.warnings && j.result.warnings.length) || 0,
       !!(j.result && j.result.rawExport), j.outPath || null, j.outFile || null,
     ]));
