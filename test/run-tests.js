@@ -1448,6 +1448,28 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.strictEqual(videoUtil.targetLongEdge(3840, 2160, { id: 'original', reduction: 1, maxDimension: 0 }), 0);
   });
 
+  // 安卓上 os.tmpdir() 会退回只读的 /tmp：临时根目录必须自己验证可写
+  test('临时根目录：候选不可写时回退到工程内可写目录', () => {
+    const blocked = path.join(os.tmpdir(), `wempkg-blocked-${Date.now()}`);
+    fs.writeFileSync(blocked, 'x'); // 已存在的普通文件，往里 mkdir 必然失败
+    const savedWem = process.env.WEM_TMPDIR;
+    const savedTmp = process.env.TMPDIR;
+    process.env.WEM_TMPDIR = blocked;
+    delete process.env.TMPDIR;
+    try {
+      const root = videoUtil.tempRoot();
+      assert.notStrictEqual(root, blocked, '不可写的候选不能被选为临时根目录');
+      fs.accessSync(root, fs.constants.W_OK);
+      assert.ok(fs.statSync(root).isDirectory(), '临时根目录必须是可写目录');
+    } finally {
+      if (savedWem === undefined) delete process.env.WEM_TMPDIR;
+      else process.env.WEM_TMPDIR = savedWem;
+      if (savedTmp === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = savedTmp;
+      try { fs.rmSync(blocked, { force: true }); } catch { /* ignore */ }
+    }
+  });
+
   test('均衡/流畅档位会缩视频纹理，原始档位保持字节不变', () => {
     const buf = makeVideoTex(3840, 2160);
     const smoothInfo = tex.inspectTex(buf, { preset: 'smooth' });

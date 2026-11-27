@@ -188,12 +188,40 @@ function runTranscode(ffmpeg, src, dst, width, height, target, opts = {}) {
 }
 
 /**
+ * 可写的临时根目录。
+ *
+ * 安卓上 os.tmpdir() 在 TMPDIR 没进 node 进程时会退回 /tmp，而 /tmp 在安卓是
+ * 只读根目录（应用域写它一律 EACCES），视频转码当场失败。所以这里不相信单个
+ * 来源：候选逐个 mkdir + 写权限验证，第一个能用就用。
+ *
+ * `.cache/pkg-tmp` 落在工程目录里（安卓是 filesDir，必然可写），且名字带 pkg-
+ * 前缀，会被 cachegc 当临时目录回收。
+ */
+function tempRoot() {
+  const candidates = [
+    process.env.WEM_TMPDIR,
+    process.env.TMPDIR,
+    path.join(__dirname, '..', '.cache', 'pkg-tmp'),
+    os.tmpdir(),
+  ];
+  for (const dir of candidates) {
+    if (!dir) continue;
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.accessSync(dir, fs.constants.W_OK);
+      return dir;
+    } catch { /* 换下一个候选 */ }
+  }
+  return os.tmpdir();
+}
+
+/**
  * 把内存里的视频载荷缩到目标最长边，输出独立 MP4。
  * @returns {{mp4:Buffer,width:number,height:number}|null}
  */
 function transcodeBuffer(buf, { width, height, target, ffmpeg, opts = {} }) {
   if (!buf || !target || target <= 0 || !ffmpeg) return null;
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wempkg-video-'));
+  const tmp = fs.mkdtempSync(path.join(tempRoot(), 'wempkg-video-'));
   try {
     const isWebm = buf.subarray(0, 4).equals(Buffer.from([0x1a, 0x45, 0xdf, 0xa3]));
     const src = path.join(tmp, 'in' + (isWebm ? '.webm' : '.mp4'));
@@ -277,6 +305,7 @@ module.exports = {
   findFfmpeg,
   ffmpegCandidates,
   probeVideoDims,
+  tempRoot,
   transcodeBuffer,
   transcodeProjectVideo,
   isAndroidRuntime,
