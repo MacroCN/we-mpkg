@@ -1,0 +1,14 @@
+we-mpkg 3.0.0-beta.16
+
+JPEG 解码搬进 rust-tex：baseline / extended / 渐进式全支持，输出与 jpeg-js 逐字节一致。
+
+- 新模块 rust/tex-cli/src/jpeg.rs（约 900 行），按 jpeg-js（notmasteryet 版）的整数
+  IDCT、取整方向、最近邻色度上采样逐条复刻，不引第三方 crate，安卓交叉编译零依赖。
+- 新子命令 jpeg-decode（支持 - 走 stdin/stdout 管道，尺寸 JSON 从 stderr 回传）。
+- 直通 JPEG 纹理与 PNG 一样整包进 Rust：解码 + 裁剪 + 缩放 + LZ4 一条链，一次进程。
+- 2048×2048 JPEG：解码 414ms -> 267ms；整包转换 452ms -> 266ms，字节完全相同。
+- 校验样本 8 种（baseline 4:4:4 / 4:2:2 / 4:2:0、灰度、渐进式 4:4:4 / 4:2:0 等）
+  与 jpeg-js 全部逐字节一致；黄金样本新增 4 例（JPEG 解码 2 例 + 直通纹理 2 例）。
+- tex.js 的 decodeJpeg 生产路径改为 Rust，jpeg-js 仅留作黄金样本对照。
+
+版本 3.0.0-beta.16 / versionCode 75，不发布 Release，APK 见 Actions artifact。

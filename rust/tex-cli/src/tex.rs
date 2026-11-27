@@ -20,6 +20,7 @@ pub const FLAG_IS_GIF: i32 = 4;
 pub const FLAG_IS_VIDEO: i32 = 32;
 pub const FREE_IMAGE_UNKNOWN: i32 = -1;
 pub const FREE_IMAGE_PNG: i32 = 13;
+pub const FREE_IMAGE_JPEG: i32 = 2;
 
 #[derive(Debug)]
 pub struct Mip {
@@ -344,9 +345,10 @@ pub struct Converted {
 
 pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
     let tex = parse(buf)?;
-    // 直通图里目前只有 PNG 能在 Rust 里解（JPEG 仍由 JS 侧处理，调用方不会把 JPEG 送进来）
+    // 直通图里的 PNG / JPEG 都能在 Rust 里解，其余（GIF、MP4 等）交给 JS 侧
     let passthrough_png = tex.image_format == FREE_IMAGE_PNG;
-    if tex.image_format >= 0 && !passthrough_png {
+    let passthrough_jpeg = tex.image_format == FREE_IMAGE_JPEG;
+    if tex.image_format >= 0 && !passthrough_png && !passthrough_jpeg {
         return Err("passthrough-unsupported".into());
     }
     if tex.images.is_empty() {
@@ -362,16 +364,22 @@ pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
         let mip = mips.first().ok_or("帧没有 mip")?;
         let logical_w = tex.image_w as usize;
         let logical_h = tex.image_h as usize;
-        let mut pixels = if passthrough_png {
+        let mut pixels = if passthrough_png || passthrough_jpeg {
             let payload = &buf[mip.start..mip.start + mip.len];
-            let png = crate::png::decode(payload, 512 * 1024 * 1024)?;
-            if png.width != mip.width || png.height != mip.height {
+            let (w, h, data) = if passthrough_png {
+                let p = crate::png::decode(payload, 512 * 1024 * 1024)?;
+                (p.width, p.height, p.data)
+            } else {
+                let j = crate::jpeg::decode(payload)?;
+                (j.width, j.height, j.data)
+            };
+            if w != mip.width || h != mip.height {
                 return Err(format!(
-                    "PNG 尺寸 {}x{} 与 TEX 记录 {}x{} 不符",
-                    png.width, png.height, mip.width, mip.height
+                    "直通图尺寸 {}x{} 与 TEX 记录 {}x{} 不符",
+                    w, h, mip.width, mip.height
                 ));
             }
-            png.data
+            data
         } else {
             decode_mip(buf, mip, tex.format)?
         };

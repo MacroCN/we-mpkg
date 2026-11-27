@@ -274,6 +274,45 @@ addCase('png-decode-gray16-9x9', 'png-decode',
   (buf) => tex.decodePng(buf).data,
   { width: 9, height: 9 });
 
+
+// ---- JPEG 解码（baseline / 渐进式，Rust 输出必须与 jpeg-js 逐字节一致） ----
+function makeJpegRgba(w, h, seed) {
+  const px = rnd(w * h * 4, seed);
+  for (let i = 3; i < px.length; i += 4) px[i] = 255;
+  return require('jpeg-js').encode({ data: px, width: w, height: h }, 70).data;
+}
+
+const jpegBase = makeJpegRgba(16, 16, 61);
+addCase('jpeg-decode-baseline-16x16', 'jpeg-decode', jpegBase,
+  (buf) => tex.decodeJpeg(buf).data, { width: 16, height: 16 });
+
+// 渐进式样本固定内联（PIL 生成，jpeg-js 编码器只能出 baseline）
+const jpegProg = Buffer.from(
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAYEBQYFBAYGBQYHBwYIChAKCgkJChQODwwQFxQYGBcUFhYaHSUfGhsjHBYWICwgIyYnKSopGR8tMC0oMCUoKSj/wgALCAAoADABAREA/8QAGAABAQEBAQAAAAAAAAAAAAAABQcGAAP/2gAIAQEAAAABxTbTbGXPbaHnvVXynJ7bZOababYljbbQ89//xAAZEAADAQEBAAAAAAAAAAAAAAAAAwQCBQH/2gAIAQEAAQUCVOKnFTipzCfMZ6HeUj1U4qcVOXdiWLVldPR2qcVOV3xwFvVsuFTipxU5b3qHipxU4qcVOYT5jKpxU4qcVOXdiWLVldPR3//EACYQAAIBAgMIAwAAAAAAAAAAAAECAxEhACBBBBATIjJCcdFSU8H/2gAIAQEABj8CyFnoFFyTpjh7CqzPq56R7yNGgM8y2KrYDycVnbl0jXpG+kz1k+tLtgrXhQnsT9OuQpsi8CP5dx9ZSz0Ci5J0ytGgM8y2KrYDycVnbl0jXpGP/8QAHRAAAgMBAQEBAQAAAAAAAAAAASEAETFBYVGRof/aAAgBAQABPyHJTJTJTJQlQWwoAOmUFLouvB+mDWbMlMlMlDtysLKX6ZbFGoK1hpgGHa+sv2ZKZKZN/wCBvxG3U6HwzsP0Q0eeTJTJTJRn3Y6E++KxgjZkpkpkpkoSoLYUAHTMlMlMlMlDtysLKX6ZbFGoK1hpgGHa+sv2f//aAAgBAQAAABC+y7fb/8QAHBABAQEBAQEAAwAAAAAAAAAAAREA8SFBMVFh/9oACAEBAAE/EObubububkk/HCqo+AAqu9kuIwpgRsPA9IfQc3c3c3JErGK0kSx8CUo3sTVIokNb9BX0WQObubrvinmfZ4oeUXRZfxv3JgNcT7ETxwZdzdzdzd/JAJyL8WlK8Debubububkk/HCqo+AAqu5u5u5u5uSJWMVpIlj4EpRvYmqRRIa36Cvosgf/2Q==',
+  'base64'
+);
+addCase('jpeg-decode-progressive-48x40', 'jpeg-decode', jpegProg,
+  (buf) => tex.decodeJpeg(buf).data, { width: 48, height: 40 });
+
+// ---- 直通 JPEG 纹理：解码 + 裁剪 + 缩放 + LZ4 一条链 ----
+const texJpeg = buildTex({
+  format: tex.TEX_FORMAT.RGBA8888,
+  texW: 16, texH: 16, imageFormat: tex.FREE_IMAGE.JPEG,
+  images: [{ mips: [{ w: 16, h: 16, bytes: jpegBase }] }],
+});
+addCase('tex-convert-jpeg-passthrough-16x16', 'tex-convert', texJpeg,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg.tex' }).bytes,
+  { preset: 'default' });
+
+const texJpegProg = buildTex({
+  format: tex.TEX_FORMAT.RGBA8888,
+  texW: 48, texH: 40, imageFormat: tex.FREE_IMAGE.JPEG,
+  images: [{ mips: [{ w: 48, h: 40, bytes: jpegProg }] }],
+});
+addCase('tex-convert-jpeg-progressive-48x40', 'tex-convert', texJpegProg,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg渐进.tex' }).bytes,
+  { preset: 'default' });
+
 // ---- 写盘 ----
 fs.rmSync(outRoot, { recursive: true, force: true });
 fs.mkdirSync(outRoot, { recursive: true });

@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T22:49:13.461Z",
+  "generatedAt": "2026-11-27T23:08:40.092Z",
   "generator": "tools/make-golden-format.js",
   "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
   "cases": [
@@ -141,6 +141,48 @@
       "outputSha256": "edbc62b0a3ddc21983b3cee966b5a8ff76ff212486abc9dc4188271d3e480333",
       "width": 9,
       "height": 9
+    },
+    {
+      "name": "jpeg-decode-baseline-16x16",
+      "kind": "jpeg-decode",
+      "input": "jpeg-decode-baseline-16x16/in.bin",
+      "output": "jpeg-decode-baseline-16x16/out.bin",
+      "inputBytes": 906,
+      "outputBytes": 1024,
+      "outputSha256": "673f614fddcea639e375a494d5020c01e40d1180baa7936def633b5b97dd59ae",
+      "width": 16,
+      "height": 16
+    },
+    {
+      "name": "jpeg-decode-progressive-48x40",
+      "kind": "jpeg-decode",
+      "input": "jpeg-decode-progressive-48x40/in.bin",
+      "output": "jpeg-decode-progressive-48x40/out.bin",
+      "inputBytes": 748,
+      "outputBytes": 7680,
+      "outputSha256": "f1e67221a4f0e88071d20d3fe8a5529cb9dea6e675f0423023fb1e8656c19358",
+      "width": 48,
+      "height": 40
+    },
+    {
+      "name": "tex-convert-jpeg-passthrough-16x16",
+      "kind": "tex-convert",
+      "input": "tex-convert-jpeg-passthrough-16x16/in.bin",
+      "output": "tex-convert-jpeg-passthrough-16x16/out.bin",
+      "inputBytes": 997,
+      "outputBytes": 1115,
+      "outputSha256": "0e755f2034943ed2a6864fa2372b1d92050d743ab65db729872e1b31cdbe57c7",
+      "preset": "default"
+    },
+    {
+      "name": "tex-convert-jpeg-progressive-48x40",
+      "kind": "tex-convert",
+      "input": "tex-convert-jpeg-progressive-48x40/in.bin",
+      "output": "tex-convert-jpeg-progressive-48x40/out.bin",
+      "inputBytes": 839,
+      "outputBytes": 4216,
+      "outputSha256": "2b2bf65915f1b1797d25802bce009d9687f4da6808029b51fa185c5c8d60d3b8",
+      "preset": "default"
     }
   ]
 }

@@ -2565,6 +2565,9 @@ function replayGolden(forceRustPng) {
     } else if (c.kind === 'png-decode') {
       const fast = forceRustPng ? rt.pngDecode(input, c.width, c.height) : null;
       bytes = fast || texlib.decodePng(input).data;
+    } else if (c.kind === 'jpeg-decode') {
+      const fast = forceRustPng ? rt.jpegDecode(input).data : null;
+      bytes = fast || texlib.decodeJpeg(input).data;
     } else if (c.kind === 'tex-convert') {
       const r = texlib.convertTexBuffer(input, { relPath: 'materials/黄金样本.tex', preset: c.preset === 'balanced' ? 'balanced' : 'default' });
       bytes = r.bytes || input;
@@ -2603,7 +2606,7 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
       const expected = fs.readFileSync(path.join(dir, c.output));
       assert.ok(bytes.equals(expected), `${name}: JS 路径输出与黄金样本不一致`);
     }
-    assert.ok(manifest.cases.length >= 11, '黄金样本集至少要覆盖 11 个格式用例');
+    assert.ok(manifest.cases.length >= 17, '黄金样本集至少要覆盖 17 个格式用例');
   } finally {
     if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
     rt._reset();

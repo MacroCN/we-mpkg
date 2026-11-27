@@ -28,7 +28,7 @@ const MIN_VERSION = 3;
 
 let probe; // undefined = 未探测；null = 没有；string = 路径
 /** 本次运行实际走 Rust 的次数（给「纹理加速引擎」状态显示用） */
-const stats = { dxt: 0, lz4: 0, tex: 0, png: 0 };
+const stats = { dxt: 0, lz4: 0, tex: 0, png: 0, jpeg: 0 };
 let binVersion = null;
 let lastError = null;
 let attempts = [];
@@ -301,6 +301,42 @@ function pngDecode(buf, width, height) {
 }
 
 /**
+ * JPEG 解码 -> RGBA8（直通纹理路径 / 直接解码）。同样走 stdin/stdout：
+ * 尺寸在 Rust 侧算，JSON 从 stderr 取（stdout 只放像素）。
+ */
+function jpegDecode(buf) {
+  const bin = requireEngine();
+  try {
+    const r = require('child_process').spawnSync(bin, ['jpeg-decode', '-', '-'], {
+      input: buf,
+      maxBuffer: 512 * 1024 * 1024 + 65536,
+      timeout: 120000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    if (r.error || r.status !== 0 || !r.stdout) {
+      const detail = r.error ? r.error.message : (r.stderr ? r.stderr.toString().trim() : `退出码 ${r.status}`);
+      throw engineError('jpeg-decode', detail);
+    }
+    let meta = null;
+    try {
+      const lines = (r.stderr || '').toString().trim().split('\n');
+      meta = JSON.parse(lines[lines.length - 1]);
+    } catch { meta = null; }
+    if (!meta || !(meta.width > 0) || !(meta.height > 0)) {
+      throw engineError('jpeg-decode', '缺少尺寸信息');
+    }
+    if (r.stdout.length !== meta.width * meta.height * 4) {
+      throw engineError('jpeg-decode', `输出长度 ${r.stdout.length} != 期望 ${meta.width * meta.height * 4}`);
+    }
+    stats.jpeg++;
+    return { width: meta.width, height: meta.height, data: r.stdout };
+  } catch (e) {
+    if (e && e.message && e.message.startsWith('rust-tex')) throw e;
+    throw engineError('jpeg-decode', e);
+  }
+}
+
+/**
  * 整包 tex 转换（非直通图路径：parse -> 解码 -> 裁 -> 缩放 -> 写 TEXB0004 -> 自校验）。
  * scale 由调用方按整包统一倍率算好传进来，保持 JS 侧单一事实来源。
  */
@@ -348,6 +384,7 @@ module.exports = {
   lz4Decompress,
   texConvert,
   pngDecode,
+  jpegDecode,
   // 测试用：重置探测缓存
   _reset() { probe = undefined; },
 };

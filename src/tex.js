@@ -462,6 +462,18 @@ let lastDecodeError = '';
  * 之前就是这里把整张纹理判成「无法解码」→ 原图直通 → 手机端读不出来 → 黑屏。
  */
 function decodeJpeg(buf, opts = {}) {
+  // JPEG 解码交给 Rust（baseline / 渐进式都支持，输出与 jpeg-js 逐字节一致）。
+  // 下面的 jpeg-js 路径只作为黄金样本的对照实现保留。
+  if (rusttex.enabled()) {
+    try {
+      const r = rusttex.jpegDecode(buf);
+      lastDecodeError = '';
+      return { width: r.width, height: r.height, data: Buffer.from(r.data) };
+    } catch (e) {
+      lastDecodeError = `JPEG 解码失败: ${e.message || e}`;
+      return null;
+    }
+  }
   const jpeg = getJpeg();
   if (!jpeg) { lastDecodeError = '缺少 jpeg-js 依赖'; return null; }
   const maxMemoryUsageInMB = opts.maxMemoryMB || DEFAULT_MAX_RGBA_BYTES / 1048576 * 4;
@@ -874,8 +886,10 @@ function convertTexBuffer(buf, opts = {}) {
 
   // 非直通图（DXT / RGBA8 / R8 / RG88）以及直通 PNG，整包交给 Rust：
   // 容器读写、解码、裁剪、缩放、LZ4 都在一个进程里做完，不再每张图拆成多次调用。
-  // JPEG 仍是 JS 解码，动图（GIF）帧表由 JS 处理，这两类继续走下面的原实现。
-  const rustPacket = tex.container.imageFormat < 0 || tex.container.imageFormat === FREE_IMAGE.PNG;
+  // 动图（GIF）帧表由 JS 处理，这类继续走下面的原实现。
+  const rustPacket = tex.container.imageFormat < 0
+    || tex.container.imageFormat === FREE_IMAGE.PNG
+    || tex.container.imageFormat === FREE_IMAGE.JPEG;
   if (rustPacket && !animated && opts.scale === undefined && rusttex.enabled()) {
     const fast = rusttex.texConvert(buf, scale, animated);
     verifyMobileTex(fast.bytes, {
