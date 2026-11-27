@@ -1026,7 +1026,7 @@ async function packFromPath(inputPath, opts = {}) {
   const checkpoint = new convertplan.Checkpoint(checkpointFile);
   checkpoint.bind(`${preset.id}|v3|audio=${opts.preserveAudio ? 1 : 0}`);
   onLog('纹理/着色器适配（手机端）...');
-  const adapted = adaptForMobile(projectDir, { onLog, preset, maxRgbaBytes: opts.maxRgbaBytes, checkpoint });
+  const adapted = adaptForMobile(projectDir, { onLog, preset, maxRgbaBytes: opts.maxRgbaBytes, checkpoint, preservePropertyLayers: opts.preservePropertyLayers });
   warnings.push(...adapted.warnings);
   checkpoint.flush();
   if (opts.reference) {

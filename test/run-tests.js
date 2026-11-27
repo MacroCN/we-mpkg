@@ -917,6 +917,39 @@ test('叠加层：alpha 字符串归一为数字，孤儿父级断开', () => {
   assert.deepStrictEqual(r.repaired.map((x) => x.action).sort(), ['alpha-numeric', 'orphan-parent-dropped']);
 });
 
+test('双主题图层：由用户属性控制的 visible 保留原样，交给 WE 运行时切换', () => {
+  const dir = tmp('themes');
+  fs.writeFileSync(path.join(dir, 'project.json'), JSON.stringify({
+    general: { properties: { theme: { value: 1 }, glow: { value: true } } },
+  }));
+  const writeScene = () => fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
+    objects: [
+      { id: 1, name: '主题2', visible: { user: { name: 'theme', condition: '== 1' }, value: true } },
+      { id: 2, name: '主题2-简写', visible: { user: 'theme', value: true } },
+      { id: 3, name: '未知属性', visible: { user: { name: 'nope' }, value: true } },
+      { id: 4, name: '纯值', visible: { value: false } },
+    ],
+  }));
+  writeScene();
+  const logs = [];
+  const changed = packer.flattenSceneVisibility(dir, { onLog: (m) => logs.push(m) });
+  const scene = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(typeof scene.objects[0].visible, 'object', '属性控制的主题层必须保留对象形式');
+  assert.deepStrictEqual(scene.objects[0].visible, { user: { name: 'theme', condition: '== 1' }, value: true });
+  assert.strictEqual(typeof scene.objects[1].visible, 'object', 'user 写成字符串的也要保留');
+  assert.strictEqual(scene.objects[2].visible, true, '属性不存在的照样固化成布尔');
+  assert.strictEqual(scene.objects[3].visible, false);
+  assert.strictEqual(changed, 2, '只剩两条没有属性控制的图层被固化');
+  assert.ok(logs.some((m) => m.includes('保留 2 个属性控制的图层')), logs.join('|'));
+
+  // 旧行为仍可用：全部固化
+  writeScene();
+  packer.flattenSceneVisibility(dir, { onLog: () => {}, preservePropertyLayers: false });
+  const frozen = JSON.parse(fs.readFileSync(path.join(dir, 'scene.json'), 'utf8'));
+  assert.strictEqual(frozen.objects[0].visible, true, 'theme=1 时主题2 应可见');
+  assert.strictEqual(frozen.objects[1].visible, true);
+});
+
 test('--drop-audio-layers 可强制移除音频频谱层', () => {
   const dir = makeLayerProject('forceDrop', 'uniform float g_AudioSpectrum32Left[32];\nvoid main(){}\n');
   fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify({
@@ -1057,15 +1090,45 @@ await testAsync('进度：下载阶段按字节算百分比，速度/ETA 随之�
   await sleepMs(10);
   d.calls[0].hooks.onProgress({ phase: 'download', percent: 25, bytes: 25, total: 100, detail: '下载 a.png' });
   assert.strictEqual(job.progress.percent, 25);
+  assert.strictEqual(job.progress.dlPercent, 25);
   assert.strictEqual(job.progress.bytes, 25);
   assert.strictEqual(job.progress.total, 100);
   assert.strictEqual(job.progress.detail, '下载 a.png');
   d.calls[0].hooks.onProgress({ phase: 'convert', done: 2, total: 4 });
-  assert.strictEqual(job.progress.percent, 50, '转换阶段按 done/total 折算');
+  // 下载层进入打包后锁 100，纹理转换进度记在打包层（深色覆盖条），不再和下载混成一个百分比
+  assert.strictEqual(job.state, 'packing', '进入打包阶段任务状态必须切到 packing，否则界面一直显示下载中');
+  assert.strictEqual(job.progress.dlPercent, 100, '开始打包后下载层应为 100%');
+  assert.strictEqual(job.progress.packDone, 2);
+  assert.strictEqual(job.progress.packTotal, 4);
+  assert.ok(job.progress.packPercent > 8 && job.progress.packPercent < 66, '纹理转换在打包层区间内推进');
+  assert.strictEqual(job.progress.percent, job.progress.packPercent);
+  assert.strictEqual(job.progress.speed, 0, '打包阶段不再挂下载速率');
   d.calls[0].resolve({ result: {} });
   await sleepMs(20);
   assert.strictEqual(hub.get(job.id).state, 'done');
   assert.strictEqual(hub.get(job.id).progress.percent, 100);
+  assert.strictEqual(hub.get(job.id).progress.packPercent, 100);
+  hub.stop();
+});
+
+await testAsync('速率：按采样窗口算，字节回退时作废', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub2b'), 'state.json'), maxConcurrent: 1 });
+  const job = hub.add({ id: '78' });
+  await sleepMs(10);
+  const onProgress = d.calls[0].hooks.onProgress;
+  onProgress({ phase: 'download', bytes: 0, total: 4096 });
+  await sleepMs(700);
+  onProgress({ phase: 'download', bytes: 1400, total: 4096 });
+  // 700ms 传了 1400B → 约 2KB/s
+  assert.ok(job.progress.speed > 1400 && job.progress.speed < 2600, `速率应在 ~2KB/s，实际 ${job.progress.speed}`);
+  assert.ok(job.progress.eta > 0, 'ETA 应算出来');
+  // 换了文件 / 重试导致字节回退：旧速率必须作废
+  onProgress({ phase: 'download', bytes: 100, total: 4096 });
+  assert.strictEqual(job.progress.speed, 0, '字节回退后速率重置为 0');
+  assert.strictEqual(job.progress.eta, null);
+  d.calls[0].resolve({ result: {} });
+  await sleepMs(20);
   hub.stop();
 });
 
@@ -1975,6 +2038,37 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     const dlpage = fs.readFileSync(path.join(__dirname, '..', 'public', 'downloads.js'), 'utf8');
     assert.ok(!dlc.includes('STATE_TEXT = {') && !dlpage.includes('STATE_TEXT = {'), '状态文案表不该再复制一份');
     assert.ok(!dlc.includes('PHASE_TEXT = {') && !dlpage.includes('PHASE_TEXT = {'), '阶段文案表不该再复制一份');
+  });
+
+  test('进度条分层：下载层一直在，打包层只在打包阶段出现', () => {
+    require(path.join(__dirname, '..', 'public', 'joblib.js'));
+    const J = globalThis.WE_JOBS;
+    assert.ok(J, 'joblib 应挂到 globalThis');
+
+    const downloading = { id: '1', state: 'downloading', progress: { phase: 'download', percent: 62, dlPercent: 62, packPercent: 0, bytes: 45, total: 72 } };
+    const v1 = J.view(downloading, { zh: true });
+    assert.strictEqual(v1.dlPct, 62);
+    assert.strictEqual(v1.packPct, null, '下载阶段不该有打包层');
+    assert.ok(!v1.bar.includes('class="pack"'), '下载阶段不该画深色层');
+
+    const packing = { id: '2', state: 'packing', progress: { phase: 'convert', percent: 43, dlPercent: 100, packPercent: 43, bytes: 72, total: 72 } };
+    const v2 = J.view(packing, { zh: true });
+    assert.strictEqual(v2.dlPct, 100, '打包阶段下载层锁 100');
+    assert.strictEqual(v2.packPct, 43);
+    assert.ok(v2.bar.includes('class="pack"'), '打包阶段要画出深色覆盖层');
+    assert.ok(v2.bar.includes('layered'), '两层结构要带 layered 类');
+    assert.strictEqual(v2.stateText, '打包中');
+
+    // state 还停在 downloading、但 phase 已经进打包：前端也要认出来
+    const mixed = { id: '3', state: 'downloading', progress: { phase: 'convert', percent: 20, dlPercent: 100, packPercent: 20 } };
+    const v3 = J.view(mixed, { zh: true });
+    assert.strictEqual(v3.packPct, 20, 'phase 进入打包就该显示打包层');
+    assert.strictEqual(v3.stateText, '打包中');
+
+    const done = { id: '4', state: 'done', progress: { percent: 100, dlPercent: 100, packPercent: 100 } };
+    const v4 = J.view(done, { zh: true });
+    assert.strictEqual(v4.pct, 100);
+    assert.strictEqual(v4.packPct, null, '完成后收掉深色层，整条恢复成完成色');
   });
 
   test('前端 8 项：顶栏任务条 / 卡片直达 / 类型徽标 / 设置分 tab / 打开文件夹', () => {

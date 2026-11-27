@@ -34,7 +34,8 @@ public final class NodeRunner {
         System.loadLibrary("wempkg-node");
     }
 
-    private static native int startNode(String[] args, String nodePath, String tmpDir, String logPath, String nativeLibDir);
+    private static native int startNode(String[] args, String nodePath, String tmpDir, String homeDir,
+                                         String logPath, String nativeLibDir, String publicDownloads);
 
     private NodeRunner() {}
 
@@ -331,14 +332,27 @@ public final class NodeRunner {
                     cleanLegacyDownloadCache(ctx);
                     prepareSettings(ctx);
                     String dir = projectDir(ctx);
-                    Log.i(TAG, "starting node, project=" + dir);
+                    // HOME 放私有 files 目录（cacheDir 会被「清除缓存」清掉）
+                    File home = new File(ctx.getFilesDir(), "home");
+                    if (!home.exists()) home.mkdirs();
+                    // 公共下载目录由系统给：不要写死 /storage/emulated/0（分身/工作资料会是别的 userId）
+                    String publicDownloads = null;
+                    try {
+                        publicDownloads = android.os.Environment
+                                .getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_DOWNLOADS)
+                                .getAbsolutePath();
+                    } catch (Throwable ignored) { }
+                    Log.i(TAG, "starting node, project=" + dir + ", home=" + home.getAbsolutePath()
+                            + ", download=" + publicDownloads);
                     // 注意：必须带 serve 子命令，否则 CLI 只打印用法后退出
                     nativeEntered = true;
                     startNode(new String[]{"node", scriptPath(ctx), "serve"},
                               dir + ":" + dir + "/node_modules",
                               ctx.getCacheDir().getAbsolutePath(),
+                              home.getAbsolutePath(),
                               logFile(ctx).getAbsolutePath(),
-                              ctx.getApplicationInfo().nativeLibraryDir);
+                              ctx.getApplicationInfo().nativeLibraryDir,
+                              publicDownloads);
                 } catch (Throwable t) {
                     // 解包/写设置等 Java 阶段失败还没进 native，允许下次重试；
                     // 一旦进了 node::Start 就不能再启动第二次，保持 STARTED=true

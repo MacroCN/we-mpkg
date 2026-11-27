@@ -116,12 +116,15 @@ function effectiveProxy() {
 }
 
 /**
- * 安卓端的默认输出目录：内置存储的 Download/mpkg。
+ * 安卓端的默认输出目录：公共「下载」目录下的 mpkg。
+ * 下载目录的真实路径由外壳（NodeRunner）用 Environment 算好后经 WEM_PUBLIC_DOWNLOAD 传进来：
+ * 应用分身 / 工作资料的 userId 不是 0，写死 /storage/emulated/0 会落到不存在的目录。
  * 没拿到「所有文件访问」权限时写不进去，那就退回应用私有目录（网页里可以再改）。
  */
 function androidDefaultOutput() {
   if (process.platform !== 'android') return null;
-  const p = '/storage/emulated/0/Download/mpkg';
+  const base = env('WEM_PUBLIC_DOWNLOAD') || '/storage/emulated/0/Download';
+  const p = path.join(base, 'mpkg');
   try {
     fs.mkdirSync(p, { recursive: true });
     fs.accessSync(p, fs.constants.W_OK);

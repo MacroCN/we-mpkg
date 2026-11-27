@@ -58,6 +58,21 @@ public class KeepAliveService extends Service {
         Log.i(TAG, "keepalive service started");
     }
 
+    /**
+     * Android 15（API 35）起，dataSync 类型的前台服务在 24 小时内累计最多跑 6 小时；
+     * 超时后系统会调用这里并自己把 FGS 停掉。必须在这里收尾：如果超时后还继续
+     * startForeground，会抛 ForegroundServiceStartNotAllowedException 把进程带走。
+     * 这里只撤通知，不动 Node（native 线程还在跑，下载/打包尽量做完）。
+     */
+    @Override
+    public void onTimeout(int startId) {
+        Log.w(TAG, "dataSync foreground service timeout (Android 15+ 6h limit), stop foreground");
+        try {
+            stopForeground(STOP_FOREGROUND_REMOVE);
+        } catch (Throwable ignored) { }
+        stopSelf(startId);
+    }
+
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent != null && ACTION_STOP.equals(intent.getAction())) {

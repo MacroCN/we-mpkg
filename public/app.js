@@ -1315,27 +1315,60 @@ function showResultAction(jobId, result, job) {
 // 任务阶段文案（下载中心返回的 phase）
 const PHASE_LABEL = { prepare: '解包检查', download: '下载', convert: '纹理转换', shader: '着色器适配', reference: '替换资源', rawexport: '导出资源', webexport: '导出网页包', write: '写入 mpkg', done: '完成' };
 
-/** 把下载中心的进度写进详情页的进度条 */
+/** 把下载中心的进度写进详情页的进度条（下载一条、打包一条，深色层叠在下载层上） */
 function applyProgress(job) {
   const p = job.progress || {};
   const bar = $('p-bar');
+  const packEl = $('p-pack');
   const wrap = bar ? bar.parentElement : null;
-  const running = job.state === 'downloading' || job.state === 'packing' || job.state === 'queued';
-  const percent = job.state === 'done' ? 100 : (p.percent === undefined ? null : p.percent);
+  const state = job.state;
+  const running = state === 'downloading' || state === 'packing' || state === 'queued';
+  // 打包阶段判定：state 应已切到 packing，但老服务端可能停在 downloading，所以再看 phase
+  const packing = state === 'packing' || (state === 'downloading' && !!p.phase && p.phase !== 'download');
+  const done = state === 'done';
+
+  // 下载层：下载阶段按字节涨，一旦进打包就锁 100 —— 底层永远表示「下载这件事完了没」
+  let dl = done ? 100 : (typeof p.dlPercent === 'number'
+    ? p.dlPercent
+    : ((!p.phase || p.phase === 'download') ? (typeof p.percent === 'number' ? p.percent : null) : 100));
+  // 打包层：只在打包阶段画出深色覆盖条（完成后收掉，让整条恢复成完成色）
+  let pk = packing
+    ? (typeof p.packPercent === 'number' ? p.packPercent : (typeof p.percent === 'number' ? p.percent : null))
+    : null;
+
   if (wrap) {
-    wrap.classList.toggle('indeterminate', percent === null && running);
-    bar.style.width = percent === null ? '' : `${Math.max(1, Math.min(100, percent))}%`;
+    wrap.classList.toggle('indeterminate', dl === null && pk === null);
+    wrap.classList.toggle('layered', pk !== null);
   }
-  const stateText = { queued: '排队中', downloading: '下载中', packing: '打包中', done: '完成', failed: '失败', cancelled: '已取消' }[job.state] || job.state;
-  $('p-state').textContent = stateText + (job.state === 'done' ? ' ✔' : '');
+  if (bar) bar.style.width = dl === null ? '' : `${Math.max(1, Math.min(100, dl))}%`;
+  if (packEl) {
+    packEl.classList.toggle('hidden', pk === null);
+    packEl.style.width = pk === null ? '0%' : `${Math.max(1, Math.min(100, pk))}%`;
+  }
+
+  const stateText = packing ? '打包中' : ({ queued: '排队中', downloading: '下载中', packing: '打包中', done: '完成', failed: '失败', cancelled: '已取消' }[state] || state);
+  $('p-state').textContent = stateText + (done ? ' ✔' : '');
   const late = PHASE_LABEL[p.phase] ? ` · ${PHASE_LABEL[p.phase]}` : '';
-  const parts = [];
-  if (p.total) parts.push(`${human(p.bytes || 0)} / ${human(p.total)}`);
-  if (running && p.speed) parts.push(`${human(p.speed)}/s`);
-  if (running && p.eta) parts.push(`剩 ${p.eta}s`);
-  if (p.phase === 'convert' && p.total) parts.push(`${p.done || 0}/${p.total} 张`);
-  const sub = $('p-sub');
-  if (sub) sub.textContent = (percent === null ? '' : `${percent}%`) + (parts.length ? `  ${parts.join(' · ')}` : '');
+
+  let sub;
+  if (packing) {
+    // 打包阶段单独算文案：下载已经结束，只报「下载 100% + 打包 x%」，不再挂一个 0 B/s
+    const bits = ['下载 100%'];
+    bits.push(pk === null ? '打包中' : `打包 ${Math.round(pk)}%`);
+    if (p.packTotal) bits.push(`${p.packDone || 0}/${p.packTotal} 张`);
+    if (p.total) bits.push(`共 ${human(p.total)}`);
+    sub = bits.join(' · ');
+  } else {
+    const parts = [];
+    if (typeof dl === 'number') parts.push(`${Math.round(dl)}%`);
+    if (p.total) parts.push(`${human(p.bytes || 0)} / ${human(p.total)}`);
+    if (running && p.speed) parts.push(`${human(p.speed)}/s`);
+    if (running && p.eta) parts.push(`剩 ${p.eta}s`);
+    sub = parts.join('  ');
+  }
+  const subEl = $('p-sub');
+  if (subEl) subEl.textContent = sub;
+
   $('p-note').textContent = (p.detail || '') + late;
   if (p.compat) renderCompat(p.compat);
   const cancel = $('p-cancel');

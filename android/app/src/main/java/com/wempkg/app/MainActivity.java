@@ -565,12 +565,30 @@ public class MainActivity extends Activity {
             } else if ("home".equalsIgnoreCase(volume)) {
                 root = Environment.getExternalStorageDirectory().getAbsolutePath() + "/Documents";
             } else {
-                root = "/storage/" + volume;      // SD 卡
+                // SD 卡/U 盘：volume 是卷 UUID，真实挂载路径由 StorageManager 给（不要拼 /storage/<uuid>）
+                root = storageVolumePath(volume);
+                if (root == null) return null;
             }
             return rel.isEmpty() ? root : root + "/" + rel;
         } catch (Exception e) {
             return null;
         }
+    }
+
+    /** 用 StorageManager 把卷 UUID 换成真实挂载目录（可移动存储的路径不是固定的） */
+    private String storageVolumePath(String volumeId) {
+        try {
+            android.os.storage.StorageManager sm =
+                    (android.os.storage.StorageManager) getSystemService(STORAGE_SERVICE);
+            if (sm == null) return null;
+            for (android.os.storage.StorageVolume vol : sm.getStorageVolumes()) {
+                if (volumeId.equalsIgnoreCase(vol.getUuid())) {
+                    java.io.File d = vol.getDirectory();
+                    if (d != null) return d.getAbsolutePath();
+                }
+            }
+        } catch (Throwable ignored) { }
+        return null;
     }
 
     private void callJsPick(String path) {
@@ -731,6 +749,9 @@ public class MainActivity extends Activity {
             status("先填电脑地址，例如 192.168.1.10:3090");
             return;
         }
+        // Android 16 起「本地网络保护」逐步收紧，连 192.168.x.x 属于本地网络访问；
+        // 先按需申请附近设备权限，拒绝也不拦着（当前版本未强制，连不上时再提示）
+        requestNearbyIfNeeded();
         if (!raw.matches("(?i)https?://.*")) raw = "http://" + raw;
         Uri base;
         try {
@@ -905,9 +926,22 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Android 13+ 前台服务通知需要运行时授权；拒绝也不影响下载，只是通知不显示 */
-    private void requestNotifPermission() {
+    /**
+     * 远程模式要访问 192.168.x.x 这类地址，属于「本地网络」。Android 16 的本地网络保护
+     * 目前是 opt-in（后续版本会强制），届时需要附近设备权限；这里先按需申请，拒绝不阻塞。
+     */
+    private void requestNearbyIfNeeded() {
         if (android.os.Build.VERSION.SDK_INT < 33) return;
+        try {
+            String perm = "android.permission.NEARBY_WIFI_DEVICES";
+            if (checkSelfPermission(perm) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{perm}, 1002);
+            }
+        } catch (Throwable ignored) { }
+    }
+
+    /** Android 13+ 前台服务通知需要运行时授权；拒绝也不影响下载，只是通知不显示 */
+    private void requestNotifPermission() {        if (android.os.Build.VERSION.SDK_INT < 33) return;
         try {
             if (checkSelfPermission("android.permission.POST_NOTIFICATIONS")
                     != android.content.pm.PackageManager.PERMISSION_GRANTED) {
