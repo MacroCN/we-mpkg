@@ -54,7 +54,7 @@ jobs:
       # ffmpeg 二进制每次都要从 gyan.dev 拉，缓存一下（key 变了会重新下）
       # 目录只用 .cache/toolchain/ffmpeg/bin（新版）；2018 的 ffmpeg-lite 已废弃
       - name: Cache ffmpeg binary
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/toolchain/ffmpeg/bin
           key: ffmpeg-win-${{ runner.os }}-v2
@@ -133,7 +133,7 @@ jobs:
 
       # NDK + build-tools + platform 加起来几百 MB，按版本号做 key 缓存
       - name: Cache Android SDK components
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           # ubuntu runner 的 SDK 固定在 /usr/local/lib/android/sdk（env 上下文里取不到 ANDROID_HOME）
           path: |
@@ -162,7 +162,7 @@ jobs:
 
       # 预编译原生库（libnode 等）来自 release 附件，按附件版本做 key
       - name: Cache prebuilt native libraries
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/native-prebuilt
           key: native-prebuilt-v1-${{ runner.os }}
@@ -178,7 +178,7 @@ jobs:
           ls -lh android/app/src/main/jniLibs/arm64-v8a
 
       - name: Cache Android ffmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: .cache/toolchain/ffmpeg-android
           key: ffmpeg-android-9.0-${{ runner.os }}-9085507b
@@ -215,6 +215,7 @@ jobs:
       - name: Write local.properties
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
+      # Gradle 8.14.8 与 AGP 8.13 匹配；CI 会提示版本过旧（Gradle 9 尚未与 AGP 8.13 兼容），升级 AGP 时再一起动
       - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: '8.14.8'
