@@ -70,10 +70,40 @@
     const p = j.progress || {};
     return p.percent === undefined || p.percent === null ? null : p.percent;
   }
-  function barHtml(pct, cls) {
+  function num(v) {
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  }
+  /** 下载层进度（0-100）：下载阶段随字节涨，进入打包后固定 100 —— 底层始终表示「下载完了没」 */
+  function dlPctOf(j) {
+    if (!j) return null;
+    if (j.state === 'done') return 100;
+    const p = j.progress || {};
+    const d = num(p.dlPercent);
+    if (d !== null) return d;
+    // 老记录没有分层字段：下载阶段的 percent 就是下载进度
+    if (!p.phase || p.phase === 'download') return num(p.percent);
+    return 100;
+  }
+  /** 打包层进度（0-100）：只在打包中时有值，用来画深色覆盖层；完成后收掉 */
+  function packPctOf(j) {
+    if (!j) return null;
+    if (j.state !== 'packing') return null;
+    const p = j.progress || {};
+    const v = num(p.packPercent);
+    return v !== null ? v : num(p.percent);
+  }
+  /**
+   * 进度条：底层是下载，深色层叠加是打包。
+   * pack 为 null 时不画打包层（纯下载任务就是一条普通进度条）。
+   */
+  function barHtml(pct, cls, pack) {
     const extra = cls ? ' ' + cls : '';
-    if (pct === null || pct === undefined) return `<div class="bar indeterminate${extra}"><i></i></div>`;
-    return `<div class="bar${extra}"><i style="width:${Math.max(1, Math.min(100, pct))}%"></i></div>`;
+    const dl = pct === null || pct === undefined ? null : Math.max(1, Math.min(100, pct));
+    const pk = pack === null || pack === undefined ? null : Math.max(1, Math.min(100, pack));
+    const inner = `<i${dl === null ? '' : ` style="width:${dl}%"`}></i>`
+      + (pk === null ? '' : `<i class="pack" style="width:${pk}%"></i>`);
+    const ind = dl === null ? ' indeterminate' : '';
+    return `<div class="bar${pk !== null ? ' layered' : ''}${ind}${extra}">${inner}</div>`;
   }
 
   /** 失败原因归类：前端据此给「重新登录 / 换节点重试」，而不是让用户读文案猜下一步 */
@@ -95,7 +125,11 @@
     else if (p.bytes) out.push(human(p.bytes));
     if (isRun(j) && p.speed && !j.paused) out.push(`${human(p.speed)}/s`);
     if (isRun(j) && p.eta && !j.paused) out.push(`${secs(p.eta)}`);
-    if (p.phase === 'convert' && p.total) out.push(`${p.done || 0}/${p.total}`);
+    if (j.state === 'packing') {
+      // 打包阶段只报「下载已完成 + 打包百分比」，不再显示下载字节，免得看着像下载又从头开始
+      out.push(isZh() ? '下载完成' : 'Downloaded');
+    }
+    if (p.packTotal) out.push(`${p.packDone || 0}/${p.packTotal}`);
     if (j.result && j.result.type) out.push(j.result.type);
     if (j.result && j.result.rawExport) out.push(isZh() ? '原始资源' : 'raw assets');
     if (j.rawDir) out.push(isZh() ? '原始文件' : 'raw files');
@@ -111,8 +145,11 @@
     const o = opts || {};
     const zh = isZh(o);
     const p = j.progress || {};
-    const pct = percentOf(j);
     const run = isRun(j);
+    const dlPct = dlPctOf(j);
+    const packPct = packPctOf(j);
+    // 卡片上的大数字：下载中说下载进度，打包中说打包进度
+    const pct = packPct !== null ? packPct : percentOf(j);
     const kinds = [];
     if (run) kinds.push('run');
     if (j.state === 'done') kinds.push('done');
@@ -174,7 +211,8 @@
       id: j.id, itemId: j.itemId, title: j.title || `wallpaper_${j.itemId}`,
       state: j.state, stateText: stateText(j.state, zh),
       paused: !!j.paused, running: run,
-      pct, bar: barHtml(pct),
+      pct, bar: barHtml(dlPct, '', packPct),
+      dlPct, packPct,
       phase, phaseText: phaseText(p.phase, zh),
       meta: metaParts(j),
       metaText: metaParts(j).join(' · '),
@@ -204,7 +242,13 @@
       bytes += b;
       speed += Number(p.speed) || 0;
       totalBytes += t;
-      if (typeof p.percent === 'number' && Number.isFinite(p.percent)) {
+      if (typeof p.dlPercent === 'number' && Number.isFinite(p.dlPercent)) {
+        // 下载占前半程、打包占后半程：顶栏那一条用两层的平均值，别让一段走完就 100%
+        const pk = typeof p.packPercent === 'number' && Number.isFinite(p.packPercent) ? p.packPercent : null;
+        const prog = pk === null ? p.dlPercent : (p.dlPercent + pk) / 2;
+        known += prog * (t || 1);
+        weight += (t || 1);
+      } else if (typeof p.percent === 'number' && Number.isFinite(p.percent)) {
         known += p.percent * (t || 1);
         weight += (t || 1);
       }

@@ -1057,15 +1057,44 @@ await testAsync('进度：下载阶段按字节算百分比，速度/ETA 随之�
   await sleepMs(10);
   d.calls[0].hooks.onProgress({ phase: 'download', percent: 25, bytes: 25, total: 100, detail: '下载 a.png' });
   assert.strictEqual(job.progress.percent, 25);
+  assert.strictEqual(job.progress.dlPercent, 25);
   assert.strictEqual(job.progress.bytes, 25);
   assert.strictEqual(job.progress.total, 100);
   assert.strictEqual(job.progress.detail, '下载 a.png');
   d.calls[0].hooks.onProgress({ phase: 'convert', done: 2, total: 4 });
-  assert.strictEqual(job.progress.percent, 50, '转换阶段按 done/total 折算');
+  // 下载层进入打包后锁 100，纹理转换进度记在打包层（深色覆盖条），不再和下载混成一个百分比
+  assert.strictEqual(job.progress.dlPercent, 100, '开始打包后下载层应为 100%');
+  assert.strictEqual(job.progress.packDone, 2);
+  assert.strictEqual(job.progress.packTotal, 4);
+  assert.ok(job.progress.packPercent > 8 && job.progress.packPercent < 66, '纹理转换在打包层区间内推进');
+  assert.strictEqual(job.progress.percent, job.progress.packPercent);
+  assert.strictEqual(job.progress.speed, 0, '打包阶段不再挂下载速率');
   d.calls[0].resolve({ result: {} });
   await sleepMs(20);
   assert.strictEqual(hub.get(job.id).state, 'done');
   assert.strictEqual(hub.get(job.id).progress.percent, 100);
+  assert.strictEqual(hub.get(job.id).progress.packPercent, 100);
+  hub.stop();
+});
+
+await testAsync('速率：按采样窗口算，字节回退时作废', async () => {
+  const d = deferredRunner();
+  const hub = dlhub.createHub({ runner: d.runner, file: path.join(tmp('hub2b'), 'state.json'), maxConcurrent: 1 });
+  const job = hub.add({ id: '78' });
+  await sleepMs(10);
+  const onProgress = d.calls[0].hooks.onProgress;
+  onProgress({ phase: 'download', bytes: 0, total: 4096 });
+  await sleepMs(700);
+  onProgress({ phase: 'download', bytes: 1400, total: 4096 });
+  // 700ms 传了 1400B → 约 2KB/s
+  assert.ok(job.progress.speed > 1400 && job.progress.speed < 2600, `速率应在 ~2KB/s，实际 ${job.progress.speed}`);
+  assert.ok(job.progress.eta > 0, 'ETA 应算出来');
+  // 换了文件 / 重试导致字节回退：旧速率必须作废
+  onProgress({ phase: 'download', bytes: 100, total: 4096 });
+  assert.strictEqual(job.progress.speed, 0, '字节回退后速率重置为 0');
+  assert.strictEqual(job.progress.eta, null);
+  d.calls[0].resolve({ result: {} });
+  await sleepMs(20);
   hub.stop();
 });
 

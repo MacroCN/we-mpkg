@@ -59,6 +59,10 @@
   --info-edge: rgba(110, 231, 255, 0.45);
   --bar-a: #22d3ee;
   --bar-b: #34d399;
+  /* 打包进度层（深色，压在下载体上） */
+  --pack-a: #09141b;
+  --pack-b: #122a37;
+  --pack-edge: rgba(255, 255, 255, 0.42);
 
   /* 状态色（浅底纹 + 边框） */
   --neutral-bg: rgba(148, 163, 184, 0.08);
@@ -154,6 +158,10 @@
   --info-edge: rgba(14, 116, 144, 0.4);
   --bar-a: #0891b2;
   --bar-b: #16a34a;
+  /* 打包进度层：浅色界面下也保持深色，明显区别于下载层 */
+  --pack-a: #12303a;
+  --pack-b: #0d4650;
+  --pack-edge: rgba(255, 255, 255, 0.4);
 
   --neutral-bg: rgba(100, 116, 139, 0.08);
   --neutral-edge: rgba(100, 116, 139, 0.28);
@@ -685,6 +693,7 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
   background: var(--hairline);
   overflow: hidden;
   margin: 8px 0 4px;
+  position: relative;
 }
 .bar > i {
   display: block;
@@ -694,7 +703,22 @@ hr { border: none; border-top: 1px solid var(--line); margin: 16px 0; }
   background: linear-gradient(90deg, var(--bar-a), var(--bar-b));
   transition: width 0.35s ease;
 }
-.bar.indeterminate > i {
+/* 打包层：压在下载层上面的一段深色条。下载走完底层就是满的，深色条负责表示打包进度，
+   两件事分得很开，不再出现「下载 99% 突然掉回 8%」的错觉。 */
+.bar > i.pack {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--pack-a), var(--pack-b));
+  box-shadow: inset 0 0 0 1px var(--pack-edge);
+  transition: width 0.35s ease;
+  z-index: 1;
+}
+/* 打包阶段把底下的下载条调淡：一眼看出「下载已经满了，深色这段才是打包」 */
+.bar.layered > i:not(.pack) { opacity: 0.5; }
+.bar.indeterminate > i:not(.pack) {
   width: 34% !important;
   animation: barSlide 1.2s ease-in-out infinite;
 }

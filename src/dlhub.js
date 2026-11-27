@@ -55,7 +55,11 @@ const KEEP_HISTORY = 20;
 const JOB_PARAMS = ['itemId', 'title', 'raw', 'preset', 'preserveAudio', 'videoMagic', 'reference', 'mode'];
 
 function defaultProgress() {
-  return { phase: 'queued', percent: null, detail: '排队中', bytes: 0, total: 0, speed: 0, eta: null };
+  return {
+    phase: 'queued', percent: null, detail: '排队中',
+    bytes: 0, total: 0, speed: 0, eta: null,
+    dlPercent: 0, packPercent: 0, packDone: 0, packTotal: 0,
+  };
 }
 
 /**
@@ -179,7 +183,7 @@ function createHub(opts = {}) {
       };
       if (raw.state === 'downloading' || raw.state === 'packing') {
         job.log.push('上次进程中断，已重新排队（下载支持按块续传）');
-        job.progress = { phase: 'queued', percent: null, detail: '上次中断，重新排队', bytes: 0, total: 0, speed: 0, eta: null };
+        job.progress = Object.assign(defaultProgress(), { phase: 'queued', detail: '上次中断，重新排队' });
       }
       if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') {
         job.progress = raw.progress || job.progress;
@@ -204,46 +208,121 @@ function createHub(opts = {}) {
     if (job.log.length > 800) job.log.splice(0, job.log.length - 800);
   }
 
-  // ---- 进度：下载按字节算百分比，转换按已完成/总数算，其余阶段为不确定态 ----
+  // ---- 进度：下载层按字节算，打包层按子阶段合成 ----
+  // 两层分开以后，下载到 99% 不会再「退回 8% 重新涨」，用户也不会误以为下载出了问题。
+  // 打包子阶段在「打包进度」里的占比区间；没有细粒度计数的阶段按时间缓慢爬升，
+  // 免得进度条长时间钉在一个数字上看起来像卡死。
+  const PACK_SPAN = {
+    prepare: [0, 8],
+    convert: [8, 66],
+    shader: [66, 74],
+    reference: [74, 84],
+    rawexport: [8, 66],
+    webexport: [8, 66],
+    write: [84, 99],
+    done: [100, 100],
+  };
+
   function makeProgressTracker(job) {
-    let lastBytes = 0;
-    let lastTime = 0;
+    let sampleAt = 0;      // 上次速率采样的时间点
+    let sampleBytes = 0;   // 上次速率采样的字节数
     let speed = 0;
-    let lastPhase = '';
+    let lastKind = '';
+    let dlPercent = 0;
+    let packPercent = 0;
+    let packStage = '';
+    let stageAt = 0;
+
     return (p) => {
       if (!p || typeof p !== 'object') return;
       const now = Date.now();
-      const phase = p.phase === 'download' ? 'download' : (p.phase === 'done' ? 'done' : 'packing');
-      if (phase !== lastPhase) {
-        lastPhase = phase;
-        if (phase === 'download') pushLog(job, '开始下载');
-        if (phase === 'packing') pushLog(job, '开始打包（纹理 / 着色器适配）');
-      }
-      const bytes = Number(p.bytes) || 0;
-      const total = Number(p.total) || 0;
-      if (phase === 'download' && lastTime && bytes >= lastBytes) {
-        const dt = (now - lastTime) / 1000;
-        if (dt >= 0.4) {
-          const inst = (bytes - lastBytes) / dt;
-          speed = speed ? speed * 0.6 + inst * 0.4 : inst; // 平滑，避免跳字
+      const raw = p.phase || job.progress.phase;
+      const kind = raw === 'download' ? 'download' : (raw === 'done' ? 'done' : 'packing');
+
+      if (kind !== lastKind) {
+        if (kind === 'download') pushLog(job, '开始下载');
+        if (kind === 'packing') {
+          if (lastKind === 'download') pushLog(job, '下载完成，开始打包（纹理 / 着色器适配）');
+          dlPercent = 100;
         }
-      } else if (phase === 'download' && !lastTime) {
+        if (kind === 'done') { dlPercent = 100; packPercent = 100; }
+        lastKind = kind;
+        // 阶段切换必须重建采样窗口：沿用上一段的基准会把打包耗时算进速率里
+        sampleAt = 0;
+        sampleBytes = 0;
         speed = 0;
       }
-      lastBytes = bytes;
-      lastTime = now;
-      let percent = null;
-      if (typeof p.percent === 'number' && Number.isFinite(p.percent)) percent = Math.max(0, Math.min(100, Math.round(p.percent)));
-      else if (Number(p.total) > 0 && Number(p.done) >= 0) percent = Math.max(0, Math.min(100, Math.round((Number(p.done) / Number(p.total)) * 100)));
-      const eta = speed > 1024 && total > bytes ? Math.round((total - bytes) / speed) : null;
+
+      const bytes = Number(p.bytes) || 0;
+      const total = Number(p.total) || 0;
+      const prev = job.progress || {};
+      let dlBytes = Number(prev.bytes) || 0;
+      let dlTotal = Number(prev.total) || 0;
+      let packDone = Number(prev.packDone) || 0;
+      let packTotal = Number(prev.packTotal) || 0;
+
+      if (kind === 'download') {
+        dlBytes = bytes;
+        if (total > 0) dlTotal = total;
+        // 速率：采样窗口满 600ms 才算一次，并且同时移动基准点。
+        // 之前每次回调都刷新 lastTime，窗口永远凑不满 → 速率长期不动或忽大忽小。
+        if (sampleAt && bytes >= sampleBytes) {
+          const dt = (now - sampleAt) / 1000;
+          if (dt >= 0.6) {
+            const inst = (bytes - sampleBytes) / dt;
+            speed = speed ? speed * 0.7 + inst * 0.3 : inst; // 平滑，避免跳字
+            sampleAt = now;
+            sampleBytes = bytes;
+          }
+        } else {
+          // 换了文件 / 重试导致字节回退时重新开窗，旧速率作废
+          sampleAt = now;
+          sampleBytes = bytes;
+          speed = 0;
+        }
+        let pct = null;
+        if (dlTotal > 0) pct = (bytes / dlTotal) * 100;
+        else if (typeof p.percent === 'number' && Number.isFinite(p.percent)) pct = p.percent;
+        // 只增不减：多个文件并行时字节是汇总的，个别文件重下也不该让进度倒退
+        if (pct !== null) dlPercent = Math.max(dlPercent, Math.min(99, pct));
+        packDone = 0;
+        packTotal = 0;
+      } else {
+        const span = PACK_SPAN[raw];
+        if (Number(p.total) > 0 && Number(p.done) >= 0) {
+          packDone = Number(p.done);
+          packTotal = Number(p.total);
+        }
+        if (span) {
+          if (packStage !== raw) { packStage = raw; stageAt = now; }
+          const [from, to] = span;
+          let v;
+          if (packTotal > 0) {
+            v = from + (to - from) * Math.min(1, packDone / packTotal);
+          } else {
+            // 没有细分计数：每 2 秒爬 1 个百分点，最多爬到区间末尾
+            v = Math.min(to, from + ((now - stageAt) / 1000) * 0.5);
+          }
+          packPercent = Math.max(packPercent, v); // 子阶段之间只进不退
+        }
+      }
+
+      const percent = kind === 'done' ? 100 : Math.round(kind === 'download' ? dlPercent : packPercent);
+      const eta = kind === 'download' && speed > 1024 && dlTotal > dlBytes
+        ? Math.round((dlTotal - dlBytes) / speed) : null;
+
       job.progress = {
-        phase: p.phase || job.progress.phase,
+        phase: raw || prev.phase,
         percent,
-        detail: p.detail || job.progress.detail,
-        bytes,
-        total,
-        speed: Math.round(speed),
+        detail: p.detail || prev.detail,
+        bytes: dlBytes,
+        total: dlTotal,
+        speed: kind === 'download' ? Math.round(speed) : 0, // 打包阶段不再挂一个 0 B/s 的速度
         eta,
+        dlPercent: Math.round(dlPercent),
+        packPercent: Math.round(packPercent),
+        packDone,
+        packTotal,
         updatedAt: now,
       };
       job.progressAt = now;
@@ -274,7 +353,11 @@ function createHub(opts = {}) {
         pushLog(job, '任务在阶段边界被取消（成品若已生成会保留）');
       } else {
         job.state = 'done';
-        job.progress = { phase: 'done', percent: 100, detail: '完成', bytes: job.progress.total || 0, total: job.progress.total || 0, speed: 0, eta: 0, updatedAt: Date.now() };
+        job.progress = Object.assign(defaultProgress(), {
+          phase: 'done', percent: 100, detail: '完成',
+          bytes: job.progress.total || 0, total: job.progress.total || 0,
+          speed: 0, eta: 0, dlPercent: 100, packPercent: 100, updatedAt: Date.now(),
+        });
       }
     } catch (e) {
       job.error = e && e.message ? e.message : String(e);
@@ -307,7 +390,7 @@ function createHub(opts = {}) {
         .filter((j) => j.state === 'queued' && !j.cancelRequested)
         .sort((a, b) => a.createdAt - b.createdAt)[0];
       if (!next) return;
-      next.progress = { phase: 'download', percent: 0, detail: '准备下载', bytes: 0, total: 0, speed: 0, eta: null };
+      next.progress = Object.assign(defaultProgress(), { phase: 'download', percent: 0, detail: '准备下载' });
       run(next); // 不 await：并发由 running 计数控制
     }
   }
@@ -373,7 +456,7 @@ function createHub(opts = {}) {
     if (job.state === 'queued') {
       job.state = 'cancelled';
       job.finishedAt = Date.now();
-      job.progress = { phase: 'cancelled', percent: null, detail: '已取消', bytes: 0, total: 0, speed: 0, eta: null };
+      job.progress = Object.assign(defaultProgress(), { phase: 'cancelled', detail: '已取消', dlPercent: job.progress.dlPercent || 0 });
       pushLog(job, '已取消（排队中）');
       persistNow();
     } else {

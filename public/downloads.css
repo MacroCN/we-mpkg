@@ -67,6 +67,7 @@
   border-radius: 999px;
   background: var(--hairline);
   overflow: hidden;
+  position: relative;
 }
 .bar > i {
   display: block;
@@ -75,10 +76,22 @@
   background: linear-gradient(90deg, var(--bar-a), var(--ok));
   transition: width 0.4s ease;
 }
-.bar.indeterminate > i {
+/* 打包层：叠在下载层之上的深色条 */
+.bar > i.pack {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(90deg, var(--pack-a), var(--pack-b));
+  box-shadow: inset 0 0 0 1px var(--pack-edge);
+  transition: width 0.4s ease;
+  z-index: 1;
+}
+.bar.indeterminate > i:not(.pack) {
   width: 34% !important;
   animation: dl-slide 1.2s ease-in-out infinite;
 }
+.bar.layered > i:not(.pack) { opacity: 0.5; }
 @keyframes dl-slide {
   0%   { transform: translateX(-100%); }
   100% { transform: translateX(300%); }
