@@ -61,6 +61,11 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // 启动窗口底色沿用上次网页实际用的主题：主题固定成 Light，靠资源没法自动跟系统，
+        // 用 SharedPreferences 记住网页报上来的明暗，冷启动就不会闪一下反色。
+        boolean lastDark = getPreferences(MODE_PRIVATE).getBoolean("lastDarkTheme", true);
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                lastDark ? 0xFF0F1720 : 0xFFF4F6F9));
         setContentView(R.layout.activity_main);
 
         // 沉浸式状态栏：透明底 + 浅色图标。ROM 默认主题经常给状态栏刷白色，
@@ -327,6 +332,10 @@ public class MainActivity extends Activity {
             @android.webkit.JavascriptInterface
             public void setTheme(final boolean dark) {
                 if (!canUseBridge()) return;
+                // 记下网页当前的明暗，下次冷启动的窗口底色照着来（避免闪一下反色）
+                try {
+                    getPreferences(MODE_PRIVATE).edit().putBoolean("lastDarkTheme", dark).apply();
+                } catch (Throwable ignore) { /* 存储失败不影响本次切换 */ }
                 runOnUiThread(new Runnable() {
                     @Override public void run() {
                         if (web != null) web.setBackgroundColor(dark ? 0xFF0F1720 : 0xFFF4F6F9);
@@ -348,6 +357,16 @@ public class MainActivity extends Activity {
                         }
                     }
                 });
+            }
+
+            /**
+             * 系统当前是不是夜间模式。
+             * 应用的 windowBackground / 主题是固定的深色，WebView 里 prefers-color-scheme
+             * 会一直报浅色，所以「跟随系统」这条必须由原生把真实 uiMode 告诉网页。
+             */
+            @android.webkit.JavascriptInterface
+            public boolean isNightMode() {
+                return isSystemNight();
             }
 
             /** 从网页里回到启动页（本地/远程切换、导入凭据、退出），不销毁 WebView */
@@ -892,6 +911,31 @@ public class MainActivity extends Activity {
         super.onResume();
         // 从系统授权页回来：刷新向导里的权限状态
         if (!onboarded && onboardPanel != null && onboardPanel.getVisibility() == View.VISIBLE) refreshOnboardState();
+    }
+
+    /** 系统是否夜间模式：网页里 prefers-color-scheme 不可靠，以原生 uiMode 为准 */
+    private boolean isSystemNight() {
+        return (getResources().getConfiguration().uiMode
+                & android.content.res.Configuration.UI_MODE_NIGHT_MASK)
+                == android.content.res.Configuration.UI_MODE_NIGHT_YES;
+    }
+
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        // 系统切深浅色 / 改字号时 Activity 不重建（见 manifest 的 configChanges），
+        // 这里主动通知网页重算一次主题，否则「跟随系统」要等下次冷启动才变
+        final WebView w = web;
+        if (w == null) return;
+        runOnUiThread(new Runnable() {
+            @Override public void run() {
+                try {
+                    w.evaluateJavascript(
+                        "(function(){var a=window.WE_APP;if(a&&a.onSystemThemeChange)a.onSystemThemeChange();})()",
+                        null);
+                } catch (Throwable ignore) { /* 页面还没起来时忽略 */ }
+            }
+        });
     }
 
     /** 首启向导：把向导里选的输出目录同步给网页（网页落盘到 settings.json） */
