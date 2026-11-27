@@ -1,0 +1,12 @@
+we-mpkg 3.0.0-beta.13
+
+Rust 纹理引擎改为必需组件，去掉「静默回落纯 JS」的冗余设计。
+
+- 找不到 rust-tex、执行失败、输出长度不符时全部直接报错，不再返回 null 让调用方
+  悄悄退回 JS 实现；打包开始时先检查引擎，缺失就整条任务失败并提示编译命令。
+- DXT 解码、LZ4 块编解码、非直通 TEX 转换、直通 PNG 解码的生产路径只走 Rust；
+  JS 实现仅保留为黄金样本对照（WE_TEX_RUST=off 时测试用），运行时不参与。
+- 转换单张纹理失败时仍然保留原文件并给出警告，不阻塞整包。
+- 报错信息改为透传 rust-tex 的 {"ok":false,"error":"..."} 原因，方便定位。
+
+版本 3.0.0-beta.13 / versionCode 72，不发布 Release，APK 见 Actions artifact。

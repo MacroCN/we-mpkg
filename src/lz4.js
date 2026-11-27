@@ -42,9 +42,11 @@ function hash32(v) {
 function compress(src) {
   const n = src.length;
   if (n === 0) return Buffer.alloc(0);
-  if (n >= rusttex.MIN_BYTES_FOR_LZ4) {
+  // Rust 引擎是必需组件；WE_TEX_RUST=off 仅用于回归测试对照 JS 实现
+  if (rusttex.enabled()) {
     const fast = rusttex.lz4Compress(src);
-    if (fast && fast.length > 0) return fast;
+    if (!fast.length) throw new Error('rust-tex lz4-compress 输出为空');
+    return fast;
   }
   // 纯字面量编码是最坏情况：n + 1 + ceil((n-15)/255) 左右，留一点余量
   const out = Buffer.alloc(n + Math.ceil(n / 255) + 16);
@@ -133,9 +135,10 @@ function compress(src) {
  * @returns {Buffer}
  */
 function decompress(src, expectedSize) {
-  if (expectedSize > 0 && src.length >= rusttex.MIN_BYTES_FOR_LZ4) {
+  if (rusttex.enabled()) {
     const fast = rusttex.lz4Decompress(src, expectedSize);
-    if (fast && fast.length === expectedSize) return fast;
+    if (fast.length !== expectedSize) throw new Error(`rust-tex lz4-decompress 输出 ${fast.length} != ${expectedSize}`);
+    return fast;
   }
   const out = Buffer.alloc(expectedSize);
   let ip = 0;

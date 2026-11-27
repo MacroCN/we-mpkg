@@ -644,6 +644,13 @@ function adaptForMobile(projectDir, opts = {}) {
   // 纹理加速引擎：让用户一眼看出这次是 Rust 还是纯 JS 在跑（两条路结果一致，只影响速度）
   const rusttex = require('./rusttex');
   const engine0 = rusttex.info();
+  // Rust 引擎是必需组件：没有就直接失败，不要让每张纹理各报一次警告
+  if (!engine0.enabled) {
+    throw new Error('Rust 纹理引擎不可用，无法打包：'
+      + '请先 cargo build --release --manifest-path rust/tex-cli/Cargo.toml，'
+      + '或用 WE_RUST_TEX 指定 rust-tex 路径'
+      + (engine0.error ? `（${engine0.error.split('\n')[0]}）` : ''));
+  }
   onLog(engine0.enabled
     ? `  纹理加速引擎: Rust（${engine0.path}${engine0.version ? ' v' + engine0.version : ''}）`
     : `  纹理加速引擎: JS（未找到可用的 rust-tex${engine0.error ? '：' + engine0.error : ''}，已回落纯 JS）` +
@@ -704,9 +711,8 @@ function adaptForMobile(projectDir, opts = {}) {
     png: engine1.stats.png - stats0.png,
     fallback: engine1.stats.fallback - stats0.fallback,
   };
-  if (used.dxt || used.lz4 || used.tex || used.png || used.fallback) {
+  if (used.dxt || used.lz4 || used.tex || used.png) {
     const parts = [`dxt ${used.dxt}`, `lz4 ${used.lz4}`, `tex ${used.tex}`, `png ${used.png}`];
-    if (used.fallback) parts.push(`回落 ${used.fallback}`);
     onLog(`  纹理加速统计: ${parts.join(' / ')}（${engine1.enabled ? 'Rust' : 'JS'}）`);
   }
 

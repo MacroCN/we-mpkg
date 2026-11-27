@@ -77,9 +77,11 @@ function decode(buf, format, width, height) {
   const hasAlpha4 = format === TEX_FORMAT.DXT2 || format === TEX_FORMAT.DXT3;
   const hasAlpha8 = format === TEX_FORMAT.DXT4 || format === TEX_FORMAT.DXT5;
 
-  if (width * height >= rusttex.MIN_PIXELS_FOR_RUST && RUST_NAME[format]) {
+  // Rust 引擎是必需组件：能走就走，执行失败直接抛错（不再退回下面的 JS 实现）
+  if (rusttex.enabled() && RUST_NAME[format]) {
     const fast = rusttex.dxtDecode(buf.subarray(0, need), RUST_NAME[format], width, height);
-    if (fast && fast.length === width * height * 4) return fast;
+    if (fast.length !== width * height * 4) throw new Error(`rust-tex dxt-decode 输出长度异常: ${fast.length}`);
+    return fast;
   }
 
   const out = Buffer.alloc(width * height * 4);

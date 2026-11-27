@@ -2617,7 +2617,7 @@ test('纹理加速引擎状态：info() 给出 Rust/JS、路径与计数', () =>
   assert.ok(info.stats && typeof info.stats.tex === 'number');
   assert.strictEqual(typeof info.stats.png, 'number', '统计里要有 png 解码计数');
   const texSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'tex.js'), 'utf8');
-  assert.ok(texSrc.includes('MIN_PIXELS_FOR_PNG'), '直通 PNG 解码要按像素阈值决定走不走 Rust');
+  assert.ok(texSrc.includes('rusttex.pngDecode'), '直通 PNG 解码要走 Rust');
   if (info.enabled) assert.ok(info.path, '启用时要有可执行文件路径');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'pack.js'), 'utf8');
   assert.ok(src.includes('纹理加速引擎: Rust'), '打包日志里要打出引擎状态');
@@ -2631,14 +2631,14 @@ test('Rust 纹理 CLI（阶段 0）：探测候选含 .cache/toolchain，可一�
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'rusttex.js'), 'utf8');
   assert.ok(/['"]\.cache['"],\s*['"]toolchain['"],\s*['"]bin['"]/.test(src), '探测要覆盖 .cache/toolchain/bin');
   assert.ok(src.includes('WE_RUST_TEX'), '要支持环境变量显式指定');
-  assert.ok(src.includes('WE_TEX_RUST'), '要支持一键关闭（回落 JS）');
+  assert.ok(src.includes('WE_TEX_RUST'), '要保留回归测试用的 JS 对照开关');
 
   const old = process.env.WE_TEX_RUST;
   process.env.WE_TEX_RUST = 'off';
   rt._reset();
   try {
     assert.strictEqual(rt.available(), false, 'WE_TEX_RUST=off 时不应启用 Rust');
-    assert.strictEqual(rt.dxtDecode(Buffer.alloc(8), 'dxt1', 4, 4), null, '关闭时应返回 null 让调用方回落');
+    assert.throws(() => rt.dxtDecode(Buffer.alloc(8), 'dxt1', 4, 4), /rust-tex/, '没有引擎要直接报错，不能返回 null 让调用方悄悄回落');
   } finally {
     if (old === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = old;
     rt._reset();

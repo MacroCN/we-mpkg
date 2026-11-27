@@ -28,7 +28,7 @@ const MIN_VERSION = 3;
 
 let probe; // undefined = 未探测；null = 没有；string = 路径
 /** 本次运行实际走 Rust 的次数（给「纹理加速引擎」状态显示用） */
-const stats = { dxt: 0, lz4: 0, tex: 0, png: 0, fallback: 0 };
+const stats = { dxt: 0, lz4: 0, tex: 0, png: 0 };
 let binVersion = null;
 let lastError = null;
 let attempts = [];
@@ -120,6 +120,28 @@ function available() {
   return locate() !== null;
 }
 
+/** 显式开关：WE_TEX_RUST=off 只给回归测试对照 JS 实现用，生产路径不该走它 */
+function enabled() {
+  return locate() !== null;
+}
+
+/** 取可执行文件；没有就直接报错，不再静默回落 JS */
+function requireEngine() {
+  const bin = locate();
+  if (!bin) {
+    throw new Error('未找到可用的 rust-tex（Rust 纹理引擎是必需组件）：'
+      + '请先 cargo build --release --manifest-path rust/tex-cli/Cargo.toml，'
+      + '或用 WE_RUST_TEX 指定可执行文件路径' + (lastError ? `；上次探测: ${lastError}` : ''));
+  }
+  return bin;
+}
+
+/** 把 rust-tex 的失败包成明确错误（不再返回 null 让调用方悄悄退回 JS） */
+function engineError(cmd, e) {
+  const msg = (e && e.message) || String(e);
+  return new Error(`rust-tex ${cmd} 失败: ${msg}`);
+}
+
 /** 引擎状态：给界面/日志显示「纹理加速引擎: Rust/JS」 */
 function info() {
   const bin = locate();
@@ -164,12 +186,25 @@ function tmpDir() {
 }
 
 function run(bin, args, timeout = 60000) {
-  const out = execFileSync(bin, args, {
-    encoding: 'utf8',
-    timeout,
-    maxBuffer: 1 << 20,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
+  let out;
+  try {
+    out = execFileSync(bin, args, {
+      encoding: 'utf8',
+      timeout,
+      maxBuffer: 1 << 20,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (e) {
+    // rust-tex 失败时会把 {"ok":false,"error":"..."} 打到 stdout，优先用里面的原因
+    const text = String((e && e.stdout) || '').trim() || String((e && e.stderr) || '').trim();
+    const line = text.split('\n').filter(Boolean).pop() || '';
+    let reason = (e && e.message) || String(e);
+    try {
+      const info = JSON.parse(line);
+      if (info && info.error) reason = info.error;
+    } catch { /* 不是 JSON 就用原始错误 */ }
+    throw new Error(reason);
+  }
   const line = out.trim().split('\n').pop();
   const info = JSON.parse(line);
   if (!info.ok) throw new Error(info.error || 'rust-tex 失败');
@@ -184,8 +219,7 @@ function scratch(name) {
 
 /** DXT 块解码 -> RGBA8；失败返回 null（调用方回落 JS） */
 function dxtDecode(buf, fmtName, width, height) {
-  const bin = locate();
-  if (!bin) return null;
+  const bin = requireEngine();
   const inFile = scratch('dxt.bin');
   const outFile = scratch('dxt.rgba');
   if (!inFile || !outFile) return null;
@@ -194,17 +228,15 @@ function dxtDecode(buf, fmtName, width, height) {
     run(bin, ['dxt-decode', inFile, outFile, '--format', fmtName, '--width', String(width), '--height', String(height)]);
     stats.dxt++;
     return fs.readFileSync(outFile);
-  } catch {
-    stats.fallback++;
-    return null;
+  } catch (e) {
+    throw engineError('调用', e);
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
   }
 }
 
 function lz4Compress(buf) {
-  const bin = locate();
-  if (!bin) return null;
+  const bin = requireEngine();
   const inFile = scratch('lz4-in.bin');
   const outFile = scratch('lz4-out.lz4');
   if (!inFile || !outFile) return null;
@@ -213,17 +245,15 @@ function lz4Compress(buf) {
     run(bin, ['lz4-compress', inFile, outFile]);
     stats.lz4++;
     return fs.readFileSync(outFile);
-  } catch {
-    stats.fallback++;
-    return null;
+  } catch (e) {
+    throw engineError('调用', e);
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
   }
 }
 
 function lz4Decompress(buf, expectedSize) {
-  const bin = locate();
-  if (!bin) return null;
+  const bin = requireEngine();
   const inFile = scratch('lz4-c.bin');
   const outFile = scratch('lz4-d.bin');
   if (!inFile || !outFile) return null;
@@ -232,9 +262,8 @@ function lz4Decompress(buf, expectedSize) {
     run(bin, ['lz4-decompress', inFile, outFile, '--size', String(expectedSize)]);
     stats.lz4++;
     return fs.readFileSync(outFile);
-  } catch {
-    stats.fallback++;
-    return null;
+  } catch (e) {
+    throw engineError('调用', e);
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
   }
@@ -246,8 +275,7 @@ function lz4Decompress(buf, expectedSize) {
  * 尺寸由调用方从 IHDR 读出后传进来，只用来校验输出长度。
  */
 function pngDecode(buf, width, height) {
-  const bin = locate();
-  if (!bin) return null;
+  const bin = requireEngine();
   const need = width * height * 4;
   if (!(need > 0) || need > 512 * 1024 * 1024) return null;
   try {
@@ -258,18 +286,17 @@ function pngDecode(buf, width, height) {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     if (r.error || r.status !== 0 || !r.stdout) {
-      stats.fallback++;
-      return null;
+      const detail = r.error ? r.error.message : (r.stderr ? r.stderr.toString().trim() : `退出码 ${r.status}`);
+      throw engineError('png-decode', detail);
     }
     if (r.stdout.length !== need) {
-      stats.fallback++;
-      return null;
+      throw engineError('png-decode', `输出长度 ${r.stdout.length} != 期望 ${need}`);
     }
     stats.png++;
     return r.stdout;
-  } catch {
-    stats.fallback++;
-    return null;
+  } catch (e) {
+    if (e && e.message && e.message.startsWith('rust-tex')) throw e;
+    throw engineError('png-decode', e);
   }
 }
 
@@ -278,8 +305,7 @@ function pngDecode(buf, width, height) {
  * scale 由调用方按整包统一倍率算好传进来，保持 JS 侧单一事实来源。
  */
 function texConvert(buf, scale, framesTail) {
-  const bin = locate();
-  if (!bin) return null;
+  const bin = requireEngine();
   const inFile = scratch('tex-in.tex');
   const outFile = scratch('tex-out.tex');
   if (!inFile || !outFile) return null;
@@ -295,9 +321,8 @@ function texConvert(buf, scale, framesTail) {
       height: r.height,
       downsampled: r.downsampled === true,
     };
-  } catch {
-    stats.fallback++;
-    return null;
+  } catch (e) {
+    throw engineError('调用', e);
   } finally {
     for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
   }
@@ -313,6 +338,8 @@ process.on('exit', cleanup);
 
 module.exports = {
   available,
+  enabled,
+  requireEngine,
   info,
   stats,
   locate,
@@ -323,7 +350,4 @@ module.exports = {
   pngDecode,
   // 测试用：重置探测缓存
   _reset() { probe = undefined; },
-  MIN_PIXELS_FOR_RUST: 4096,
-  MIN_BYTES_FOR_LZ4: 4096,
-  MIN_PIXELS_FOR_PNG: 1048576,
 };

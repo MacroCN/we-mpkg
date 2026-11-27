@@ -322,18 +322,15 @@ function getJpeg() {
  */
 function decodePng(buf) {
   if (buf.length < 8 || buf.readUInt32BE(0) !== 0x89504e47) return null;
-  // 大图交给 Rust：4096×4096 的 RGBA 展开在 JS 里要 700ms 上下，Rust 约 1/3。
-  // 尺寸从 IHDR 直接读（PNG 规定 IHDR 必须是第一个 chunk），解析失败就走原实现。
-  try {
-    if (buf.length >= 24 && buf.readUInt32BE(12) === 0x49484452) {
-      const w = buf.readUInt32BE(16);
-      const h = buf.readUInt32BE(20);
-      if (w > 0 && h > 0 && w * h >= rusttex.MIN_PIXELS_FOR_PNG) {
-        const rgba = rusttex.pngDecode(buf, w, h);
-        if (rgba) return { width: w, height: h, data: rgba };
-      }
+  // PNG 解码交给 Rust（自带 inflate）。尺寸从 IHDR 直接读（PNG 规定 IHDR 是第一个 chunk）。
+  // 下面的 JS 实现只作为黄金样本的对照实现保留，生产路径不再使用。
+  if (buf.length >= 24 && buf.readUInt32BE(12) === 0x49484452 && rusttex.enabled()) {
+    const w = buf.readUInt32BE(16);
+    const h = buf.readUInt32BE(20);
+    if (w > 0 && h > 0) {
+      return { width: w, height: h, data: rusttex.pngDecode(buf, w, h) };
     }
-  } catch { /* 回落 JS 实现 */ }
+  }
   let off = 8;
   let ihdr = null;
   let plte = null;
@@ -875,30 +872,26 @@ function convertTexBuffer(buf, opts = {}) {
     ? (typeof opts.scale === 'number' ? opts.scale : uniformScale(Math.max(logicalW, logicalH), preset))
     : 1;
 
-  // 阶段 1：非直通图（DXT / RGBA8 / R8 / RG88）整包交给 Rust，容器读写与像素处理一起搬过去；
-  // 直通图要 PNG/JPEG 解码器，仍留给 JS。失败一律回落下面的原实现。
-  if (tex.container.imageFormat < 0 && opts.scale === undefined) {
+  // 非直通图（DXT / RGBA8 / R8 / RG88）整包交给 Rust，容器读写与像素处理都在里面。
+  // Rust 是必需组件：转换失败直接抛错，由调用方保留原文件并给出警告，不再静默退回 JS。
+  if (tex.container.imageFormat < 0 && opts.scale === undefined && rusttex.enabled()) {
     const fast = rusttex.texConvert(buf, scale, animated);
-    if (fast) {
-      try {
-        verifyMobileTex(fast.bytes, {
-          width: fast.width,
-          height: fast.height,
-          framesTail: animated ? framesTail : null,
-        });
-        return {
-          changed: true,
-          bytes: fast.bytes,
-          route: info.route,
-          reason: info.reason + (fast.downsampled ? '（已降采样）' : ''),
-          width: fast.width,
-          height: fast.height,
-          sourceWidth: tex.header.textureWidth || fast.width,
-          sourceHeight: tex.header.textureHeight || fast.height,
-          downsampled: fast.downsampled,
-        };
-      } catch { /* 自校验没过就走 JS */ }
-    }
+    verifyMobileTex(fast.bytes, {
+      width: fast.width,
+      height: fast.height,
+      framesTail: animated ? framesTail : null,
+    });
+    return {
+      changed: true,
+      bytes: fast.bytes,
+      route: info.route,
+      reason: info.reason + (fast.downsampled ? '（已降采样）' : ''),
+      width: fast.width,
+      height: fast.height,
+      sourceWidth: tex.header.textureWidth || fast.width,
+      sourceHeight: tex.header.textureHeight || fast.height,
+      downsampled: fast.downsampled,
+    };
   }
 
   const images = [];
