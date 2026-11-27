@@ -841,6 +841,35 @@ function shrinkVideoTex(buf, info, opts = {}) {
 }
 
 /**
+ * 判断一份纹理能否整包交给 rust-tex（目录转换里用来批量收集任务）。
+ * 与 convertTexBuffer 的路由条件保持一致：非直通图 / 直通 PNG、JPEG / 动图 GIF。
+ */
+function rustPacketJob(buf, opts, info) {
+  let tex;
+  try { tex = parseTex(buf); } catch { return null; }
+  const preset = typeof opts.preset === 'string' ? presetOf(opts.preset) : (opts.preset || presetOf('high'));
+  let semantic = opts.semantic || semanticOf(opts.relPath);
+  if (semantic === 'unknown' && tex.container.imageFormat >= 0) {
+    semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
+  }
+  const animated = (tex.header.flags & TEX_FLAGS.IsGif) !== 0;
+  const scale = (!animated && semantic !== 'data')
+    ? (typeof opts.scale === 'number' ? opts.scale : uniformScale(Math.max(tex.header.imageWidth, tex.header.imageHeight), preset))
+    : 1;
+  const rustPacket = tex.container.imageFormat < 0
+    || tex.container.imageFormat === FREE_IMAGE.PNG
+    || tex.container.imageFormat === FREE_IMAGE.JPEG
+    || (animated && tex.container.imageFormat === FREE_IMAGE.GIF);
+  if (!rustPacket || !rusttex.enabled()) return null;
+  return {
+    scale,
+    framesTail: animated,
+    reason: (info && info.reason) || '转换',
+    tail: tex.framesStart < buf.length ? buf.subarray(tex.framesStart) : null,
+  };
+}
+
+/**
  * 单个纹理转换（不写盘）。
  * @param {Buffer} buf
  * @param {{relPath?:string, preset?:object|string, maxRgbaBytes?:number, semantic?:string, force?:boolean,
@@ -891,7 +920,7 @@ function convertTexBuffer(buf, opts = {}) {
     || tex.container.imageFormat === FREE_IMAGE.PNG
     || tex.container.imageFormat === FREE_IMAGE.JPEG
     || (animated && tex.container.imageFormat === FREE_IMAGE.GIF);
-  if (rustPacket && opts.scale === undefined && rusttex.enabled()) {
+  if (rustPacket && rusttex.enabled()) {
     const fast = rusttex.texConvert(buf, scale, animated);
     verifyMobileTex(fast.bytes, {
       width: fast.width,
@@ -1050,13 +1079,19 @@ function convertTexDir(dir, opts = {}) {
   const warnings = [];
   const outcomes = [];
 
+  const files = [];
   const walk = (d) => {
     for (const ent of fs.readdirSync(d, { withFileTypes: true })) {
       const abs = path.join(d, ent.name);
       if (ent.isDirectory()) { walk(abs); continue; }
       if (!/\.tex$/i.test(ent.name)) continue;
+      files.push({ abs, rel: path.relative(dir, abs).split(path.sep).join('/') });
+    }
+  };
+  walk(dir);
 
-      const rel = path.relative(dir, abs).split(path.sep).join('/');
+  const pending = [];
+  for (const { abs, rel } of files) {
       stats.total++;
       if (skip.has(rel)) { stats.kept++; continue; }
 
@@ -1077,6 +1112,11 @@ function convertTexDir(dir, opts = {}) {
         continue;
       }
 
+      const job = rustPacketJob(buf, { relPath: rel, preset, maxRgbaBytes, semantic: semanticFn(rel), scale }, { reason: '转换' });
+      if (job) {
+        pending.push({ abs, rel, size: st.size, shaIn, job });
+        continue;
+      }
       let r;
       try {
         r = convertTexBuffer(buf, { relPath: rel, preset, maxRgbaBytes, semantic: semanticFn(rel), scale });
@@ -1118,9 +1158,63 @@ function convertTexDir(dir, opts = {}) {
       };
       outcomes.push(outcome);
       if (opts.onResource) opts.onResource(outcome);
+  }
+
+  // 一批纹理交给 rust-tex 一个进程跑完：先写临时文件，校验通过再原子替换，
+  // 中途失败或校验不过就保留原文件（与单张转换语义一致）。
+  if (pending.length) {
+    const tmpPaths = pending.map((p) => `${p.abs}.wempkg.tmp`);
+    let results;
+    try {
+      results = rusttex.texConvertBatch(pending.map((p, i) => ({
+        inPath: p.abs,
+        outPath: tmpPaths[i],
+        scale: p.job.scale,
+        framesTail: p.job.framesTail,
+      })));
+    } catch (e) {
+      results = pending.map(() => ({ ok: false, error: e.message }));
     }
-  };
-  walk(dir);
+    pending.forEach((p, i) => {
+      const res = (results && results[i]) || { ok: false, error: '无结果' };
+      if (!res.ok) {
+        try { fs.unlinkSync(tmpPaths[i]); } catch { /* ignore */ }
+        stats.failed++;
+        warnings.push(`${p.rel}: 转换失败，已保留原文件（${res.error}）`);
+        outcomes.push({ path: p.rel, route: 'failed', reason: res.error, changed: false, bytesIn: p.size, bytesOut: p.size });
+        onLog(`  [纹理] ${p.rel}: 转换失败 -> 保留原文件（${res.error}）`);
+        return;
+      }
+      let bytes;
+      try {
+        bytes = fs.readFileSync(tmpPaths[i]);
+        verifyMobileTex(bytes, { width: res.width, height: res.height, framesTail: p.job.framesTail ? p.job.tail : null });
+        fs.renameSync(tmpPaths[i], p.abs);
+      } catch (e) {
+        try { fs.unlinkSync(tmpPaths[i]); } catch { /* ignore */ }
+        stats.failed++;
+        warnings.push(`${p.rel}: 转换产物校验失败，已保留原文件（${e.message}）`);
+        outcomes.push({ path: p.rel, route: 'failed', reason: e.message, changed: false, bytesIn: p.size, bytesOut: p.size });
+        return;
+      }
+      stats.routes['convert-image'] = (stats.routes['convert-image'] || 0) + 1;
+      stats.converted++;
+      if (res.downsampled) stats.downsampled++;
+      stats.bytesIn += p.size;
+      stats.bytesOut += bytes.length;
+      if (checkpoint && p.shaIn) checkpoint.record(p.rel, p.shaIn, sha256Buffer(bytes), 'convert-image');
+      const reason = p.job.reason + (res.downsampled ? '（已降采样）' : '');
+      const ratio = p.size ? ((1 - bytes.length / p.size) * 100).toFixed(0) : '0';
+      onLog(`  [纹理] ${p.rel}: ${reason} ${res.width}x${res.height} (${(p.size / 1048576).toFixed(2)} -> ${(bytes.length / 1048576).toFixed(2)} MB, ${ratio}%)`);
+      const outcome = {
+        path: p.rel, route: 'convert-image', reason, changed: true,
+        width: res.width, height: res.height, downsampled: !!res.downsampled,
+        bytesIn: p.size, bytesOut: bytes.length,
+      };
+      outcomes.push(outcome);
+      if (opts.onResource) opts.onResource(outcome);
+    });
+  }
 
   if (stats.total) {
     onLog(`  纹理统计: 共 ${stats.total} 条，转换 ${stats.converted}（其中降采样 ${stats.downsampled}），保留 ${stats.kept}，视频 ${stats.video}，超预算 ${stats.budget}，失败 ${stats.failed}${stats.resumed ? `，续转跳过 ${stats.resumed}` : ''}`);

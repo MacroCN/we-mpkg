@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T23:31:09.729Z",
+  "generatedAt": "2026-11-27T23:40:05.134Z",
   "generator": "tools/make-golden-format.js",
   "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
   "cases": [
@@ -193,6 +193,17 @@
       "outputBytes": 633,
       "outputSha256": "43f4c3f2df0d2d5a4474121ea70ca5a350f27fe028b73500d907a865ffb42f62",
       "preset": "default"
+    },
+    {
+      "name": "tex-convert-dxt1-multimip-scale075",
+      "kind": "tex-convert",
+      "input": "tex-convert-dxt1-multimip-scale075/in.bin",
+      "output": "tex-convert-dxt1-multimip-scale075/out.bin",
+      "inputBytes": 751,
+      "outputBytes": 2094,
+      "outputSha256": "79e4f68242b119c6aee988962f605da39944db98048df798f423fdda78b069b4",
+      "preset": "default",
+      "scale": 0.75
     }
   ]
 }

@@ -364,6 +364,53 @@ function texConvert(buf, scale, framesTail) {
   }
 }
 
+
+/**
+ * 一批纹理一次转换：job 文件用 NUL 分隔的四元组（scale / framesTail / 输入 / 输出），
+ * 一个进程跑完整个包，省掉每张图一次 exec 的固定成本。
+ * 返回与 jobs 等长的数组，每项 {ok, width, height, downsampled, error}。
+ */
+function texConvertBatch(jobs) {
+  const bin = requireEngine();
+  if (!jobs || !jobs.length) return [];
+  const jobFile = scratch('tex-batch.job');
+  if (!jobFile) throw engineError('tex-batch', '无法创建临时目录');
+  const chunks = [];
+  for (const j of jobs) {
+    chunks.push(Buffer.from(String(j.scale), 'utf8'), Buffer.alloc(1));
+    chunks.push(Buffer.from(j.framesTail ? '1' : '0', 'utf8'), Buffer.alloc(1));
+    chunks.push(Buffer.from(j.inPath, 'utf8'), Buffer.alloc(1));
+    chunks.push(Buffer.from(j.outPath, 'utf8'), Buffer.alloc(1));
+  }
+  fs.writeFileSync(jobFile, Buffer.concat(chunks));
+  try {
+    const r = require('child_process').spawnSync(bin, ['tex-batch', jobFile], {
+      encoding: 'utf8',
+      timeout: 600000,
+      maxBuffer: 16 << 20,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    if (r.error || r.status !== 0) {
+      const detail = r.error ? r.error.message : (r.stderr ? String(r.stderr).trim() : `退出码 ${r.status}`);
+      throw new Error(detail);
+    }
+    stats.tex += jobs.length;
+    const lines = String(r.stdout || '').trim().split('\n').filter(Boolean);
+    const out = [];
+    for (let i = 0; i < jobs.length; i++) {
+      let rec = null;
+      try { rec = JSON.parse(lines[i]); } catch { rec = null; }
+      if (!rec || rec.ok !== true) out.push({ ok: false, error: (rec && rec.error) || '无输出' });
+      else out.push({ ok: true, width: rec.width, height: rec.height, downsampled: rec.downsampled === true });
+    }
+    return out;
+  } catch (e) {
+    throw engineError('tex-batch', e);
+  } finally {
+    try { fs.unlinkSync(jobFile); } catch { /* ignore */ }
+  }
+}
+
 /** 进程退出前清掉临时目录（失败也无所谓，系统会回收） */
 function cleanup() {
   if (!tmpRoot) return;
@@ -383,6 +430,7 @@ module.exports = {
   lz4Compress,
   lz4Decompress,
   texConvert,
+  texConvertBatch,
   pngDecode,
   jpegDecode,
   // 测试用：重置探测缓存

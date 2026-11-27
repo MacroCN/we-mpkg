@@ -331,6 +331,19 @@ addCase('tex-convert-gif-animated-8x8', 'tex-convert', texGif,
   (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/动图.tex' }).bytes,
   { preset: 'default' });
 
+
+// ---- 整包转换带显式 scale（目录转换实际就是这条路径，多 mip 一起缩） ----
+const texMip = buildTex({
+  format: tex.TEX_FORMAT.DXT1, texW: 32, texH: 32,
+  images: [{ mips: [
+    { w: 32, h: 32, bytes: dxtBlocks(32, 32, 8, 81) },
+    { w: 16, h: 16, bytes: dxtBlocks(16, 16, 8, 83) },
+  ] }],
+});
+addCase('tex-convert-dxt1-multimip-scale075', 'tex-convert', texMip,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/方块.tex', scale: 0.75 }).bytes,
+  { preset: 'default', scale: 0.75 });
+
 // ---- 写盘 ----
 fs.rmSync(outRoot, { recursive: true, force: true });
 fs.mkdirSync(outRoot, { recursive: true });

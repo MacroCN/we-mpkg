@@ -9,6 +9,7 @@
 //   rust-tex lz4-decompress <in> <out> --size N
 //   rust-tex png-decode     <in> <out>
 //   rust-tex jpeg-decode    <in> <out>
+//   rust-tex tex-batch      <jobfile>   # 一条命令处理一批纹理，减少进程启动
 //   rust-tex selftest
 //   rust-tex version
 
@@ -226,6 +227,51 @@ fn main() {
                     ));
                 }
                 Err(e) => fail(&e, 3),
+            }
+        }
+        "tex-batch" => {
+            // job 文件是 NUL 分隔的四元组：scale \0 framesTail \0 输入 \0 输出 \0 ...
+            let jobfile = args.get(2).unwrap_or_else(|| fail("缺少 job 文件", 2));
+            let raw = fs::read(jobfile).unwrap_or_else(|e| fail(&format!("读 job 文件失败 {}: {}", jobfile, e), 2));
+            let mut fields = raw.split(|b| *b == 0);
+            let mut stdout = std::io::stdout();
+            loop {
+                let scale = match fields.next() {
+                    Some(v) if !v.is_empty() => String::from_utf8_lossy(v).to_string(),
+                    _ => break,
+                };
+                let frames = fields.next().map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
+                let input = fields.next().map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
+                let output = fields.next().map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
+                let started = Instant::now();
+                let scale_v: f64 = scale.parse().unwrap_or(1.0);
+                let frames_tail = frames == "1";
+                let data = match fs::read(&input) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        let _ = writeln!(stdout, "{{\"ok\":false,\"error\":\"读文件失败: {}\"}}", json_escape(&e.to_string()));
+                        continue;
+                    }
+                };
+                match tex::convert(&data, &tex::ConvertOpts { scale: scale_v, frames_tail }) {
+                    Ok(res) => {
+                        if let Err(e) = fs::write(&output, &res.bytes) {
+                            let _ = writeln!(stdout, "{{\"ok\":false,\"error\":\"写文件失败: {}\"}}", json_escape(&e.to_string()));
+                            continue;
+                        }
+                        let _ = writeln!(
+                            stdout,
+                            "{{\"ok\":true,\"width\":{},\"height\":{},\"downsampled\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                            res.width, res.height,
+                            if res.downsampled { "true" } else { "false" },
+                            data.len(), res.bytes.len(), started.elapsed().as_micros()
+                        );
+                    }
+                    Err(e) => {
+                        let _ = writeln!(stdout, "{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e));
+                    }
+                }
+                let _ = stdout.flush();
             }
         }
         "tex-convert" => {

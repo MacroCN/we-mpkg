@@ -1,0 +1,15 @@
+we-mpkg 3.0.0-beta.18
+
+整包目录转换真正走 Rust，并且一批纹理只起一个进程（tex-batch）。
+
+- 之前 convertTexDir 会把整包统一倍率作为 opts.scale 传下去，而整包 Rust 分支要求
+  opts.scale === undefined，结果目录转换一直退回 JS 逐 mip 解码/缩放/LZ4，每张纹理
+  还要多次 exec。现在显式 scale 也走整包 Rust，语义与 JS 侧一致（data/动图不缩放）。
+- 新增 rust-tex tex-batch：job 文件用 NUL 分隔记录，一个进程把整包纹理全部转换完，
+  失败按条返回，不影响同批其它文件。
+- 新增 rusttex.texConvertBatch：结果是先写 *.wempkg.tmp、校验通过再原子 rename，
+  中途失败或校验不过就保留原文件。
+- 30 张 512×512 DXT 多 mip 实测：JS 309ms -> Rust 批量 150ms，产物逐字节一致。
+- 测试新增「目录批量转换产物与 JS 实现一致」，黄金样本新增带显式 scale 的多 mip 用例（19 例）。
+
+版本 3.0.0-beta.18 / versionCode 77，不发布 Release，APK 见 Actions artifact。

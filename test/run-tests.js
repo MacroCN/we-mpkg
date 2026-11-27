@@ -2642,7 +2642,11 @@ function replayGolden(forceRustPng) {
       const fast = forceRustPng ? rt.jpegDecode(input).data : null;
       bytes = fast || texlib.decodeJpeg(input).data;
     } else if (c.kind === 'tex-convert') {
-      const r = texlib.convertTexBuffer(input, { relPath: 'materials/黄金样本.tex', preset: c.preset === 'balanced' ? 'balanced' : 'default' });
+      const r = texlib.convertTexBuffer(input, {
+        relPath: 'materials/黄金样本.tex',
+        preset: c.preset === 'balanced' ? 'balanced' : 'default',
+        ...(typeof c.scale === 'number' ? { scale: c.scale } : {}),
+      });
       bytes = r.bytes || input;
     } else {
       throw new Error(`未知用例类型: ${c.kind}`);
@@ -2679,7 +2683,7 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
       const expected = fs.readFileSync(path.join(dir, c.output));
       assert.ok(bytes.equals(expected), `${name}: JS 路径输出与黄金样本不一致`);
     }
-    assert.ok(manifest.cases.length >= 18, '黄金样本集至少要覆盖 17 个格式用例');
+    assert.ok(manifest.cases.length >= 19, '黄金样本集至少要覆盖 17 个格式用例');
   } finally {
     if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
     rt._reset();
@@ -3044,6 +3048,38 @@ test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜
   const ps = fs.readFileSync(path.join(root, 'build-portable.ps1'), 'utf8');
   assert.ok(ps.includes("licenses\\NodeJS-MIT.txt"), '脚本要引用这份兜底');
   assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
+});
+
+test('目录批量转换（Rust 一个进程跑完整包）产物与 JS 实现一致', () => {
+  const rt = require('../src/rusttex');
+  const texlib = require('../src/tex');
+  if (!rt.available()) return; // 没装引擎的平台由黄金样本测试给出提示
+  const src = fs.readFileSync(path.join(__dirname, 'golden', 'format', 'tex-convert-dxt1-4x4', 'in.bin'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-batch-'));
+  const names = ['a.tex', 'b.tex'];
+  for (const n of names) fs.writeFileSync(path.join(dir, n), src);
+
+  const fast = texlib.convertTexDir(dir, { preset: 'default', onLog: () => {} });
+  assert.strictEqual(fast.stats.converted, 2, '两张纹理都应被转换');
+  assert.strictEqual(fast.stats.routes['convert-image'], 2, '应走整包 Rust 路线');
+  const fastBytes = names.map((n) => fs.readFileSync(path.join(dir, n)));
+
+  for (const n of names) fs.writeFileSync(path.join(dir, n), src);
+  const oldEnv = process.env.WE_TEX_RUST;
+  process.env.WE_TEX_RUST = 'off';
+  rt._reset();
+  try {
+    const js = texlib.convertTexDir(dir, { preset: 'default', onLog: () => {} });
+    assert.strictEqual(js.stats.converted, 2, 'JS 实现也应转换两张');
+    names.forEach((n, i) => {
+      const bytes = fs.readFileSync(path.join(dir, n));
+      assert.ok(bytes.equals(fastBytes[i]), `${n}: 批量产物与 JS 产物不一致`);
+    });
+  } finally {
+    if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
+    rt._reset();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 async function testAsync(name, fn) {
