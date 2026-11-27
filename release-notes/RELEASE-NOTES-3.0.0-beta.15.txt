@@ -1,0 +1,13 @@
+we-mpkg 3.0.0-beta.15
+
+直通 PNG 纹理的整包转换搬进 rust-tex，解码/裁剪/缩放/LZ4 收进同一个进程。
+
+- 之前直通 PNG 要先调一次 png-decode，再在 JS 里裁剪缩放，最后每个块各调一次
+  lz4-compress；一张图 3~5 次进程。现在一次 tex-convert 全做完。
+- 2048×2048 直通 PNG 实测 200ms+ -> 89ms，输出与 JS 侧逐字节一致。
+- JPEG 解码和 GIF 动图帧表仍在 JS（尚未迁移），这两类照旧走原实现
+  （JPEG 不是回落，是 Rust 还没实现）。
+- 黄金样本新增「直通 PNG 16×16」和「直通 RGB PNG 40×40 + balanced 缩放」两例，
+  Rust/JS 两条路径都按 SHA-256 锁定。
+
+版本 3.0.0-beta.15 / versionCode 74，不发布 Release，APK 见 Actions artifact。

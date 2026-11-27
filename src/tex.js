@@ -872,9 +872,11 @@ function convertTexBuffer(buf, opts = {}) {
     ? (typeof opts.scale === 'number' ? opts.scale : uniformScale(Math.max(logicalW, logicalH), preset))
     : 1;
 
-  // 非直通图（DXT / RGBA8 / R8 / RG88）整包交给 Rust，容器读写与像素处理都在里面。
-  // Rust 是必需组件：转换失败直接抛错，由调用方保留原文件并给出警告，不再静默退回 JS。
-  if (tex.container.imageFormat < 0 && opts.scale === undefined && rusttex.enabled()) {
+  // 非直通图（DXT / RGBA8 / R8 / RG88）以及直通 PNG，整包交给 Rust：
+  // 容器读写、解码、裁剪、缩放、LZ4 都在一个进程里做完，不再每张图拆成多次调用。
+  // JPEG 仍是 JS 解码，动图（GIF）帧表由 JS 处理，这两类继续走下面的原实现。
+  const rustPacket = tex.container.imageFormat < 0 || tex.container.imageFormat === FREE_IMAGE.PNG;
+  if (rustPacket && !animated && opts.scale === undefined && rusttex.enabled()) {
     const fast = rusttex.texConvert(buf, scale, animated);
     verifyMobileTex(fast.bytes, {
       width: fast.width,

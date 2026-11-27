@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-27T21:58:47.420Z",
+  "generatedAt": "2026-11-27T22:49:13.461Z",
   "generator": "tools/make-golden-format.js",
   "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
   "cases": [
@@ -77,6 +77,26 @@
       "inputBytes": 603,
       "outputBytes": 1095,
       "outputSha256": "1572bb8ab2c3486daa87538180e8def1626ec7409e43358b319ae13e7f21b880",
+      "preset": "balanced"
+    },
+    {
+      "name": "tex-convert-png-passthrough-16x16",
+      "kind": "tex-convert",
+      "input": "tex-convert-png-passthrough-16x16/in.bin",
+      "output": "tex-convert-png-passthrough-16x16/out.bin",
+      "inputBytes": 1199,
+      "outputBytes": 1115,
+      "outputSha256": "6bb538cd0ac3a26cedec47391d3a732d72f36db7acd4aeb810381530be821ffd",
+      "preset": "default"
+    },
+    {
+      "name": "tex-convert-png-passthrough-40x40",
+      "kind": "tex-convert",
+      "input": "tex-convert-png-passthrough-40x40/in.bin",
+      "output": "tex-convert-png-passthrough-40x40/out.bin",
+      "inputBytes": 4999,
+      "outputBytes": 6491,
+      "outputSha256": "bba9b85713f5c532c7f05b1f3c1e70bede4adfe674790fc3d26c73b6e3684401",
       "preset": "balanced"
     },
     {

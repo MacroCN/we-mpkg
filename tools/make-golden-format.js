@@ -205,6 +205,27 @@ addCase('tex-convert-dxt1-32x32', 'tex-convert', texBig,
   (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/大图.tex', preset: 'balanced' }).bytes,
   { preset: 'balanced' });
 
+
+// ---- 直通 PNG（整包转换也走 Rust：解码 + 裁剪 + 缩放 + LZ4 一条链） ----
+const texPng = buildTex({
+  format: tex.TEX_FORMAT.RGBA8888,
+  texW: 16, texH: 16, imageFormat: tex.FREE_IMAGE.PNG,
+  images: [{ mips: [{ w: 16, h: 16, bytes: makePng({ width: 16, height: 16, colorType: 6, bitDepth: 8, rows: pngRows(rnd(16 * 16 * 4, 47), 16, 16, 4, 8, [0, 1, 2, 3, 4]) }) }] }],
+});
+addCase('tex-convert-png-passthrough-16x16', 'tex-convert', texPng,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通.tex' }).bytes,
+  { preset: 'default' });
+
+const bigPngBytes = makePng({ width: 40, height: 40, colorType: 2, bitDepth: 8, rows: pngRows(rnd(40 * 40 * 3, 53), 40, 40, 3, 8, [1]) });
+const texPngBig = buildTex({
+  format: tex.TEX_FORMAT.RGBA8888,
+  texW: 40, texH: 40, imageFormat: tex.FREE_IMAGE.PNG,
+  images: [{ mips: [{ w: 40, h: 40, bytes: bigPngBytes }] }],
+});
+addCase('tex-convert-png-passthrough-40x40', 'tex-convert', texPngBig,
+  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通大图.tex', preset: 'balanced' }).bytes,
+  { preset: 'balanced' });
+
 // ---- 直通形态（不该改写字节） ----
 const texMobile = buildTex({
   format: tex.TEX_FORMAT.RGBA8888,

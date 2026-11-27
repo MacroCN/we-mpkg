@@ -19,6 +19,7 @@ pub const TEX_R8: i32 = 9;
 pub const FLAG_IS_GIF: i32 = 4;
 pub const FLAG_IS_VIDEO: i32 = 32;
 pub const FREE_IMAGE_UNKNOWN: i32 = -1;
+pub const FREE_IMAGE_PNG: i32 = 13;
 
 #[derive(Debug)]
 pub struct Mip {
@@ -343,7 +344,9 @@ pub struct Converted {
 
 pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
     let tex = parse(buf)?;
-    if tex.image_format >= 0 {
+    // 直通图里目前只有 PNG 能在 Rust 里解（JPEG 仍由 JS 侧处理，调用方不会把 JPEG 送进来）
+    let passthrough_png = tex.image_format == FREE_IMAGE_PNG;
+    if tex.image_format >= 0 && !passthrough_png {
         return Err("passthrough-unsupported".into());
     }
     if tex.images.is_empty() {
@@ -359,7 +362,19 @@ pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
         let mip = mips.first().ok_or("帧没有 mip")?;
         let logical_w = tex.image_w as usize;
         let logical_h = tex.image_h as usize;
-        let mut pixels = decode_mip(buf, mip, tex.format)?;
+        let mut pixels = if passthrough_png {
+            let payload = &buf[mip.start..mip.start + mip.len];
+            let png = crate::png::decode(payload, 512 * 1024 * 1024)?;
+            if png.width != mip.width || png.height != mip.height {
+                return Err(format!(
+                    "PNG 尺寸 {}x{} 与 TEX 记录 {}x{} 不符",
+                    png.width, png.height, mip.width, mip.height
+                ));
+            }
+            png.data
+        } else {
+            decode_mip(buf, mip, tex.format)?
+        };
         let mut eff_w = mip.width;
         let mut eff_h = mip.height;
         if logical_w <= eff_w && logical_h <= eff_h && (logical_w != eff_w || logical_h != eff_h) {
