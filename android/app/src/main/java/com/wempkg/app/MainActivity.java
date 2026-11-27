@@ -97,7 +97,9 @@ public class MainActivity extends Activity {
         editRemoteToken = findViewById(R.id.editRemoteToken);
 
         // 首启向导：只读一次 prefs，后面决定是否自动进本地模式
-        onboarded = getPreferences(MODE_PRIVATE).getBoolean("onboarded", false);
+        // 老用户（用过本地/远程模式）升级上来不该再走一遍向导：有 mode 记录就算已引导
+        onboarded = getPreferences(MODE_PRIVATE).getBoolean("onboarded", false)
+                || !getPreferences(MODE_PRIVATE).getString("mode", "").isEmpty();
         onboardPanel = findViewById(R.id.onboardPanel);
         onboardPermText = findViewById(R.id.onboardPermText);
         onboardDirText = findViewById(R.id.onboardDirText);
