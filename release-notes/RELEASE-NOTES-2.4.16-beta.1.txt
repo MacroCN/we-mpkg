@@ -1,0 +1,17 @@
+we-mpkg 2.4.16-beta.1
+====================
+
+beta 测试版：清理依赖树体积与已知漏洞，功能行为不变，请重点回归「登录 → 下条小工坊」全流程。
+
+## 变更
+- 给 steam-appticket 加 npm overrides，强制它用 protobufjs ^7.6.6，不再装嵌套的 6.11.6。
+  node_modules 从 53 MB 降到 30 MB（省约 22 MB，其中 19.5 MB 是 6.x 自带的命令行工具链）。
+- npm audit 的高危从 4 条降到 2 条（剩下 2 条均为 steam-user 的 adm-zip，需单独验证，暂不动）。
+- 新增守卫测试：锁文件里不允许再出现 protobufjs 6.x，防止以后被其他包拉回去。
+
+## 已知与未做
+- protobufjs 6→7 只有生成代码的编码/解码路径做了离线验证，真实 app ticket 解析要靠真机下载验证。
+- adm-zip 的 2 条高危未处理；steam-appticket 本身未升级（major 变更风险大于收益）。
+
+## 签名与升级
+本版与正式版使用同一 release 签名，versionCode 58（上一版 57），可直接覆盖安装上一版。

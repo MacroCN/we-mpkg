@@ -2294,6 +2294,22 @@ await testAsync('安卓首启优化：node_modules 瘦身 + assets 单 zip + bui
   assert.ok(fs.existsSync(path.join(assetsDir, 'nodejs-build.json')), '仓库 assets 要带 buildId 清单');
 });
 
+test('依赖树：steam-appticket 的 protobufjs 被 override 到 7.x，不再嵌套 6.x', () => {
+  const root = path.join(__dirname, '..');
+  const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  assert.ok(pkg.overrides && pkg.overrides['steam-appticket'], 'package.json 要有 overrides.steam-appticket');
+  assert.ok(/^[^0-9]*7\./.test(pkg.overrides['steam-appticket'].protobufjs || ''), 'override 要指向 7.x');
+  const lock = JSON.parse(fs.readFileSync(path.join(root, 'package-lock.json'), 'utf8'));
+  const stray = [];
+  for (const [key, meta] of Object.entries(lock.packages || {})) {
+    if (!key.includes('node_modules/protobufjs')) continue;
+    const ver = String(meta.version || '');
+    // 6.x 的 cli 工具链有 ~19MB，手机端根本用不到
+    if (!ver.startsWith('7.')) stray.push(`${key} -> ${ver}`);
+  }
+  assert.deepStrictEqual(stray, [], `锁里不该再有 protobufjs 6.x: ${stray.join(', ')}`);
+});
+
 test('导出原始资源：project.json 的 file 写成 scene.json 时，仍按目录里的 scene.pkg 导出', () => {
   const rawexport = require('../src/rawexport');
   const pkgformat = require('../src/pkgformat');

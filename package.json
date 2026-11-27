@@ -1,6 +1,6 @@
 {
   "name": "we-mpkg",
-  "version": "2.4.15",
+  "version": "2.4.16-beta.1",
   "private": true,
   "description": "浏览 Wallpaper Engine 创意工坊 -> 内置纯 JS 下载 -> 打包为手机版 .mpkg",
   "bin": {
@@ -19,6 +19,11 @@
     "qrcode-terminal": "^0.12.0",
     "steam-session": "^1.9.4",
     "steam-user": "^5.3.0"
+  },
+  "overrides": {
+    "steam-appticket": {
+      "protobufjs": "^7.6.6"
+    }
   },
   "license": "MIT",
   "repository": {
