@@ -57,8 +57,8 @@ static int redirect_std_to_logcat(void) {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_wempkg_app_NodeRunner_startNode(JNIEnv *env, jclass clazz,
                                          jobjectArray arguments, jstring nodePath,
-                                         jstring tmpDir, jstring logPath,
-                                         jstring nativeLibDir) {
+                                         jstring tmpDir, jstring homeDir, jstring logPath,
+                                         jstring nativeLibDir, jstring publicDownloads) {
     const char *path = env->GetStringUTFChars(nodePath, 0);
     setenv("NODE_PATH", path, 1);
     env->ReleaseStringUTFChars(nodePath, path);
@@ -79,8 +79,23 @@ Java_com_wempkg_app_NodeRunner_startNode(JNIEnv *env, jclass clazz,
     if (tmpDir != NULL) {
         const char *tmp = env->GetStringUTFChars(tmpDir, 0);
         setenv("TMPDIR", tmp, 1);
-        setenv("HOME", tmp, 1);
         env->ReleaseStringUTFChars(tmpDir, tmp);
+    }
+
+    // HOME 单独指到应用私有目录：cacheDir 会被系统「清除缓存」清掉，
+    // 放那里的 ~/.npm 之类缓存会丢；TMPDIR 仍留在 cache（临时文件本就该可被回收）
+    if (homeDir != NULL) {
+        const char *home = env->GetStringUTFChars(homeDir, 0);
+        setenv("HOME", home, 1);
+        env->ReleaseStringUTFChars(homeDir, home);
+    }
+
+    // 公共下载目录的真实路径由 Java 侧用 Environment 算好后传进来，
+    // Node 里不再硬编码 /storage/emulated/0（应用分身/工作资料下 userId 不是 0）
+    if (publicDownloads != NULL) {
+        const char *dl = env->GetStringUTFChars(publicDownloads, 0);
+        setenv("WEM_PUBLIC_DOWNLOAD", dl, 1);
+        env->ReleaseStringUTFChars(publicDownloads, dl);
     }
 
     if (logPath != NULL) {

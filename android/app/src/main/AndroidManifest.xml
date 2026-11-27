@@ -15,6 +15,13 @@
         tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <!-- 远程模式要连电脑的 192.168.x.x，属于本地网络。Android 16 的本地网络保护当前是
+         opt-in、后续版本会强制，提前声明并做运行时申请，避免将来直接连不出去。
+         没有用 Wi-Fi 扫描定位，所以标 neverForLocation。 -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
 
     <!-- Android 11+ 包可见性：要能查询/拉起壁纸引擎（安卓官方客户端） -->
     <queries>

@@ -54,6 +54,21 @@ if (Test-Path $ffmpegSrc) {
     Write-Warning '未找到 .cache\toolchain\ffmpeg-android\ffmpeg，Android 视频转码会回退为原样保留'
 }
 
+# 预编译的 libnode / libc++_shared / libffmpeg 可能还是 4 KB 页版本（toolchain 里的老包）。
+# Android 16 在 16 KB 页设备上要求 LOAD 段 >= 16 KB 且 vaddr/offset 同余，否则会进兼容模式
+# （弹提示、性能打折）。CI 用的是 native-prebuilt 附件（已对齐），本地构建则在这里补齐。
+Write-Host "[1b/5] 校验原生库 16 KB 页对齐"
+foreach ($so in Get-ChildItem $jniDir -Filter '*.so') {
+    node (Join-Path $projRoot 'tools\check-16k.js') $so.FullName | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host ("    {0} 未对齐，重排 LOAD 段" -f $so.Name)
+        node (Join-Path $projRoot 'tools\align16k.js') $so.FullName $so.FullName
+        if ($LASTEXITCODE -ne 0) { throw "16 KB 对齐失败: $($so.Name)" }
+        node (Join-Path $projRoot 'tools\check-16k.js') $so.FullName
+        if ($LASTEXITCODE -ne 0) { throw "16 KB 对齐后仍不达标: $($so.Name)" }
+    }
+}
+
 Write-Host "[2/5] 编译 JNI 桥"
 $ndkRoot = Get-ChildItem (Join-Path $Toolchain 'android-sdk\ndk') -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
 if (-not $ndkRoot) { throw "没找到 NDK，先 sdkmanager 装 ndk" }
