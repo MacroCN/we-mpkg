@@ -295,10 +295,13 @@ body { padding-bottom: var(--sab, 0px); }
   transition: transform 0.15s ease, opacity 0.15s ease;
 }
 
-/* 滚动时收起/展开顶栏与搜索栏：上滑隐藏、下滑出现 */
-.topbar, .searchbar { transition: transform 0.18s ease; }
+/* 滚动时收起/展开顶栏、搜索栏与选项行：上滑隐藏、下滑出现 */
+.topbar, .searchbar, .opts { transition: transform 0.18s ease; }
 body.head-hidden .topbar { transform: translateY(-100%); }
 body.head-hidden .searchbar { top: 0; transform: translateY(-100%); }
+/* 选项行也是 sticky，top 是按前两行的真实高度算出来的：头部收起后它必须跟着一起上移，
+   否则会停在原来那个 offset 上悬在列表中间，把滚上来的卡片压住（车机/平板上尤其明显） */
+body.head-hidden .opts { top: 0; transform: translateY(-100%); }
 
 .searchbar {
   display: flex;
@@ -447,6 +450,8 @@ main {
 @media (max-width: 899px) {
   /* 中等宽度下搜索栏可能换行，选项行固定偏移会压住搜索框，改为普通流 */
   .opts { position: static; }
+  /* 普通流里不能平移：平移只会留下一块空白，直接保持原位 */
+  body.head-hidden .opts { transform: none; }
 }
 @media (max-width: 640px) {
   .opts { position: static; gap: 8px; }
