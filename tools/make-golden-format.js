@@ -8,7 +8,8 @@
  *   - 现有 JS 实现改动后也要重新对照，避免悄悄改坏兼容性。
  *
  * 产物：test/golden/format/<case>/{in.bin,out.bin} + manifest.json
- * 生成时强制走纯 JS 实现（WE_TEX_RUST=off），避免用 Rust 结果给自己当基准。
+ * DXT / LZ4 用例强制走纯 JS 实现（WE_TEX_RUST=off）当基准；
+ * PNG / JPEG 的解码器 3.0 起已整体搬到 Rust（JS 侧不再有实现），这两类用例必须临时打开引擎生成。
  *
  * 用法：node tools/make-golden-format.js
  */
@@ -105,7 +106,7 @@ function dxtBlocks(w, h, blockBytes, seed) {
 
 
 /** 造一个最小 PNG：只用于黄金样本，过滤方式与 colorType 覆盖常见路径 */
-function makePng({ width, height, colorType, bitDepth, rows, plte, trns }) {
+function makePng({ width, height, colorType, bitDepth, rows, plte, trns, interlace = 0 }) {
   const zlib = require('zlib');
   const chunk = (type, data) => {
     const b = Buffer.alloc(8 + data.length + 4);
@@ -120,6 +121,7 @@ function makePng({ width, height, colorType, bitDepth, rows, plte, trns }) {
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = bitDepth;
   ihdr[9] = colorType;
+  ihdr[12] = interlace;
   const parts = [
     Buffer.from('89504e470d0a1a0a', 'hex'),
     chunk('IHDR', ihdr),
@@ -164,7 +166,43 @@ function pngRows(pixels, width, height, channels, bitDepth, filters) {
   return out;
 }
 
+/** 把逐行 raw 数据重排成 Adam7 七趟（每趟 filter 0），仅用于造隔行 PNG 素材 */
+function adam7Rows(rows, width, height, channels, bitDepth) {
+  const rowBytes = Math.ceil((width * channels * bitDepth) / 8);
+  const passes = [[0, 0, 8, 8], [4, 0, 8, 8], [0, 4, 4, 8], [2, 0, 4, 4], [0, 2, 2, 4], [1, 0, 2, 2], [0, 1, 1, 2]];
+  const chunks = [];
+  for (const [ox, oy, dx, dy] of passes) {
+    const pw = width > ox ? Math.ceil((width - ox) / dx) : 0;
+    const ph = height > oy ? Math.ceil((height - oy) / dy) : 0;
+    const rb = Math.ceil((pw * channels * bitDepth) / 8);
+    for (let py = 0; py < ph; py++) {
+      const dst = Buffer.alloc(rb + 1); // filter 0
+      for (let px = 0; px < pw; px++) {
+        const sx = (oy + py * dy) * rowBytes + (ox + px * dx) * Math.ceil((channels * bitDepth) / 8);
+        const src = (oy + py * dy) * (rowBytes + 1) + 1 + (ox + px * dx) * Math.ceil((channels * bitDepth) / 8);
+        dst.set(rows.subarray(src, src + Math.ceil((channels * bitDepth) / 8)), 1 + px * Math.ceil((channels * bitDepth) / 8));
+      }
+      chunks.push(dst);
+    }
+  }
+  return Buffer.concat(chunks);
+}
+
 const cases = [];
+
+/**
+ * PNG 直通路径的解码器已在 3.0 里整体搬到 Rust（JS 侧没有 pngjs 了），
+ * 所以 PNG / JPEG 相关用例生成时必须临时打开引擎，DXT / LZ4 仍用纯 JS 当基准。
+ */
+function withEngine(fn) {
+  const prev = process.env.WE_TEX_RUST;
+  process.env.WE_TEX_RUST = 'on';
+  require('../src/rusttex')._reset(); // 探测结果带缓存，切换开关后必须重置
+  try { return fn(); } finally {
+    process.env.WE_TEX_RUST = prev;
+    require('../src/rusttex')._reset();
+  }
+}
 
 function addCase(name, kind, input, build, meta = {}) {
   cases.push({ name, kind, input, build, meta });
@@ -214,7 +252,7 @@ const texPng = buildTex({
   images: [{ mips: [{ w: 16, h: 16, bytes: makePng({ width: 16, height: 16, colorType: 6, bitDepth: 8, rows: pngRows(rnd(16 * 16 * 4, 47), 16, 16, 4, 8, [0, 1, 2, 3, 4]) }) }] }],
 });
 addCase('tex-convert-png-passthrough-16x16', 'tex-convert', texPng,
-  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通.tex' }).bytes,
+  (buf) => withEngine(() => tex.convertTexBuffer(buf, { relPath: 'materials/直通.tex' }).bytes),
   { preset: 'default' });
 
 const bigPngBytes = makePng({ width: 40, height: 40, colorType: 2, bitDepth: 8, rows: pngRows(rnd(40 * 40 * 3, 53), 40, 40, 3, 8, [1]) });
@@ -224,7 +262,7 @@ const texPngBig = buildTex({
   images: [{ mips: [{ w: 40, h: 40, bytes: bigPngBytes }] }],
 });
 addCase('tex-convert-png-passthrough-40x40', 'tex-convert', texPngBig,
-  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通大图.tex', preset: 'balanced' }).bytes,
+  (buf) => withEngine(() => tex.convertTexBuffer(buf, { relPath: 'materials/直通大图.tex', preset: 'balanced' }).bytes),
   { preset: 'balanced' });
 
 // ---- 直通形态（不该改写字节） ----
@@ -248,7 +286,7 @@ addCase('png-decode-rgba8-16x16', 'png-decode',
     width: 16, height: 16, colorType: 6, bitDepth: 8,
     rows: pngRows(pngPix, 16, 16, 4, 8, [0, 1, 2, 3, 4]),
   }),
-  (buf) => tex.decodePng(buf).data,
+  (buf) => withEngine(() => tex.decodePng(buf).data),
   { width: 16, height: 16 });
 
 const pal = Buffer.alloc(16 * 3);
@@ -263,7 +301,7 @@ addCase('png-decode-palette4-10x10', 'png-decode',
     rows: pngRows(palIdx, 10, 10, 1, 4, [0]),
     plte: pal, trns: palTrns,
   }),
-  (buf) => tex.decodePng(buf).data,
+  (buf) => withEngine(() => tex.decodePng(buf).data),
   { width: 10, height: 10 });
 
 const gray16 = rnd(9 * 9 * 2, 43);
@@ -272,9 +310,19 @@ addCase('png-decode-gray16-9x9', 'png-decode',
     width: 9, height: 9, colorType: 0, bitDepth: 16,
     rows: pngRows(gray16, 9, 9, 1, 16, [2]),
   }),
-  (buf) => tex.decodePng(buf).data,
+  (buf) => withEngine(() => tex.decodePng(buf).data),
   { width: 9, height: 9 });
 
+
+const ilPix = rnd(13 * 9 * 4, 59);
+const ilRows = pngRows(ilPix, 13, 9, 4, 8, [0]);
+addCase('png-decode-interlaced-13x9', 'png-decode',
+  makePng({
+    width: 13, height: 9, colorType: 6, bitDepth: 8, interlace: 1,
+    rows: adam7Rows(ilRows, 13, 9, 4, 8),
+  }),
+  (buf) => withEngine(() => tex.decodePng(buf).data),
+  { width: 13, height: 9 });
 
 // ---- JPEG 解码（baseline / 渐进式，Rust 输出必须与 jpeg-js 逐字节一致） ----
 function makeJpegRgba(w, h, seed) {
@@ -285,7 +333,7 @@ function makeJpegRgba(w, h, seed) {
 
 const jpegBase = makeJpegRgba(16, 16, 61);
 addCase('jpeg-decode-baseline-16x16', 'jpeg-decode', jpegBase,
-  (buf) => tex.decodeJpeg(buf).data, { width: 16, height: 16 });
+  (buf) => withEngine(() => tex.decodeJpeg(buf).data), { width: 16, height: 16 });
 
 // 渐进式样本固定内联（PIL 生成，jpeg-js 编码器只能出 baseline）
 const jpegProg = Buffer.from(
@@ -293,7 +341,7 @@ const jpegProg = Buffer.from(
   'base64'
 );
 addCase('jpeg-decode-progressive-48x40', 'jpeg-decode', jpegProg,
-  (buf) => tex.decodeJpeg(buf).data, { width: 48, height: 40 });
+  (buf) => withEngine(() => tex.decodeJpeg(buf).data), { width: 48, height: 40 });
 
 // ---- 直通 JPEG 纹理：解码 + 裁剪 + 缩放 + LZ4 一条链 ----
 const texJpeg = buildTex({
@@ -302,7 +350,7 @@ const texJpeg = buildTex({
   images: [{ mips: [{ w: 16, h: 16, bytes: jpegBase }] }],
 });
 addCase('tex-convert-jpeg-passthrough-16x16', 'tex-convert', texJpeg,
-  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg.tex' }).bytes,
+  (buf) => withEngine(() => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg.tex' }).bytes),
   { preset: 'default' });
 
 const texJpegProg = buildTex({
@@ -311,7 +359,7 @@ const texJpegProg = buildTex({
   images: [{ mips: [{ w: 48, h: 40, bytes: jpegProg }] }],
 });
 addCase('tex-convert-jpeg-progressive-48x40', 'tex-convert', texJpegProg,
-  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg渐进.tex' }).bytes,
+  (buf) => withEngine(() => tex.convertTexBuffer(buf, { relPath: 'materials/直通jpeg渐进.tex' }).bytes),
   { preset: 'default' });
 
 
@@ -328,7 +376,7 @@ const texGif = buildTex({
   tail: Buffer.from([9, 8, 7, 6, 5, 4]),
 });
 addCase('tex-convert-gif-animated-8x8', 'tex-convert', texGif,
-  (buf) => tex.convertTexBuffer(buf, { relPath: 'materials/动图.tex' }).bytes,
+  (buf) => withEngine(() => tex.convertTexBuffer(buf, { relPath: 'materials/动图.tex' }).bytes),
   { preset: 'default' });
 
 
@@ -371,7 +419,7 @@ for (const c of cases) {
 fs.writeFileSync(path.join(outRoot, 'manifest.json'), JSON.stringify({
   generatedAt: new Date().toISOString(),
   generator: 'tools/make-golden-format.js',
-  note: '期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐',
+  note: 'DXT/LZ4 基准由纯 JS 实现生成（WE_TEX_RUST=off）；PNG/JPEG 解码器已在 Rust，基准由引擎生成；任何改动都必须逐字节对齐',
   cases: manifest,
 }, null, 2) + '\n');
 

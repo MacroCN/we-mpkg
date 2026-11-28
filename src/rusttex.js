@@ -178,7 +178,7 @@ function tmpDir() {
   for (const base of bases) {
     if (!base) continue;
     try {
-      tmpRoot = fs.mkdtempSync(path.join(base, 'wempkg-rusttex-'));
+      tmpRoot = fs.mkdtempSync(path.join(base, 'pkg-rusttex-'));
       return tmpRoot;
     } catch { /* 换下一个 */ }
   }

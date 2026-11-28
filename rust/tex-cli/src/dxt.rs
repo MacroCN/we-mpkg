@@ -127,11 +127,12 @@ pub fn decode(buf: &[u8], fmt: Format, width: usize, height: usize) -> Result<Ve
 
     for block_y in 0..by {
         for block_x in 0..bx {
-            let mut alpha4 = [0u8; 4];
+            let mut alpha4 = [0u8; 8];
             let mut alpha8 = [0u8; 8];
             if has_alpha4 {
-                // DXT3：8 字节，每行 1 字节（4 个 4bit alpha），高 4 字节是每行填充位
-                alpha4.copy_from_slice(&buf[off..off + 4]);
+                // DXT3：8 字节共 16 个 4bit alpha，标准 S3TC 连续排布：
+                // 像素 (x,y) 是第 4y+x 个 nibble（字节 (4y+x)>>1，低/高 nibble 交替）
+                alpha4.copy_from_slice(&buf[off..off + 8]);
                 off += 8;
             } else if has_alpha8 {
                 alpha8.copy_from_slice(&buf[off..off + 8]);
@@ -165,7 +166,8 @@ pub fn decode(buf: &[u8], fmt: Format, width: usize, height: usize) -> Result<Ve
 
                     let mut alpha = c[3];
                     if has_alpha4 {
-                        alpha = ((((alpha4[y] as u16) >> (x * 4)) & 0x0f) * 17) as u8;
+                        let n = 4 * y + x;
+                        alpha = ((((alpha4[n >> 1] as u16) >> ((n & 1) * 4)) & 0x0f) * 17) as u8;
                     } else if has_alpha8 {
                         alpha = apal[alpha_index_at(&alpha8, 4 * y + x)];
                     }

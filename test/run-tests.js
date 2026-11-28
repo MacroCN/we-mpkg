@@ -408,6 +408,23 @@ test('DXT1 纯色块 -> RGBA 精确还原', () => {
   assert.strictEqual(dxt.payloadSize(7, 5, 3), 16); // 边缘块按 4x4 补齐
 });
 
+test('DXT3 alpha 按标准 S3TC 排布（nibble 4y+x，不是每行 1 字节）', () => {
+  const dxt = require('../src/dxt');
+  // 颜色全白，alpha 依次 0..15（行优先）：标准布局下 8 字节里是 16 个连续 nibble
+  const block = Buffer.alloc(16);
+  [0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe].forEach((b, i) => { block[i] = b; });
+  block.writeUInt16LE(0xffff, 8);
+  block.writeUInt16LE(0xffff, 10);
+  block.writeUInt32LE(0, 12);
+  const rgba = dxt.decode(block, 6, 4, 4); // 6 号格式 = DXT3
+  for (let y = 0; y < 4; y++) {
+    for (let x = 0; x < 4; x++) {
+      const expect = (y * 4 + x) * 17;
+      assert.strictEqual(rgba[(y * 4 + x) * 4 + 3], expect, `像素(${x},${y}) alpha 应为 ${expect}`);
+    }
+  }
+});
+
 test('DXT5 显式 alpha 端点与 3bit 索引', () => {
   const dxt = require('../src/dxt');
   const block = Buffer.alloc(16);
@@ -2766,6 +2783,35 @@ test('Rust 纹理 CLI（阶段 0）：探测候选含 .cache/toolchain，可一�
   } finally {
     if (old === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = old;
     rt._reset();
+  }
+});
+
+test('手写解码器模糊自检：变异样本只报错，不 panic', () => {
+  const rt = require('../src/rusttex');
+  if (!rt.available()) return; // 没有 Rust 引擎时跳过（CI 一定会构建）
+  const dir = path.join(__dirname, 'golden', 'format');
+  const seeds = [
+    ['png-decode-rgba8-16x16', (b) => rt.pngDecode(b, 16, 16)],
+    ['png-decode-interlaced-13x9', (b) => rt.pngDecode(b, 13, 9)],
+    ['jpeg-decode-baseline-16x16', (b) => rt.jpegDecode(b)],
+    ['jpeg-decode-progressive-48x40', (b) => rt.jpegDecode(b)],
+    ['lz4-decompress-4k', (b) => require('../src/lz4').decompress(b, 4096)],
+  ];
+  let seed = 12345;
+  const rnd = (n) => {
+    seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
+    return (seed >>> 8) % n;
+  };
+  for (const [name, fn] of seeds) {
+    const src = fs.readFileSync(path.join(dir, name, 'in.bin'));
+    for (let i = 0; i < 12; i++) {
+      const b = Buffer.from(src);
+      for (let k = 0; k < 6; k++) b[rnd(b.length)] = rnd(256);
+      const cut = rnd(4) === 0 ? b.subarray(0, rnd(b.length)) : b;
+      try { fn(cut); } catch (e) {
+        assert.ok(!/panicked|RUST_BACKTRACE/.test(String(e.message)), `${name} 变异样本让解码器 panic: ${e.message}`);
+      }
+    }
   }
 });
 

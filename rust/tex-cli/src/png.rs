@@ -3,7 +3,7 @@
 //
 // PNG 解码（直通纹理路径）。目标不是做一个通用 PNG 库，而是把 JS 侧 decodePng
 // 的语义原样搬过来，逐字节对齐：
-//   - 只支持非隔行、compression/filter = 0
+//   - compression/filter = 0；支持非隔行与 Adam7 隔行（七趟子图）
 //   - 支持 colorType 0/2/3/4/6，bitDepth 1/2/4/8/16
 //   - 16 位取样高字节；<8 位只有灰度做 255 缩放（调色板索引不缩放）
 //   - colorType 0/2 一律 alpha=255（JS 侧没接 tRNS），调色板用 tRNS
@@ -25,6 +25,7 @@ struct Header {
     height: usize,
     bit_depth: u8,
     color_type: u8,
+    interlaced: bool,
 }
 
 fn parse_header(data: &[u8]) -> Result<Header, String> {
@@ -42,10 +43,16 @@ fn parse_header(data: &[u8]) -> Result<Header, String> {
     if data[26] != 0 || data[27] != 0 {
         return Err("PNG compression/filter 非 0".into());
     }
-    if data[28] != 0 {
-        return Err("PNG 隔行扫描未支持".into());
+    if data[28] > 1 {
+        return Err(format!("PNG interlace 非法: {}", data[28]));
     }
-    Ok(Header { width, height, bit_depth: data[24], color_type: data[25] })
+    Ok(Header {
+        width,
+        height,
+        bit_depth: data[24],
+        color_type: data[25],
+        interlaced: data[28] == 1,
+    })
 }
 
 /// 只读尺寸，给上层做阈值判断（不解压）
@@ -74,8 +81,6 @@ pub fn decode(data: &[u8], max_rgba_bytes: usize) -> Result<Png, String> {
     if rgba_len > max_rgba_bytes {
         return Err(format!("PNG 解码后 {} 字节超过上限", rgba_len));
     }
-    let row_bytes = (h.width * channels * h.bit_depth as usize + 7) / 8;
-
     // 收集 chunk
     let mut idat: Vec<u8> = Vec::new();
     let mut plte: Option<&[u8]> = None;
@@ -104,75 +109,50 @@ pub fn decode(data: &[u8], max_rgba_bytes: usize) -> Result<Png, String> {
         return Err("PNG 缺少 IDAT".into());
     }
 
-    let need = h.height * (row_bytes + 1);
+    let bpp = std::cmp::max(1, (channels * h.bit_depth as usize + 7) / 8);
+
+    // Adam7 七趟：起点 (ox, oy)、步长 (dx, dy)。非隔行就当成一趟整图。
+    const PASSES: [(usize, usize, usize, usize); 7] = [
+        (0, 0, 8, 8),
+        (4, 0, 8, 8),
+        (0, 4, 4, 8),
+        (2, 0, 4, 4),
+        (0, 2, 2, 4),
+        (1, 0, 2, 2),
+        (0, 1, 1, 2),
+    ];
+    let passes: &[(usize, usize, usize, usize)] = if h.interlaced {
+        &PASSES
+    } else {
+        &[(0, 0, 1, 1)]
+    };
+
+    // 各趟的行宽/行数，先算出解压后总长度
+    let mut plan: Vec<(usize, usize, usize, usize, usize, usize)> = Vec::new(); // (ox,oy,dx,dy,pw,row_bytes)
+    let mut need = 0usize;
+    for &(ox, oy, dx, dy) in passes {
+        let pw = if h.width > ox { (h.width - ox).div_ceil(dx) } else { 0 };
+        let ph = if h.height > oy { (h.height - oy).div_ceil(dy) } else { 0 };
+        let rb = (pw * channels * h.bit_depth as usize).div_ceil(8);
+        if pw == 0 || ph == 0 {
+            plan.push((ox, oy, dx, dy, 0, 0));
+            continue;
+        }
+        need += ph * (rb + 1);
+        plan.push((ox, oy, dx, dy, pw, rb));
+    }
     let raw = inflate::zlib_inflate(&idat, need + 4096)?;
     if raw.len() < need {
         return Err("PNG 解压数据不足".into());
     }
 
-    // 反滤波
-    let bpp = std::cmp::max(1, (channels * h.bit_depth as usize + 7) / 8);
-    let mut out = vec![0u8; row_bytes * h.height];
-    let mut raw_pos = 0usize;
-    for y in 0..h.height {
-        let filter = raw[raw_pos];
-        raw_pos += 1;
-        let row_start = y * row_bytes;
-        let prev_start = row_start as isize - row_bytes as isize;
-        // 常见滤波（None/Up）直接整行搬，省掉逐字节判断
-        if filter == 0 {
-            out[row_start..row_start + row_bytes].copy_from_slice(&raw[raw_pos..raw_pos + row_bytes]);
-            raw_pos += row_bytes;
-            continue;
-        }
-        if filter == 2 && y == 0 {
-            out[row_start..row_start + row_bytes].copy_from_slice(&raw[raw_pos..raw_pos + row_bytes]);
-            raw_pos += row_bytes;
-            continue;
-        }
-        for x in 0..row_bytes {
-            let cur = raw[raw_pos + x] as i16;
-            let left = if x >= bpp { out[row_start + x - bpp] as i16 } else { 0 };
-            let up = if y > 0 { out[prev_start as usize + x] as i16 } else { 0 };
-            let up_left = if y > 0 && x >= bpp {
-                out[prev_start as usize + x - bpp] as i16
-            } else {
-                0
-            };
-            let v = match filter {
-                0 => cur,
-                1 => cur + left,
-                2 => cur + up,
-                3 => cur + ((left + up) >> 1),
-                4 => {
-                    let p = left + up - up_left;
-                    let pa = (p - left).abs();
-                    let pb = (p - up).abs();
-                    let pc = (p - up_left).abs();
-                    let pred = if pa <= pb && pa <= pc {
-                        left
-                    } else if pb <= pc {
-                        up
-                    } else {
-                        up_left
-                    };
-                    cur + pred
-                }
-                _ => return Err(format!("PNG 滤波类型非法: {}", filter)),
-            };
-            out[row_start + x] = (v & 0xff) as u8;
-        }
-        raw_pos += row_bytes;
-    }
-
-    // 取样 + 扩到 RGBA8（与 JS 的 readSample/scale 完全一致）
-    let read_sample = |row_start: usize, idx: usize| -> u8 {
+    let read_sample = |buf: &[u8], row_start: usize, idx: usize| -> u8 {
         match h.bit_depth {
-            8 => out[row_start + idx],
-            16 => out[row_start + idx * 2],
+            8 => buf[row_start + idx],
+            16 => buf[row_start + idx * 2],
             bd => {
                 let bit_off = idx * bd as usize;
-                let byte = out[row_start + (bit_off >> 3)];
+                let byte = buf[row_start + (bit_off >> 3)];
                 let shift = 8 - bd as usize - (bit_off & 7);
                 let mask = (1u16 << bd) - 1;
                 ((byte as u16 >> shift) & mask) as u8
@@ -189,92 +169,114 @@ pub fn decode(data: &[u8], max_rgba_bytes: usize) -> Result<Png, String> {
     };
 
     let mut rgba = vec![0u8; rgba_len];
-    // 常见格式走紧凑循环：8 位灰度/灰度+alpha/RGB/RGBA 占实际纹理的绝大多数
-    match (h.bit_depth, h.color_type) {
-        (8, 6) => {
-            // RGBA8：反滤波结果就是目标排布，直接搬
-            rgba.copy_from_slice(&out);
-            return Ok(Png { width: h.width, height: h.height, data: rgba });
+    let mut raw_pos = 0usize;
+
+    for &(ox, oy, dx, dy, pw, rb) in &plan {
+        if pw == 0 || rb == 0 {
+            continue;
         }
-        (8, 2) => {
-            let mut si = 0usize;
-            for px in rgba.chunks_exact_mut(4) {
-                px[0] = out[si];
-                px[1] = out[si + 1];
-                px[2] = out[si + 2];
-                px[3] = 255;
-                si += 3;
+        let ph = (h.height - oy).div_ceil(dy);
+
+        // 逐趟反滤波（上一行是同趟内的上一行，不是整图上一行）
+        let mut buf = vec![0u8; rb * ph];
+        for y in 0..ph {
+            let filter = raw[raw_pos];
+            raw_pos += 1;
+            let row_start = y * rb;
+            let prev_start = row_start as isize - rb as isize;
+            if filter == 0 {
+                buf[row_start..row_start + rb].copy_from_slice(&raw[raw_pos..raw_pos + rb]);
+                raw_pos += rb;
+                continue;
             }
-            return Ok(Png { width: h.width, height: h.height, data: rgba });
-        }
-        (8, 0) => {
-            for (i, px) in rgba.chunks_exact_mut(4).enumerate() {
-                let g = out[i];
-                px[0] = g;
-                px[1] = g;
-                px[2] = g;
-                px[3] = 255;
+            if filter == 2 && y == 0 {
+                buf[row_start..row_start + rb].copy_from_slice(&raw[raw_pos..raw_pos + rb]);
+                raw_pos += rb;
+                continue;
             }
-            return Ok(Png { width: h.width, height: h.height, data: rgba });
-        }
-        (8, 4) => {
-            let mut si = 0usize;
-            for px in rgba.chunks_exact_mut(4) {
-                let g = out[si];
-                px[0] = g;
-                px[1] = g;
-                px[2] = g;
-                px[3] = out[si + 1];
-                si += 2;
-            }
-            return Ok(Png { width: h.width, height: h.height, data: rgba });
-        }
-        _ => {}
-    }
-    for y in 0..h.height {
-        let row_start = y * row_bytes;
-        for x in 0..h.width {
-            let di = (y * h.width + x) * 4;
-            match h.color_type {
-                6 => {
-                    rgba[di] = read_sample(row_start, x * 4);
-                    rgba[di + 1] = read_sample(row_start, x * 4 + 1);
-                    rgba[di + 2] = read_sample(row_start, x * 4 + 2);
-                    rgba[di + 3] = read_sample(row_start, x * 4 + 3);
-                }
-                2 => {
-                    rgba[di] = read_sample(row_start, x * 3);
-                    rgba[di + 1] = read_sample(row_start, x * 3 + 1);
-                    rgba[di + 2] = read_sample(row_start, x * 3 + 2);
-                    rgba[di + 3] = 255;
-                }
-                4 => {
-                    let g = read_sample(row_start, x * 2);
-                    rgba[di] = g;
-                    rgba[di + 1] = g;
-                    rgba[di + 2] = g;
-                    rgba[di + 3] = read_sample(row_start, x * 2 + 1);
-                }
-                0 => {
-                    let g = scale(read_sample(row_start, x));
-                    rgba[di] = g;
-                    rgba[di + 1] = g;
-                    rgba[di + 2] = g;
-                    rgba[di + 3] = 255;
-                }
-                _ => {
-                    let idx = read_sample(row_start, x) as usize;
-                    let pal = plte.ok_or_else(|| "PNG 调色板缺失".to_string())?;
-                    if idx * 3 + 2 >= pal.len() {
-                        return Err("PNG 调色板索引越界".into());
+            for x in 0..rb {
+                let cur = raw[raw_pos + x] as i16;
+                let left = if x >= bpp { buf[row_start + x - bpp] as i16 } else { 0 };
+                let up = if y > 0 { buf[prev_start as usize + x] as i16 } else { 0 };
+                let up_left = if y > 0 && x >= bpp {
+                    buf[prev_start as usize + x - bpp] as i16
+                } else {
+                    0
+                };
+                let v = match filter {
+                    0 => cur,
+                    1 => cur + left,
+                    2 => cur + up,
+                    3 => cur + ((left + up) >> 1),
+                    4 => {
+                        let p = left + up - up_left;
+                        let pa = (p - left).abs();
+                        let pb = (p - up).abs();
+                        let pc = (p - up_left).abs();
+                        let pred = if pa <= pb && pa <= pc {
+                            left
+                        } else if pb <= pc {
+                            up
+                        } else {
+                            up_left
+                        };
+                        cur + pred
                     }
-                    rgba[di] = pal[idx * 3];
-                    rgba[di + 1] = pal[idx * 3 + 1];
-                    rgba[di + 2] = pal[idx * 3 + 2];
-                    rgba[di + 3] = match trns {
-                        Some(t) if idx < t.len() => t[idx],
-                        _ => 255,
-                    };
+                    _ => return Err(format!("PNG 滤波类型非法: {}", filter)),
+                };
+                buf[row_start + x] = (v & 0xff) as u8;
+            }
+            raw_pos += rb;
+        }
+
+        // 取样 + 扩到 RGBA8，按趟步长散落到整图（与 JS 的 readSample/scale 一致）
+        for py in 0..ph {
+            let iy = oy + py * dy;
+            let row_start = py * rb;
+            for px in 0..pw {
+                let ix = ox + px * dx;
+                let di = (iy * h.width + ix) * 4;
+                match h.color_type {
+                    6 => {
+                        rgba[di] = read_sample(&buf, row_start, px * 4);
+                        rgba[di + 1] = read_sample(&buf, row_start, px * 4 + 1);
+                        rgba[di + 2] = read_sample(&buf, row_start, px * 4 + 2);
+                        rgba[di + 3] = read_sample(&buf, row_start, px * 4 + 3);
+                    }
+                    2 => {
+                        rgba[di] = read_sample(&buf, row_start, px * 3);
+                        rgba[di + 1] = read_sample(&buf, row_start, px * 3 + 1);
+                        rgba[di + 2] = read_sample(&buf, row_start, px * 3 + 2);
+                        rgba[di + 3] = 255;
+                    }
+                    4 => {
+                        let g = read_sample(&buf, row_start, px * 2);
+                        rgba[di] = g;
+                        rgba[di + 1] = g;
+                        rgba[di + 2] = g;
+                        rgba[di + 3] = read_sample(&buf, row_start, px * 2 + 1);
+                    }
+                    0 => {
+                        let g = scale(read_sample(&buf, row_start, px));
+                        rgba[di] = g;
+                        rgba[di + 1] = g;
+                        rgba[di + 2] = g;
+                        rgba[di + 3] = 255;
+                    }
+                    _ => {
+                        let idx = read_sample(&buf, row_start, px) as usize;
+                        let pal = plte.ok_or_else(|| "PNG 调色板缺失".to_string())?;
+                        if idx * 3 + 2 >= pal.len() {
+                            return Err("PNG 调色板索引越界".into());
+                        }
+                        rgba[di] = pal[idx * 3];
+                        rgba[di + 1] = pal[idx * 3 + 1];
+                        rgba[di + 2] = pal[idx * 3 + 2];
+                        rgba[di + 3] = match trns {
+                            Some(t) if idx < t.len() => t[idx],
+                            _ => 255,
+                        };
+                    }
                 }
             }
         }
@@ -282,3 +284,4 @@ pub fn decode(data: &[u8], max_rgba_bytes: usize) -> Result<Png, String> {
 
     Ok(Png { width: h.width, height: h.height, data: rgba })
 }
+

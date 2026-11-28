@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-11-27T23:40:05.134Z",
+  "generatedAt": "2026-11-28T14:21:51.334Z",
   "generator": "tools/make-golden-format.js",
-  "note": "期望输出由纯 JS 实现生成（WE_TEX_RUST=off），任何重写都必须逐字节对齐",
+  "note": "DXT/LZ4 基准由纯 JS 实现生成（WE_TEX_RUST=off）；PNG/JPEG 解码器已在 Rust，基准由引擎生成；任何改动都必须逐字节对齐",
   "cases": [
     {
       "name": "dxt1-decode-8x8",
@@ -22,7 +22,7 @@
       "output": "dxt3-decode-8x8/out.bin",
       "inputBytes": 64,
       "outputBytes": 256,
-      "outputSha256": "bc7cee9257d472db4f224e10ef3be1243158af09ce2531ecef5ae7490e15d762",
+      "outputSha256": "bae2c38466d48cc36221476a08d6254ee2ea779073512cf840584ecf21126ff8",
       "format": "dxt3",
       "width": 8,
       "height": 8
@@ -140,6 +140,17 @@
       "outputBytes": 324,
       "outputSha256": "edbc62b0a3ddc21983b3cee966b5a8ff76ff212486abc9dc4188271d3e480333",
       "width": 9,
+      "height": 9
+    },
+    {
+      "name": "png-decode-interlaced-13x9",
+      "kind": "png-decode",
+      "input": "png-decode-interlaced-13x9/in.bin",
+      "output": "png-decode-interlaced-13x9/out.bin",
+      "inputBytes": 555,
+      "outputBytes": 468,
+      "outputSha256": "e4c2532187a7b5afee5f1caeb208f4306ff6542e09eb3c9d4fb71cd4208d10cb",
+      "width": 13,
       "height": 9
     },
     {

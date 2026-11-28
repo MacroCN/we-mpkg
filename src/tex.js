@@ -1026,16 +1026,38 @@ function convertTexDir(dir, opts = {}) {
   // 中途失败或校验不过就保留原文件（与单张转换语义一致）。
   if (pending.length) {
     const tmpPaths = pending.map((p) => `${p.abs}.wempkg.tmp`);
-    let results;
-    try {
-      results = rusttex.texConvertBatch(pending.map((p, i) => ({
+    // 分批 + 逐张兜底：一个进程崩了/超时不该让整包纹理全灭。
+    // 每批 32 张，批失败后该批逐张重跑（单次 timeout 也更短，慢图不会拖死整批）。
+    const BATCH_MAX = 32;
+    let results = [];
+    for (let start = 0; start < pending.length; start += BATCH_MAX) {
+      const slice = pending.slice(start, start + BATCH_MAX);
+      const jobs = slice.map((p, i) => ({
         inPath: p.abs,
-        outPath: tmpPaths[i],
+        outPath: `${p.abs}.wempkg.tmp`,
         scale: p.job.scale,
         framesTail: p.job.framesTail,
-      })));
-    } catch (e) {
-      results = pending.map(() => ({ ok: false, error: e.message }));
+      }));
+      let chunk = null;
+      try {
+        chunk = rusttex.texConvertBatch(jobs);
+      } catch (e) {
+        warnings.push(`纹理批处理失败，改为逐张重试（${e.message}）`);
+      }
+      if (!chunk) {
+        chunk = slice.map((p, i) => {
+          try { fs.unlinkSync(jobs[i].outPath); } catch { /* ignore */ }
+          try {
+            const r = rusttex.texConvert(fs.readFileSync(p.abs), p.job.scale, p.job.framesTail);
+            if (!r) return { ok: false, error: '引擎不可用' };
+            fs.writeFileSync(jobs[i].outPath, r.bytes);
+            return { ok: true, verified: false, width: r.width, height: r.height, downsampled: r.downsampled, outBytes: r.bytes.length };
+          } catch (per) {
+            return { ok: false, error: per.message };
+          }
+        });
+      }
+      results = results.concat(chunk);
     }
     pending.forEach((p, i) => {
       const res = (results && results[i]) || { ok: false, error: '无结果' };

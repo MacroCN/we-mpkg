@@ -215,7 +215,7 @@ fn decode_ac_first(scan: &mut Scan, comp: &mut Component, zz: &mut [i32; 64], ta
     }
     let ac = comp.ac_tbl + 4;
     let mut k = ss;
-    while k <= se {
+    while k <= se && k <= 63 {
         let rs = scan.decode_huff(&tables[ac])? as u32;
         let s = rs & 15;
         let r = rs >> 4;
@@ -242,7 +242,7 @@ fn decode_ac_successive(scan: &mut Scan, comp: &mut Component, zz: &mut [i32; 64
     let ac = comp.ac_tbl + 4;
     let mut k = ss;
     let mut r: i32 = 0;
-    while k <= se {
+    while k <= se && k <= 63 {
         let z = DCT_ZIGZAG[k];
         let direction = if zz[z] < 0 { -1 } else { 1 };
         match st.successive_ac_state {
@@ -652,6 +652,10 @@ fn get_data(frame: &Frame, lines: &[Vec<Vec<u8>>], width: usize, height: usize) 
     data
 }
 
+fn at(data: &[u8], i: usize) -> Result<u8, String> {
+    data.get(i).copied().ok_or_else(|| "JPEG 截断".to_string())
+}
+
 fn read_u16(data: &[u8], off: usize) -> Result<u16, String> {
     if off + 1 >= data.len() {
         return Err("JPEG 截断".into());
@@ -708,6 +712,9 @@ pub fn decode(data: &[u8]) -> Result<Image, String> {
             0xFF00 => continue,
             0xFFFE | 0xFFE0..=0xFFEF => {
                 let len = read_u16(data, offset)? as usize;
+                if offset + len > data.len() {
+                    return Err("JPEG 段长度越界".into());
+                }
                 if marker == 0xFFEE && len >= 14 {
                     let p = offset + 2;
                     if data[p] == 0x41 && data[p + 1] == 0x64 && data[p + 2] == 0x6F && data[p + 3] == 0x62 && data[p + 4] == 0x65 && data[p + 5] == 0 {
@@ -720,17 +727,22 @@ pub fn decode(data: &[u8]) -> Result<Image, String> {
             0xFFDB => {
                 let len = read_u16(data, offset)? as usize;
                 let end = offset + len;
+                if end > data.len() || len < 2 {
+                    return Err("DQT 段长度越界".into());
+                }
                 let mut p = offset + 2;
                 while p < end {
-                    let spec = data[p];
+                    let spec = at(data, p)?;
                     p += 1;
                     let mut table = [0i32; 64];
                     if (spec >> 4) == 0 {
+                        if p + 64 > end { return Err("DQT 表截断".into()); }
                         for j in 0..64 {
-                            table[DCT_ZIGZAG[j]] = data[p] as i32;
+                            table[DCT_ZIGZAG[j]] = at(data, p)? as i32;
                             p += 1;
                         }
                     } else if (spec >> 4) == 1 {
+                        if p + 128 > end { return Err("DQT 表截断".into()); }
                         for j in 0..64 {
                             table[DCT_ZIGZAG[j]] = read_u16(data, p)? as i32;
                             p += 2;
@@ -738,12 +750,17 @@ pub fn decode(data: &[u8]) -> Result<Image, String> {
                     } else {
                         return Err("DQT: invalid table spec".into());
                     }
-                    quant[(spec & 15) as usize] = Some(table);
+                    let tid = (spec & 15) as usize;
+                    if tid > 3 {
+                        return Err(format!("DQT 表编号越界: {}", tid));
+                    }
+                    quant[tid] = Some(table);
                 }
                 offset = end;
             }
             0xFFC0 | 0xFFC1 | 0xFFC2 => {
-                let len = read_u16(data, offset)?;
+                let len = read_u16(data, offset)? as usize;
+                if offset + len > data.len() { return Err("SOF 段长度越界".into()); }
                 let mut p = offset + 2;
                 if p + 6 > data.len() {
                     return Err("JPEG 帧头截断".into());
@@ -789,26 +806,35 @@ pub fn decode(data: &[u8]) -> Result<Image, String> {
                 let len = read_u16(data, offset)? as usize;
                 let mut p = offset + 2;
                 let end = offset + len;
+                if end > data.len() || len < 2 {
+                    return Err("DHT 段长度越界".into());
+                }
                 while p < end {
-                    let spec = data[p];
+                    if p + 17 > end { return Err("DHT 表截断".into()); }
+                    let spec = at(data, p)?;
                     p += 1;
                     let mut lengths = [0u8; 16];
                     let mut sum = 0usize;
                     for j in 0..16 {
-                        lengths[j] = data[p];
+                        lengths[j] = at(data, p)?;
                         sum += data[p] as usize;
                         p += 1;
                     }
+                    if sum > 256 || p + sum > end { return Err("DHT 码表截断".into()); }
                     let mut values = vec![0u8; sum];
                     for j in 0..sum {
-                        values[j] = data[p];
+                        values[j] = at(data, p)?;
                         p += 1;
+                    }
+                    let tid = (spec & 15) as usize;
+                    if tid > 3 {
+                        return Err(format!("DHT 表编号越界: {}", tid));
                     }
                     let table = Huff::build(&lengths, &values);
                     if (spec >> 4) == 0 {
-                        dc_tables[(spec & 15) as usize] = table;
+                        dc_tables[tid] = table;
                     } else {
-                        ac_tables[(spec & 15) as usize] = table;
+                        ac_tables[tid] = table;
                     }
                 }
                 offset = end;
@@ -823,23 +849,37 @@ pub fn decode(data: &[u8]) -> Result<Image, String> {
             }
             0xFFDA => {
                 let len = read_u16(data, offset)? as usize;
+                let end = offset + len;
+                if end > data.len() || len < 2 {
+                    return Err("SOS 段长度越界".into());
+                }
                 let f = frame.as_mut().ok_or_else(|| "SOS 早于 SOF".to_string())?;
                 let mut p = offset + 2;
-                let selectors = data[p] as usize;
+                let selectors = at(data, p)? as usize;
                 p += 1;
+                if selectors > 4 || p + selectors * 2 + 3 > end {
+                    return Err("SOS 分量表截断".into());
+                }
                 let mut ids = Vec::with_capacity(selectors);
                 for _ in 0..selectors {
-                    let cid = data[p] as usize;
-                    let spec = data[p + 1];
+                    let cid = at(data, p)? as usize;
+                    let spec = at(data, p + 1)?;
                     p += 2;
                     let idx = f.components.iter().position(|c| c.id == cid).ok_or_else(|| format!("SOS 引用了不存在的分量 {}", cid))?;
-                    f.components[idx].dc_tbl = (spec >> 4) as usize;
-                    f.components[idx].ac_tbl = (spec & 15) as usize;
+                    let (dc, ac) = ((spec >> 4) as usize, (spec & 15) as usize);
+                    if dc > 3 || ac > 3 {
+                        return Err(format!("SOS 量化表编号越界: dc={} ac={}", dc, ac));
+                    }
+                    f.components[idx].dc_tbl = dc;
+                    f.components[idx].ac_tbl = ac;
                     ids.push(idx);
                 }
-                let ss = data[p] as usize;
-                let se = data[p + 1] as usize;
-                let approx = data[p + 2];
+                let ss = at(data, p)? as usize;
+                let se = at(data, p + 1)? as usize;
+                let approx = at(data, p + 2)?;
+                if se > 63 || ss > 63 || ss > se {
+                    return Err(format!("SOS 频谱范围非法: ss={} se={}", ss, se));
+                }
                 let successive_prev = approx >> 4;
                 let al = approx & 15;
                 let scan_start = p + 3;

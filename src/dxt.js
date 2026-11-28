@@ -14,6 +14,8 @@
  * 块布局（4x4 像素）：
  *   DXT1            8 字节：color0(565) color1(565) 4x4 个 2bit 索引
  *   DXT2/DXT3      16 字节：8 字节显式 alpha(4bit/像素) + 8 字节颜色块（4 色模式）
+ *                  注意：alpha 是标准 S3TC 排布——16 个 nibble 连续占满 8 字节，
+ *                  像素 (x,y) 取 nibble 4y+x（即字节 2y 与 2y+1），不是「每行 1 字节」。
  *   DXT4/DXT5      16 字节：2 字节端点 alpha0/alpha1 + 6 字节 3bit 索引 + 8 字节颜色块
  *
  * 颜色量化、alpha 插值都按 S3TC 规范逐字节对齐（和 GPU 解码结果一致），
@@ -80,6 +82,8 @@ function decode(buf, format, width, height) {
   // Rust 引擎是必需组件：能走就走，执行失败直接抛错（不再退回下面的 JS 实现）
   if (rusttex.enabled() && RUST_NAME[format]) {
     const fast = rusttex.dxtDecode(buf.subarray(0, need), RUST_NAME[format], width, height);
+    // 临时目录不可用时桥接层会返回 null，这里必须走显式错误，不能拿 null 当 Buffer
+    if (!fast) throw new Error('rust-tex dxt-decode 不可用（临时目录创建失败）');
     if (fast.length !== width * height * 4) throw new Error(`rust-tex dxt-decode 输出长度异常: ${fast.length}`);
     return fast;
   }
@@ -121,7 +125,9 @@ function decode(buf, format, width, height) {
 
           let alpha = c[3];
           if (hasAlpha4) {
-            alpha = ((alphaBits[y] >> (x * 4)) & 0x0f) * 17; // 4bit -> 8bit
+            // 标准 S3TC：16 个 4bit alpha 连续排布，像素 (x,y) 是第 4y+x 个 nibble
+            const n = 4 * y + x;
+            alpha = (((alphaBits[n >> 1] >> ((n & 1) * 4)) & 0x0f) * 17); // 4bit -> 8bit
           } else if (hasAlpha8) {
             alpha = alphaPalette(alpha8[0], alpha8[1])[alphaIndexAt(alpha8, 4 * y + x)];
           }
