@@ -3050,6 +3050,37 @@ test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜
   assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
 });
 
+test('tex-batch 并行与单线程产物一致', () => {
+  const rt = require('../src/rusttex');
+  if (!rt.available()) return;
+  const src = fs.readFileSync(path.join(__dirname, 'golden', 'format', 'tex-convert-dxt1-4x4', 'in.bin'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-batchpar-'));
+  const names = ['a.tex', 'b.tex', 'c.tex', 'd.tex', 'e.tex'];
+  const run = (outSub, threads) => {
+    fs.mkdirSync(path.join(dir, outSub), { recursive: true });
+    const jobs = names.map((n) => {
+      const inp = path.join(dir, 'in-' + n);
+      fs.writeFileSync(inp, src);
+      return { scale: 1, framesTail: false, inPath: inp, outPath: path.join(dir, outSub, n) };
+    });
+    return { jobs, res: rt.texConvertBatch(jobs, { threads }) };
+  };
+  try {
+    const one = run('one', 1);
+    const many = run('many', 3);
+    assert.ok(many.res.every((r) => r.ok), '并行批量应全部成功');
+    names.forEach((n, i) => {
+      assert.ok(one.res[i].ok && many.res[i].ok, `${n}: 结果应成功`);
+      const a = fs.readFileSync(path.join(dir, 'one', n));
+      const b = fs.readFileSync(path.join(dir, 'many', n));
+      assert.ok(a.equals(b), `${n}: 并行产物与单线程不一致`);
+    });
+    assert.deepStrictEqual(one.res.map((r) => r.width), many.res.map((r) => r.width), '返回顺序应与输入一致');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('目录批量转换（Rust 一个进程跑完整包）产物与 JS 实现一致', () => {
   const rt = require('../src/rusttex');
   const texlib = require('../src/tex');

@@ -1,0 +1,11 @@
+we-mpkg 3.0.0-beta.20
+
+纹理目录批量转换改为多线程并行：一个 rust-tex 进程按核数并发跑完整包。
+
+- `tex-batch --threads N`（默认取 available_parallelism，上限 16），线程池按 job 序号取任务；
+- 结果按输入顺序输出，失败只影响单条；产物逐字节与单线程一致；
+- 实测 40 张 512×512 多 mip DXT（2 核环境）：单线程 332ms → 双线程 197ms；
+- 新增回归测试「tex-batch 并行与单线程产物一致」，测试 151 通过；
+- jpeg-js 仍只在 devDependencies（上一版已完成运行时移除）。
+
+版本 3.0.0-beta.20 / versionCode 79，不发布 Release，APK 见 Actions artifact。

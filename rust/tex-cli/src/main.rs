@@ -231,10 +231,16 @@ fn main() {
         }
         "tex-batch" => {
             // job 文件是 NUL 分隔的四元组：scale \0 framesTail \0 输入 \0 输出 \0 ...
+            // 一个进程跑完整包：读 job → 多线程并行转换 → 按原顺序输出 JSON。
             let jobfile = args.get(2).unwrap_or_else(|| fail("缺少 job 文件", 2));
+            let threads = arg_value(&args, "--threads")
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|n| *n > 0)
+                .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
+                .min(16);
             let raw = fs::read(jobfile).unwrap_or_else(|e| fail(&format!("读 job 文件失败 {}: {}", jobfile, e), 2));
+            let mut jobs: Vec<(String, bool, String, String)> = Vec::new();
             let mut fields = raw.split(|b| *b == 0);
-            let mut stdout = std::io::stdout();
             loop {
                 let scale = match fields.next() {
                     Some(v) if !v.is_empty() => String::from_utf8_lossy(v).to_string(),
@@ -243,36 +249,57 @@ fn main() {
                 let frames = fields.next().map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
                 let input = fields.next().map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
                 let output = fields.next().map(|v| String::from_utf8_lossy(v).to_string()).unwrap_or_default();
-                let started = Instant::now();
-                let scale_v: f64 = scale.parse().unwrap_or(1.0);
-                let frames_tail = frames == "1";
-                let data = match fs::read(&input) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        let _ = writeln!(stdout, "{{\"ok\":false,\"error\":\"读文件失败: {}\"}}", json_escape(&e.to_string()));
-                        continue;
-                    }
-                };
-                match tex::convert(&data, &tex::ConvertOpts { scale: scale_v, frames_tail }) {
-                    Ok(res) => {
-                        if let Err(e) = fs::write(&output, &res.bytes) {
-                            let _ = writeln!(stdout, "{{\"ok\":false,\"error\":\"写文件失败: {}\"}}", json_escape(&e.to_string()));
-                            continue;
-                        }
-                        let _ = writeln!(
-                            stdout,
-                            "{{\"ok\":true,\"width\":{},\"height\":{},\"downsampled\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
-                            res.width, res.height,
-                            if res.downsampled { "true" } else { "false" },
-                            data.len(), res.bytes.len(), started.elapsed().as_micros()
-                        );
-                    }
-                    Err(e) => {
-                        let _ = writeln!(stdout, "{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e));
-                    }
-                }
-                let _ = stdout.flush();
+                jobs.push((scale, frames == "1", input, output));
             }
+
+            let n = jobs.len();
+            let lines: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(vec![String::new(); n]);
+            let counter = std::sync::atomic::AtomicUsize::new(0);
+            let counter_ref = &counter;
+            let lines_ref = &lines;
+            let jobs_ref = &jobs;
+            std::thread::scope(|scope| {
+                for _ in 0..threads.min(n.max(1)) {
+                    scope.spawn(move || {
+                        loop {
+                            let i = counter_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            if i >= n { break; }
+                            let (scale, frames_tail, input, output) = &jobs_ref[i];
+                            let started = Instant::now();
+                            let scale_v: f64 = scale.parse().unwrap_or(1.0);
+                            let data = match fs::read(input) {
+                                Ok(d) => d,
+                                Err(e) => {
+                                    lines_ref.lock().unwrap()[i] = format!("{{\"ok\":false,\"error\":\"读文件失败: {}\"}}", json_escape(&e.to_string()));
+                                    continue;
+                                }
+                            };
+                            match tex::convert(&data, &tex::ConvertOpts { scale: scale_v, frames_tail: *frames_tail }) {
+                                Ok(res) => {
+                                    if let Err(e) = fs::write(output, &res.bytes) {
+                                        lines_ref.lock().unwrap()[i] = format!("{{\"ok\":false,\"error\":\"写文件失败: {}\"}}", json_escape(&e.to_string()));
+                                        continue;
+                                    }
+                                    lines_ref.lock().unwrap()[i] = format!(
+                                        "{{\"ok\":true,\"width\":{},\"height\":{},\"downsampled\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                                        res.width, res.height,
+                                        if res.downsampled { "true" } else { "false" },
+                                        data.len(), res.bytes.len(), started.elapsed().as_micros()
+                                    );
+                                }
+                                Err(e) => {
+                                    lines_ref.lock().unwrap()[i] = format!("{{\"ok\":false,\"error\":\"{}\"}}", json_escape(&e));
+                                }
+                            }
+                        }
+                    });
+                }
+            });
+            let mut stdout = std::io::stdout();
+            for line in lines.into_inner().unwrap() {
+                let _ = writeln!(stdout, "{}", if line.is_empty() { "{\"ok\":false,\"error\":\"未处理\"}" } else { &line });
+            }
+            let _ = stdout.flush();
         }
         "tex-convert" => {
             let input = args.get(2).unwrap_or_else(|| fail("缺少输入文件", 2));

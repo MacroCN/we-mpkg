@@ -370,7 +370,7 @@ function texConvert(buf, scale, framesTail) {
  * 一个进程跑完整个包，省掉每张图一次 exec 的固定成本。
  * 返回与 jobs 等长的数组，每项 {ok, width, height, downsampled, error}。
  */
-function texConvertBatch(jobs) {
+function texConvertBatch(jobs, opts = {}) {
   const bin = requireEngine();
   if (!jobs || !jobs.length) return [];
   const jobFile = scratch('tex-batch.job');
@@ -384,7 +384,9 @@ function texConvertBatch(jobs) {
   }
   fs.writeFileSync(jobFile, Buffer.concat(chunks));
   try {
-    const r = require('child_process').spawnSync(bin, ['tex-batch', jobFile], {
+    const argv = ['tex-batch', jobFile];
+    if (opts.threads) argv.push('--threads', String(opts.threads));
+    const r = require('child_process').spawnSync(bin, argv, {
       encoding: 'utf8',
       timeout: 600000,
       maxBuffer: 16 << 20,
