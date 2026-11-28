@@ -2768,7 +2768,7 @@ test('src / tools / public 下的 JS 不能带 UTF-8 BOM（只有 .ps1 需要 BO
 
 test('cachegc 的临时目录保留份数容得下 3 并发', () => {
   const cachegc = require('../src/cachegc');
-  // 下载中心并发 3，每条任务各留一个 pkg-<ts>/webrender 目录；保留份数必须 ≥ 4，
+  // 下载中心并发 3，每条任务各留一个 pkg-<ts> 临时目录；保留份数必须 ≥ 4，
   // 否则第 4 条任务刚建目录就可能被当成残骸回收，出现「边跑边删」。
   assert.ok(cachegc.DEFAULT.tempKeepNewest >= 4, `tempKeepNewest=${cachegc.DEFAULT.tempKeepNewest}，至少要 4`);
 });
@@ -2931,16 +2931,13 @@ test('首启引导：向导 + 主界面提示条（权限/输出目录/登录/�
 
 test('ffmpeg 候选：只用新版，旧版 lite 彻底移除', () => {
   const video = require('../src/video');
-  const webrender = require('../src/webrender');
   const list = video.ffmpegCandidates().filter(Boolean);
-  const wList = (webrender.FFMPEG_CANDIDATES || []).filter(Boolean);
-  for (const p of list.concat(wList)) {
+  for (const p of list) {
     assert.ok(!String(p).includes('ffmpeg-lite'), '2018 的 ffmpeg-lite 不能再出现在候选里');
     assert.ok(!String(p).includes('npm-ff'), 'npm-ff（4.1.0 tarball）不应再被引用');
   }
   // 新版路径仍在列表里（.cache/toolchain/ffmpeg），保证「装了就能用」
   assert.ok(list.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
-  assert.ok(wList.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
 });
 
 test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级', () => {
@@ -2955,8 +2952,6 @@ test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级'
   // 打包流程里的警告必须带上安装指引，而不是只说「没找到」
   const vsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'video.js'), 'utf8');
   assert.ok(vsrc.includes('missingHelpShort()'), '打包警告要给安装指引');
-  const wsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'webrender.js'), 'utf8');
-  assert.ok(wsrc.includes('missingHelp()'), '编码 mp4 失败要给完整步骤');
   // CI 仍不能回到 lite 目录
   const ci = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
   assert.ok(!/path: \.cache\/toolchain\/ffmpeg-lite/.test(ci), 'CI 缓存目录要改成新版路径');
@@ -3007,10 +3002,6 @@ test('首次登录后页面要自己刷新：不掐轮询、重取配置、重�
 test('脚本里不留开发机绝对路径：node / 工具链 / 调试脚本都自动探测', () => {
   const root = path.join(__dirname, '..');
   const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
-  // 调试脚本：相对 __dirname
-  const tw = read(path.join('tools', 'test-webrender.js'));
-  assert.ok(tw.includes('__dirname'), 'test-webrender.js 要用相对路径');
-  assert.ok(!/D:[\/]SteamCMD/.test(tw), 'test-webrender.js 不能写死开发机路径');
   // 安卓打包脚本：工具链 / node 都有明确来源与报错
   const apk = read(path.join('android', 'build-apk.ps1'));
   assert.ok(!/\$Toolchain\s*=\s*'[A-Za-z]:/.test(apk), 'build-apk.ps1 的 Toolchain 不能再默认绝对路径');

@@ -2,7 +2,7 @@
 /**
  * .cache / logs 的体积治理。
  *
- * - `pkg-*` / `webrender` 是打包 / 渲染的临时目录，进程被强杀时来不及删，会一直堆着；
+ * - `pkg-*` 是打包的临时目录，进程被强杀时来不及删，会一直堆着；
  *   按天数 + 条数双重回收，最近 30 分钟动过的算「正在用」不碰。
  * - `item-<id>` 是着色器 blob 缓存，复用价值高，单独用更宽的天数（30 天 / 留 20 份）。
  * - `pack-plan/<id>` 是续转工作目录（断点，可能上 GB）。策略偏保守：
@@ -20,9 +20,9 @@ const DAY = 24 * 3600 * 1000;
 
 const DEFAULT = {
   // 临时目录（打包 / 渲染中间产物）
-  tempPrefixes: ['pkg-', 'pack-', 'webrender'],
+  tempPrefixes: ['pkg-', 'pack-'],
   tempMaxAgeMs: 3 * DAY,
-  // 下载中心最多同时跑 3 条，每条都可能留下 pkg-<ts>/webrender 临时目录；
+  // 下载中心最多同时跑 3 条，每条都可能留下 pkg-<ts> 临时目录；
   // 再加一条刚建的，保留 4 份才不会被 3 并发的边角情况误删。
   tempKeepNewest: 4,
   tempActiveMs: 30 * 60 * 1000,

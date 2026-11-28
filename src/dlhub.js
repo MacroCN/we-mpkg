@@ -3,7 +3,6 @@
  * 下载中心（独立进程）
  *
  * 为什么单独一个进程：网页一关、主界面一退，下载/打包不能跟着断。
- *   - 桌面端：由主服务按需 spawn 一个 detached 子进程，拥有自己的 HTTP 端口与页面；
  *   - 安卓端（nodejs-mobile 不能多进程）：同一个模块在主进程内起服务，
  *     页面关掉不影响任务，只有 App 被系统杀掉才会中断。
  *
@@ -13,7 +12,6 @@ const fs = require('fs');
 const path = require('path');
 const http = require('http');
 const { URL } = require('url');
-const { spawn } = require('child_process');
 
 const configMod = require('./config');
 const { config, ensureDirs } = configMod;
@@ -877,13 +875,13 @@ function hubJson(port, method, pathname, body, timeoutMs = 30000) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * 确保 hub 在跑：桌面端 spawn 独立进程，安卓端在主进程内起服务。
- * 并发首请求必须共享同一次拉起流程，否则会同时 spawn 两个进程抢同一端口。
+ * 确保 hub 在跑：安卓端必须进程内起服务（手机上不能多进程）。
+ * 并发首请求共享同一次拉起流程，避免重复建服务抢端口。
  * @returns {Promise<{port:number,url:string,embedded:boolean}>}
  */
 let hubEnsure = null;
 
-async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () => {} } = {}) {
+async function ensureHub({ port = DEFAULT_PORT, logger = () => {} } = {}) {
   const p = portOf(port);
   const key = String(p);
   if (hubEnsure && hubEnsure.key === key) return hubEnsure.promise;
@@ -891,28 +889,10 @@ async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () =>
   const alive = await pingHub(p);
   if (alive) return { port: p, url: hubUrl(p), embedded: !!alive.embedded };
 
-  if (embedded || process.platform === 'android') {
-    const hub = createHub({ logger });
-    createServer({ hub, port: p, onShutdown: () => process.exit(0) });
-    logger(`下载中心已在应用进程内启动: ${hubUrl(p)}`);
-    return { port: p, url: hubUrl(p), embedded: true };
-  }
-
-  const entry = path.join(__dirname, '..', 'bin', 'dlhub.js');
-  const child = spawn(process.execPath, [entry, '--port', String(p)], {
-    detached: true,
-    stdio: 'ignore',
-    env: Object.assign({}, process.env, { WE_MPKG_DLHUB_EMBEDDED: '0' }),
-  });
-  child.unref();
-  logger(`已拉起下载中心进程 pid=${child.pid}，端口 ${p}`);
-
-  for (let i = 0; i < 40; i++) {
-    await sleep(250);
-    const info = await pingHub(p, 1000);
-    if (info) return { port: p, url: hubUrl(p), embedded: !!info.embedded };
-  }
-  throw new Error('下载中心启动超时（可查看 .cache/dlhub.log，或用 node bin/wempkg.js dlhub 手动启动）');
+  const hub = createHub({ logger });
+  createServer({ hub, port: p, onShutdown: () => process.exit(0) });
+  logger(`下载中心已在应用进程内启动: ${hubUrl(p)}`);
+  return { port: p, url: hubUrl(p), embedded: true };
   })();
   hubEnsure = { key, promise };
   try {

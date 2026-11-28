@@ -110,21 +110,14 @@ function inspect(projectDir, opts = {}) {
 
   if (brokenTex) warnings.push(`${brokenTex} 个 .tex 解析失败，可能已经损坏或是特殊格式`);
 
-  const webrender = require('./webrender');
   const videoUtil = require('./video');
   const hasFfmpeg = !!videoUtil.findFfmpeg();
-  const hasBrowser = !!webrender.findBrowser();
 
   if (type === 'application') {
     warnings.push('application 类型依赖桌面端运行时，手机版 Wallpaper Engine 打不开');
   }
   if (type === 'web') {
-    if (hasBrowser && hasFfmpeg) {
-      notes.push('网页类会在打包时用本机浏览器渲染成视频（交互会丢，只保留画面）');
-    } else {
-      const miss = [!hasBrowser && '浏览器', !hasFfmpeg && 'ffmpeg'].filter(Boolean).join('、');
-      warnings.push(`网页类需要 ${miss} 才能转成视频；本机缺这些，直接打包手机端会黑屏`);
-    }
+    notes.push('网页类会补成离线网页包（PWA），由 App 内置 WebView 打开');
   }
   if (type === 'preset') notes.push('预设类没有实际内容，打包后通常不能单独使用');
 
@@ -157,7 +150,7 @@ function inspect(projectDir, opts = {}) {
     notes.push(`含 ${videoFiles.length} 个视频文件，按视频播放处理`);
   }
 
-  const level = (type === 'application' || (type === 'web' && !(hasBrowser && hasFfmpeg))) ? 'bad'
+  const level = (type === 'application' || (type === 'web' && warnings.length)) ? 'bad'
     : (warnings.length ? 'warn' : 'ok');
 
   const summary = level === 'bad'
@@ -181,7 +174,7 @@ function inspect(projectDir, opts = {}) {
     html: { files: htmlFiles.length },
     totalBytes,
     totalText: fmtMB(totalBytes),
-    tools: { ffmpeg: hasFfmpeg, browser: hasBrowser },
+    tools: { ffmpeg: hasFfmpeg },
   };
 }
 

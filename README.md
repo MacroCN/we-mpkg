@@ -15,7 +15,7 @@
 |---|---|
 | 创意工坊检索 | 浏览 / 搜索 / 标签筛选（Type、Age Rating、Genre、Resolution、Category、Asset Type…），筛选语义与官方客户端一致：**同一组内多选为「或」，不同组之间为「与」，某组不选即该组不过滤**；一次连续取 1/3/5 页，热门支持 7/30/90/365 天时间窗 |
 | 内容范围 | 有 Steam 登录凭据时自动带上账号登录态，抓到的条目范围与桌面客户端一致（含成人分级内容）；未登录则退回匿名范围，界面会标注 |
-| 下载 | 纯 JS 引擎 `steamjs`：内置 Steam 登录 / manifest / depot 密钥 / CDN 分块下载，全平台（Windows / Linux / 安卓）；支持分块级断点续传、暂停继续、坏 CDN 节点自动剔除 |
+| 下载 | 纯 JS 引擎 `steamjs`：内置 Steam 登录 / manifest / depot 密钥 / CDN 分块下载；支持分块级断点续传、暂停继续、坏 CDN 节点自动剔除 |
 | 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理按 DXT1/3/5/R8/RG88/直通图解码为 RGBA8 并 LZ4 压缩、着色器 GLSL ES 兼容改写（含结构性补丁）、`project.json`/`preview.gif` 补齐；支持画质档位、断点续转、默认剥离音频（检测到音频交互/频谱时自动保留，`--keep-audio` 强制保留、`--drop-audio` 强制剥离） |
 | 网页类壁纸 | 安卓客户端没有 Web 引擎，本工具把网页渲染成视频并按 `video` 类型封装；同时注入音频响应 API，音频可视化壁纸的频谱不再为 0 |
 | 下载中心 | 下载/打包在独立进程里跑，网页关掉也不中断；最多 3 条同时下载，带字节级进度条、速度与 ETA；队列落盘，重启后自动续跑 |
@@ -82,7 +82,7 @@ node bin\wempkg.js serve --port 3090
 - `scene`：先解包 `scene.pkg`，再把解包出来的原始文件打包（不做 RGBA8 转换，着色器保持原样）
 - `web`：走离线网页包——注入 `viewport`、`we-touch.js`（触摸→鼠标事件、禁滚动/缩放/长按菜单）、
   `manifest.webmanifest` 与 `sw.js`（离线缓存，可「添加到桌面」），解压后用 Kiwi / Firefox 打开 `index.html`
-- 手机端完成按钮是「打开文件」（交给系统处理 zip），桌面端是保存 zip
+- 完成按钮是「打开文件」（交给系统处理 zip）
 - 音频策略：勾选后原始音频原样保留；不勾选（打包 mpkg）默认剥离音频，只有场景里检测到音频交互（频谱 / 音频响应）时才自动保留
 - Web 条目的「下载并打包 MPKG」按钮会置灰，只能勾选原始资源导出
 
@@ -94,7 +94,7 @@ node bin\wempkg.js serve --port 3090
 - 详情抽屉的画质默认落在设备推荐档，并在选项上标「推荐」
 - 设置弹窗拆成 账号 / 网络 / 输出 / 关于 四个 tab
 - 失败任务直接给「重试」；网络类失败多给「换节点重试」（先重测节点再排队），掉登录给「重新登录」
-- 桌面端成品可「打开所在文件夹」（`POST /api/reveal`，只允许输出/下载目录内的文件）
+- 成品可「打开所在文件夹」（`POST /api/reveal`，只允许输出/下载目录内的文件）
 
 ---
 
@@ -130,7 +130,7 @@ node bin/wempkg.js steamjs login|status|logout|token|webcookie
 
 | 变量 | 作用 | 默认 |
 |---|---|---|
-| `WE_MPKG_PROXY` / `HTTPS_PROXY` | HTTP 代理；也可在网页「设置 → 代理」里填并点「测试连通性」，保存后立即生效 | 自动读 Windows 系统代理 |
+| `WE_MPKG_PROXY` / `HTTPS_PROXY` | HTTP 代理；也可在网页「设置 → 代理」里填并点「测试连通性」，保存后立即生效 | 跟随安卓系统代理 / VPN |
 | `WE_MPKG_OUTPUT_DIR` | 成品输出目录（也可在网页里改） | 程序目录 `output/` |
 | `WE_MPKG_DLHUB_PORT` | 下载中心端口 | `3091` |
 | `WE_MPKG_DOWNLOAD_DIR` | 下载缓存目录 | 程序目录 `downloads/` |
@@ -155,7 +155,7 @@ node bin/wempkg.js steamjs login|status|logout|token|webcookie
 6. **筛选是「组内或」的多次请求合并**：Steam 的 `requiredtags[]` 只支持「与」，所以同组多选会拆成多个组合分别请求再取并集——组合超过 8 个时退化为每组只取第一个标签，结果会是交集；这种模式下每次只取 1 页。
 7. **超预算纹理不转换**：单张纹理解码超过 96MB 内存（默认）就原样保留、只告警；要放宽用 `--max-texture-mb`。
 8. **视频容器魔数默认 `PKGM0020`**：这是我们真机验证过的组合；`PKGM0014` 是可选 A/B，未做逐机型验证。
-9. **安卓端下载中心是进程内模式**：手机上不能多进程，App 在后台被杀掉时下载仍会中断；桌面端是真正的独立进程。
+9. **下载中心是进程内模式**：手机上不能多进程，App 在后台被杀掉时下载仍会中断。
 
 ---
 
@@ -189,7 +189,7 @@ Copyright (c) 2026 MacroCN
 | [jiangdengke/repkg-gui-wallpaper-extractor](https://github.com/jiangdengke/repkg-gui-wallpaper-extractor) | RePKG 的解包/纹理转换思路与其目录约定 |
 | [DoctorMcKay/node-steam-user](https://github.com/DoctorMcKay/node-steam-user) · [node-steam-session](https://github.com/DoctorMcKay/node-steam-session) | 纯 JS 登录、CM 连接与 web 会话 cookie 换取 |
 | [nodejs-mobile](https://github.com/nodejs-mobile/nodejs-mobile) | 安卓端内嵌 Node 运行时 |
-| Chromium（Edge headless）· FFmpeg | 网页类壁纸渲染与视频/音频封装 |
+| FFmpeg（`libffmpeg.so`） | 视频纹理降分辨率与音频封装 |
 
 
 

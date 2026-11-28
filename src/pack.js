@@ -194,7 +194,7 @@ function validateProject(projectDir, project, type) {
     const vids = listFiles(projectDir).filter((f) => VIDEO_EXT.has(path.extname(f).toLowerCase()));
     if (!vids.length) warnings.push('声明为 video 类型，但目录里没有找到视频文件');
   }
-  if (type === 'web') return warnings; // web 类由 adaptWebToVideo 处理，不再给"可能无法加载"的含糊警告
+  if (type === 'web') return warnings; // web 类走离线网页包，不再给"可能无法加载"的含糊警告
   if (type === 'application') warnings.push('application 类型壁纸依赖桌面端运行时，手机端基本不可用');
   return warnings;
 }
@@ -775,35 +775,6 @@ function writeMpkg(projectDir, outFile, opts = {}) {
  * 网页类导入后必然黑屏。这里用桌面浏览器无头渲染成 mp4，再按 video 类型重新打包。
  * @returns {Promise<{projectDir:string, info:object|null, warnings:string[]}>}
  */
-async function adaptWebToVideo(projectDir, opts = {}, onLog = () => {}) {
-  const warnings = [];
-  try {
-    const webrender = require('./webrender');
-    const hasBrowser = !!webrender.findBrowser();
-    const hasFfmpeg = !!webrender.findFfmpeg();
-    if (!hasBrowser || !hasFfmpeg) {
-      const miss = [!hasBrowser && 'Edge/Chrome', !hasFfmpeg && 'ffmpeg'].filter(Boolean).join('、');
-      warnings.push(`web 类壁纸需要把这网页渲染成视频才能在手机上看，但本机缺少 ${miss}，只能按原样打包（手机端会黑屏）`);
-      onLog(`  ⚠ 缺少 ${miss}，web 类未转换`);
-      return { projectDir, info: null, warnings };
-    }
-    onLog('web 类壁纸在手机端无法渲染，正在转成视频（保留动画，丢失交互/音频反应）...');
-    const dst = path.join(path.dirname(projectDir), 'webvideo');
-    const info = await webrender.convertWebProject(projectDir, dst, {
-      seconds: opts.seconds,
-      fps: opts.fps,
-      width: opts.width,
-      height: opts.height,
-      onLog,
-    });
-    warnings.push(`web 类壁纸已转成视频（${((info.size || 0) / 1024 / 1024).toFixed(2)} MB，${info.frames} 帧）：手机端不支持网页渲染，视频是唯一能正常显示的形式`);
-    return { projectDir: dst, info, warnings };
-  } catch (e) {
-    warnings.push(`web 类转视频失败（${e.message}），按原样打包，手机端会黑屏`);
-    onLog(`  ⚠ web 转视频失败: ${e.message}`);
-    return { projectDir, info: null, warnings };
-  }
-}
 
 /**
  * 完整流程：创意工坊条目目录 -> mpkg
@@ -1092,7 +1063,7 @@ function analyze(inputPath) {
 
 module.exports = {
   packFromItemDir, packFromPath, analyze, prepareProjectDir, applyReference, writeMpkg,
-  detectType, validateProject, safeFileName, listFiles, adaptForMobile, adaptWebToVideo, flattenSceneVisibility,
+  detectType, validateProject, safeFileName, listFiles, adaptForMobile, flattenSceneVisibility,
   stripAudio, pickMagic, stableWorkDir, repairSceneCompat, sceneUsesAudioSpectrum, sceneHasAudioReactive,
 };
 

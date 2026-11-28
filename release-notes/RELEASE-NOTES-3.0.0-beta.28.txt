@@ -1,0 +1,14 @@
+we-mpkg 3.0.0-beta.28（versionCode 87）
+继续清理桌面残留：删掉整条「桌面浏览器渲染网页壁纸」链路。
+
+一、删除 webrender
+- 删 src/webrender.js（Edge/Chrome 无头 + ffmpeg 逐帧抓图转 mp4）与 pack.js 里的 adaptWebToVideo（早已无人调用）。
+- compat 报告不再探测浏览器：网页类统一走离线网页包（PWA + 内置 WebView 打开），不再给「缺浏览器会黑屏」的伪警告。
+- cachegc 去掉 webrender 临时目录前缀；删除桌面调试脚本 tools/test-webrender.js、test-web-audio.js、debug-audio-shim.js。
+
+二、下载中心只保留进程内模式
+- ensureHub 删掉 detached 子进程分支与启动超时轮询，直接在应用进程内起服务。
+- README 同步：代理跟随安卓系统/VPN、去掉桌面保存 zip 与 Chromium 依赖描述。
+
+三、测试
+- 相关断言改为只校验 video 的 ffmpeg 候选；全量 153 通过 / 0 失败 / 1 跳过。
