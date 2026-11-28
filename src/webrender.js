@@ -547,8 +547,8 @@ function encodeMp4(frameDir, outMp4, opts = {}) {
  * @returns {number} 0~1
  */
 function contentRatio(frameDir, count = 4) {
-  let jpeg;
-  try { jpeg = require('jpeg-js'); } catch { return 1; } // 没有解码器就假定自适应
+  let jpegDecode;
+  try { jpegDecode = require('./rusttex').jpegDecode; } catch { return 1; } // 没有解码器就假定自适应
   let files;
   try {
     files = fs.readdirSync(frameDir).filter((f) => /^f\d+\.jpg$/.test(f)).sort();
@@ -558,7 +558,7 @@ function contentRatio(frameDir, count = 4) {
   let best = 0;
   for (let i = 0; i < files.length; i += stepFile) {
     let img;
-    try { img = jpeg.decode(fs.readFileSync(path.join(frameDir, files[i])), { useTArray: true }); } catch { continue; }
+    try { img = jpegDecode(fs.readFileSync(path.join(frameDir, files[i]))); } catch { continue; }
     const { width: w, height: h, data } = img;
     const px = (x, y) => { const o = (y * w + x) * 4; return [data[o], data[o + 1], data[o + 2]]; };
     const bg = px(2, 2);

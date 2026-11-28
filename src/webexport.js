@@ -142,7 +142,7 @@ const README_TEXT = (title, id) => `【离线网页包】${title}（${id}）
 - we-touch.js  触屏适配：把触摸翻译成鼠标事件，并禁止页面滚动/缩放/长按菜单
 - we-pwa.js    PWA 注册（file:// 下自动跳过）
 - manifest.webmanifest / sw.js  添加到桌面与离线缓存
-- icon-192.jpg / icon-512.jpg   桌面图标（取自条目预览图）
+- icon-192.png / icon-512.png   桌面图标（取自条目预览图，PNG 无损）
 
 注意
 - 音频可能需要点一下屏幕才会响（浏览器自动播放限制）。
@@ -176,16 +176,64 @@ function copyTree(src, dst, onLog) {
   return skipped;
 }
 
-/** 生成桌面图标（只用现成依赖 jpeg-js，避免再引 png 编码库） */
+
+const CRC_TABLE = (() => {
+  const table = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c;
+  }
+  return table;
+})();
+
+function pngCrc(buf) {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+
+function pngChunk(type, payload) {
+  const head = Buffer.alloc(8);
+  head.writeUInt32BE(payload.length, 0);
+  head.write(type, 4, 'ascii');
+  const crcBuf = Buffer.alloc(4);
+  crcBuf.writeUInt32BE(pngCrc(Buffer.concat([head.subarray(4), payload])), 0);
+  return Buffer.concat([head, payload, crcBuf]);
+}
+
+/** 极简 PNG 编码（RGBA8、filter 0）：只为应用图标，避免为编码再引一个依赖 */
+function encodePngRgba(data, width, height) {
+  const zlib = require('zlib');
+  const stride = width * 4;
+  const raw = Buffer.alloc((stride + 1) * height);
+  for (let y = 0; y < height; y++) {
+    raw[y * (stride + 1)] = 0;
+    Buffer.from(data.buffer, data.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8;   // bit depth
+  ihdr[9] = 6;   // RGBA
+  ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', zlib.deflateSync(raw, { level: 9 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/** 生成桌面图标：预览图解码走 rust-tex，写出 PNG（无损，不依赖 jpeg-js 编码） */
 function makeIcon(previewPath, size, outPath) {
-  const jpeg = require('jpeg-js');
   let pixels;
   let w;
   let h;
   if (previewPath && fs.existsSync(previewPath)) {
-    const raw = jpeg.decode(fs.readFileSync(previewPath), { useTArray: true });
+    const raw = require('./rusttex').jpegDecode(fs.readFileSync(previewPath));
     w = raw.width; h = raw.height;
-    pixels = raw.data;
+    pixels = Buffer.from(raw.data);
   } else {
     // 没有预览图就画一张深色纯色图，保证 manifest 里的图标不是 404
     w = 64; h = 64;
@@ -221,8 +269,7 @@ function makeIcon(previewPath, size, outPath) {
       }
     }
   }
-  const enc = jpeg.encode({ data: out, width: size, height: size }, 86);
-  fs.writeFileSync(outPath, enc.data);
+  fs.writeFileSync(outPath, encodePngRgba(out, size, size));
 }
 
 function stripBom(s) {
@@ -239,7 +286,7 @@ function patchHtml(html, depth) {
     '<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">',
     '<meta name="theme-color" content="#101418">',
     `<link rel="manifest" href="${prefix}${MANIFEST_FILE}">`,
-    `<link rel="apple-touch-icon" href="${prefix}icon-192.jpg">`,
+    `<link rel="apple-touch-icon" href="${prefix}icon-192.png">`,
     `<script src="${prefix}${TOUCH_SCRIPT}" defer></script>`,
     `<script src="${prefix}${PWA_SCRIPT}" defer></script>`,
   ].join('\n');
@@ -275,8 +322,8 @@ function buildManifest(title) {
     background_color: '#000000',
     theme_color: '#101418',
     icons: [
-      { src: 'icon-192.jpg', sizes: '192x192', type: 'image/jpeg', purpose: 'any' },
-      { src: 'icon-512.jpg', sizes: '512x512', type: 'image/jpeg', purpose: 'any' },
+      { src: 'icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
     ],
   }, null, 2);
 }
@@ -361,8 +408,8 @@ function exportWebProject(srcDir, opts = {}) {
   // 图标：manifest 里要 192/512，否则 Chrome 不给「安装」入口
   try {
     fs.mkdirSync(pkgDir, { recursive: true });
-    makeIcon(preview, 192, path.join(pkgDir, 'icon-192.jpg'));
-    makeIcon(preview, 512, path.join(pkgDir, 'icon-512.jpg'));
+    makeIcon(preview, 192, path.join(pkgDir, 'icon-192.png'));
+    makeIcon(preview, 512, path.join(pkgDir, 'icon-512.png'));
   } catch (e) {
     onLog(`  ⚠ 图标生成失败（不影响预览）: ${e.message}`);
   }

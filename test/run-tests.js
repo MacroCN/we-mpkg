@@ -1932,7 +1932,7 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     const manifest = JSON.parse(fs.readFileSync(path.join(out.dir, 'manifest.webmanifest'), 'utf8'));
     assert.strictEqual(manifest.display, 'fullscreen');
     assert.strictEqual(manifest.icons.length, 2, '应有 192/512 两个图标');
-    assert.ok(fs.existsSync(path.join(out.dir, 'icon-192.jpg')));
+    assert.ok(fs.existsSync(path.join(out.dir, 'icon-192.png')));
     const sw = fs.readFileSync(path.join(out.dir, 'sw.js'), 'utf8');
     assert.ok(sw.includes("'./index.html'") && sw.includes("'./assets/main.js'"), 'sw 预缓存列表不完整');
     assert.ok(fs.readFileSync(path.join(out.dir, 'we-touch.js'), 'utf8').includes("'touchstart'"), '触屏脚本应监听 touchstart');

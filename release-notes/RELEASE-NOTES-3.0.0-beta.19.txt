@@ -1,0 +1,10 @@
+we-mpkg 3.0.0-beta.19
+
+依赖清点：Rust 纹理引擎已覆盖 JPEG 解码，运行时不再需要 jpeg-js 的解码能力。
+
+- 离线网页包的应用图标改为 PNG（自带极简 PNG 编码器，zlib 直出），不再调用 jpeg-js 编码；
+- 网页渲染取帧比例（contentRatio）改用 rusttex.jpegDecode 解码帧图；
+- jpeg-js 降级为 devDependencies，仅测试/黄金样本生成使用，安装体积与供应链面收窄；
+- 其余运行时依赖（qrcode / qrcode-terminal / steam-session / steam-user）均为现行必需，无可清理项。
+
+版本 3.0.0-beta.19 / versionCode 78，不发布 Release，APK 见 Actions artifact。
