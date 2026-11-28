@@ -1,0 +1,10 @@
+we-mpkg 3.0.0-beta.23
+
+清掉生产路径里已死的 JS 图片解码实现。
+
+- src/tex.js 删除纯 JS PNG 解码器（约 140 行）与 jpeg-js 回退分支：PNG/JPEG 解码只保留 rust-tex 一条路，失败返回 null 由调用方保留原文件；
+- 顺带去掉 src/tex.js 对 zlib 与 jpeg-js 的引用，运行时不再引用 jpeg-js（它只留在 devDependencies，供黄金样本与测试造图）；
+- 黄金样本第二遍改为「JS 参照实现」范围：DXT 解码 / LZ4 编解码 / DXT 整包转换（8+ 例）继续逐字节对照，PNG/JPEG 由冻结的黄金输出校验 Rust 实现；
+- tex.js 1236 行 → 1088 行，assets 包体同步变小。
+
+版本 3.0.0-beta.23 / versionCode 82，不发布 Release，APK 见 Actions artifact。

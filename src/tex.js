@@ -36,7 +36,6 @@
  */
 const fs = require('fs');
 const path = require('path');
-const zlib = require('zlib');
 const lz4 = require('./lz4');
 const videoUtil = require('./video');
 
@@ -307,190 +306,43 @@ function buildVideoTex({ format, flags, unk, width, height, mp4 }) {
   return Buffer.concat(parts);
 }
 
-// ---- 图片解码（直通载荷） ----
-let jpegDecoder = null;
-function getJpeg() {
-  if (jpegDecoder === null) {
-    try { jpegDecoder = require('jpeg-js'); } catch { jpegDecoder = false; }
-  }
-  return jpegDecoder || null;
-}
-
-/**
- * 解码 PNG 到直色 RGBA8（不做预乘）。只处理非隔行图；隔行图返回 null，由调用方保留原文件。
- * @returns {{width:number,height:number,data:Buffer}|null}
- */
-function decodePng(buf) {
-  if (buf.length < 8 || buf.readUInt32BE(0) !== 0x89504e47) return null;
-  // PNG 解码交给 Rust（自带 inflate）。尺寸从 IHDR 直接读（PNG 规定 IHDR 是第一个 chunk）。
-  // 下面的 JS 实现只作为黄金样本的对照实现保留，生产路径不再使用。
-  if (buf.length >= 24 && buf.readUInt32BE(12) === 0x49484452 && rusttex.enabled()) {
-    const w = buf.readUInt32BE(16);
-    const h = buf.readUInt32BE(20);
-    if (w > 0 && h > 0) {
-      return { width: w, height: h, data: rusttex.pngDecode(buf, w, h) };
-    }
-  }
-  let off = 8;
-  let ihdr = null;
-  let plte = null;
-  let trns = null;
-  const idat = [];
-  while (off + 8 <= buf.length) {
-    const len = buf.readUInt32BE(off);
-    const type = buf.toString('ascii', off + 4, off + 8);
-    const dataStart = off + 8;
-    if (dataStart + len > buf.length) break;
-    const data = buf.subarray(dataStart, dataStart + len);
-    if (type === 'IHDR') {
-      ihdr = {
-        width: data.readUInt32BE(0), height: data.readUInt32BE(4),
-        bitDepth: data[8], colorType: data[9], compression: data[10], filter: data[11], interlace: data[12],
-      };
-    } else if (type === 'PLTE') plte = data;
-    else if (type === 'tRNS') trns = data;
-    else if (type === 'IDAT') idat.push(data);
-    else if (type === 'IEND') break;
-    off = dataStart + len + 4; // 跳过 4 字节 CRC
-  }
-  if (!ihdr || !idat.length) return null;
-  if (ihdr.interlace !== 0) return null;
-  if (ihdr.compression !== 0 || ihdr.filter !== 0) return null;
-
-  const { width, height, bitDepth, colorType } = ihdr;
-  const channels = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 }[colorType];
-  if (!channels) return null;
-  const bpp = Math.max(1, Math.ceil(channels * bitDepth / 8));
-  const rowBytes = Math.ceil(width * channels * bitDepth / 8);
-
-  let raw;
-  try {
-    raw = zlib.inflateSync(Buffer.concat(idat));
-  } catch {
-    return null;
-  }
-  if (raw.length < height * (rowBytes + 1)) return null;
-
-  // 反滤波
-  const out = Buffer.alloc(rowBytes * height);
-  let rawPos = 0;
-  for (let y = 0; y < height; y++) {
-    const filter = raw[rawPos++];
-    const rowStart = y * rowBytes;
-    const prevStart = rowStart - rowBytes;
-    for (let x = 0; x < rowBytes; x++) {
-      const cur = raw[rawPos + x];
-      const left = x >= bpp ? out[rowStart + x - bpp] : 0;
-      const up = y > 0 ? out[prevStart + x] : 0;
-      const upLeft = (y > 0 && x >= bpp) ? out[prevStart + x - bpp] : 0;
-      let v;
-      switch (filter) {
-        case 0: v = cur; break;
-        case 1: v = cur + left; break;
-        case 2: v = cur + up; break;
-        case 3: v = cur + ((left + up) >> 1); break;
-        case 4: {
-          const p = left + up - upLeft;
-          const pa = Math.abs(p - left);
-          const pb = Math.abs(p - up);
-          const pc = Math.abs(p - upLeft);
-          const pred = pa <= pb && pa <= pc ? left : (pb <= pc ? up : upLeft);
-          v = cur + pred;
-          break;
-        }
-        default: return null;
-      }
-      out[rowStart + x] = v & 0xff;
-    }
-    rawPos += rowBytes;
-  }
-
-  // 取一个采样值（支持 1/2/4/8/16 位）
-  const readSample = (rowStart, sampleIndex) => {
-    if (bitDepth === 8) return out[rowStart + sampleIndex];
-    if (bitDepth === 16) return out[rowStart + sampleIndex * 2]; // 取高字节
-    const bitOffset = sampleIndex * bitDepth;
-    const byte = out[rowStart + (bitOffset >> 3)];
-    const shift = 8 - bitDepth - (bitOffset & 7);
-    const mask = (1 << bitDepth) - 1;
-    return (byte >> shift) & mask;
-  };
-  const scale = (v) => (bitDepth === 8 || bitDepth === 16 ? v : Math.round(v * 255 / ((1 << bitDepth) - 1)));
-
-  const data = Buffer.alloc(width * height * 4);
-  for (let y = 0; y < height; y++) {
-    const rowStart = y * rowBytes;
-    for (let x = 0; x < width; x++) {
-      const di = (y * width + x) * 4;
-      if (colorType === 6) {
-        data[di] = readSample(rowStart, x * 4);
-        data[di + 1] = readSample(rowStart, x * 4 + 1);
-        data[di + 2] = readSample(rowStart, x * 4 + 2);
-        data[di + 3] = readSample(rowStart, x * 4 + 3);
-      } else if (colorType === 2) {
-        data[di] = readSample(rowStart, x * 3);
-        data[di + 1] = readSample(rowStart, x * 3 + 1);
-        data[di + 2] = readSample(rowStart, x * 3 + 2);
-        data[di + 3] = 255;
-      } else if (colorType === 4) {
-        const g = readSample(rowStart, x * 2);
-        data[di] = data[di + 1] = data[di + 2] = g;
-        data[di + 3] = readSample(rowStart, x * 2 + 1);
-      } else if (colorType === 0) {
-        const g = scale(readSample(rowStart, x));
-        data[di] = data[di + 1] = data[di + 2] = g;
-        data[di + 3] = 255;
-      } else {
-        const idx = readSample(rowStart, x);
-        if (!plte || idx * 3 + 2 >= plte.length) return null;
-        data[di] = plte[idx * 3];
-        data[di + 1] = plte[idx * 3 + 1];
-        data[di + 2] = plte[idx * 3 + 2];
-        data[di + 3] = trns && idx < trns.length ? trns[idx] : 255;
-      }
-    }
-  }
-  return { width, height, data };
-}
-
+// ---- 图片解码（直通载荷）----
+// Rust 引擎是必需组件，PNG/JPEG 解码只有 Rust 一条路；失败就返回 null，调用方保留原文件。
 /** 最近一次解码失败的原因（供上层给用户看具体原因，而不是一句“无法解码”） */
 let lastDecodeError = '';
 
 /**
- * 解码 JPEG（依赖 jpeg-js；未安装时返回 null）。
- * jpeg-js 默认只给 512MB 内存 / 100MP，6000×4500 的渐进式大图会被它自己拦下，
- * 之前就是这里把整张纹理判成「无法解码」→ 原图直通 → 手机端读不出来 → 黑屏。
+ * 解码 PNG 到直色 RGBA8（不做预乘）。尺寸从 IHDR 直接读（PNG 规定 IHDR 是第一个 chunk）。
+ * 隔行图等 Rust 不支持的形态解码会失败，返回 null，由调用方保留原文件。
+ * @returns {{width:number,height:number,data:Buffer}|null}
  */
-function decodeJpeg(buf, opts = {}) {
-  // JPEG 解码交给 Rust（baseline / 渐进式都支持，输出与 jpeg-js 逐字节一致）。
-  // 下面的 jpeg-js 路径只作为黄金样本的对照实现保留。
-  if (rusttex.enabled()) {
-    try {
-      const r = rusttex.jpegDecode(buf);
-      lastDecodeError = '';
-      return { width: r.width, height: r.height, data: Buffer.from(r.data) };
-    } catch (e) {
-      lastDecodeError = `JPEG 解码失败: ${e.message || e}`;
-      return null;
-    }
-  }
-  const jpeg = getJpeg();
-  if (!jpeg) { lastDecodeError = '缺少 jpeg-js 依赖'; return null; }
-  const maxMemoryUsageInMB = opts.maxMemoryMB || DEFAULT_MAX_RGBA_BYTES / 1048576 * 4;
+function decodePng(buf) {
+  if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
+  if (buf.readUInt32BE(12) !== 0x49484452) return null;
+  const w = buf.readUInt32BE(16);
+  const h = buf.readUInt32BE(20);
+  if (!w || !h) return null;
   try {
-    const r = jpeg.decode(buf, {
-      useTArray: true,
-      formatAsRGBA: true,
-      maxMemoryUsageInMB: Math.max(512, Math.ceil(maxMemoryUsageInMB)),
-      maxResolutionInMP: Math.max(100, opts.maxResolutionMP || 512),
-    });
     lastDecodeError = '';
-    return { width: r.width, height: r.height, data: Buffer.from(r.data) };
+    return { width: w, height: h, data: rusttex.pngDecode(buf, w, h) };
   } catch (e) {
-    lastDecodeError = `JPEG 解码失败: ${e.message}`;
+    lastDecodeError = `PNG 解码失败: ${e.message || e}`;
     return null;
   }
 }
+
+/** 解码 JPEG（baseline / 扩展 / 渐进式，全部由 Rust 实现，输出与 jpeg-js 逐字节一致） */
+function decodeJpeg(buf) {
+  try {
+    const r = rusttex.jpegDecode(buf);
+    lastDecodeError = '';
+    return { width: r.width, height: r.height, data: Buffer.from(r.data) };
+  } catch (e) {
+    lastDecodeError = `JPEG 解码失败: ${e.message || e}`;
+    return null;
+  }
+}
+
 
 /** 按载荷首字节猜图种，兜住 imageFormat 写错的包 */
 function decodeImage(buf, opts = {}) {

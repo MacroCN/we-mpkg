@@ -2675,22 +2675,36 @@ test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 
     }
   }
 
-  // 第二条：强制纯 JS（WE_TEX_RUST=off），保证两套实现都过同一份基准
-  const oldEnv = process.env.WE_TEX_RUST;
-  process.env.WE_TEX_RUST = 'off';
-  rt._reset();
-  try {
-    const { manifest, out } = replayGolden();
-    for (const { name, bytes } of out) {
-      const c = manifest.cases.find((x) => x.name === name);
-      const expected = fs.readFileSync(path.join(dir, c.output));
-      assert.ok(bytes.equals(expected), `${name}: JS 路径输出与黄金样本不一致`);
+  // 第二条：纯 JS 参照实现（DXT / LZ4 / DXT 整包）必须与同一份基准逐字节一致。
+  // PNG/JPEG 解码已整体搬到 Rust，运行时不再保留 JS 实现，这两类只走第一条（Rust + 冻结的黄金输出）。
+  const dxtlib = require('../src/dxt');
+  const lz4lib = require('../src/lz4');
+  const texlib = require('../src/tex');
+  const manifest2 = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
+  const jsCases = manifest2.cases.filter((c) => c.kind === 'dxt-decode' || c.kind === 'lz4-compress'
+    || c.kind === 'lz4-decompress' || (c.kind === 'tex-convert' && !/png|jpeg|gif/i.test(c.name)));
+  assert.ok(jsCases.length >= 8, `JS 参照用例太少: ${jsCases.length}`);
+  for (const c of jsCases) {
+    const input = fs.readFileSync(path.join(dir, c.input));
+    let bytes;
+    if (c.kind === 'dxt-decode') {
+      const fmtId = { dxt1: dxtlib.TEX_FORMAT.DXT1, dxt3: dxtlib.TEX_FORMAT.DXT3, dxt5: dxtlib.TEX_FORMAT.DXT5 }[c.format];
+      bytes = dxtlib.decode(input, fmtId, c.width, c.height);
+    } else if (c.kind === 'lz4-compress') {
+      bytes = lz4lib.compress(input);
+    } else if (c.kind === 'lz4-decompress') {
+      bytes = lz4lib.decompress(input, c.expectedSize);
+    } else {
+      const r = texlib.convertTexBuffer(input, {
+        relPath: 'materials/黄金样本.tex',
+        preset: c.preset === 'balanced' ? 'balanced' : 'default',
+        ...(typeof c.scale === 'number' ? { scale: c.scale } : {}),
+      });
+      bytes = r.bytes || input;
     }
-    assert.ok(manifest.cases.length >= 19, '黄金样本集至少要覆盖 17 个格式用例');
-  } finally {
-    if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
-    rt._reset();
+    assert.ok(bytes.equals(fs.readFileSync(path.join(dir, c.output))), `${c.name}: JS 参照输出与黄金样本不一致`);
   }
+  assert.ok(manifest2.cases.length >= 19, '黄金样本集至少要覆盖 19 个格式用例');
 });
 
 test('纹理加速引擎状态：info() 给出 Rust/JS、路径与计数', () => {
