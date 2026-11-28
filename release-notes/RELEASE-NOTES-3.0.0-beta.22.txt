@@ -1,0 +1,11 @@
+we-mpkg 3.0.0-beta.22
+
+tex-batch 默认并发按内存预算收窄，避免大纹理并行解码把手机打爆。
+
+- 估算：单张解码后 RGBA ≈ 压缩包体 4 倍，再留 8MB 余量；默认预算 256MB；
+- 默认线程数 = min(核数, 16, 预算 / 单张估算)，最少 1；显式 `--threads N` 不受预算限制；
+- 预算可用 `--mem-budget-mb` 或环境变量 `WE_TEX_MEM_BUDGET_MB` 调整；
+- stderr 追加一行 `{"event":"tex-batch","jobs":N,"threads":M}`，日志/排查能看到实际并行度；
+- 新增测试：64MB 输入 × 2 条任务时默认退化为单线程，显式 --threads 被尊重。
+
+版本 3.0.0-beta.22 / versionCode 81，不发布 Release，APK 见 Actions artifact。

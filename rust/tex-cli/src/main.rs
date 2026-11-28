@@ -233,9 +233,10 @@ fn main() {
             // job 文件是 NUL 分隔的四元组：scale \0 framesTail \0 输入 \0 输出 \0 ...
             // 一个进程跑完整包：读 job → 多线程并行转换 → 按原顺序输出 JSON。
             let jobfile = args.get(2).unwrap_or_else(|| fail("缺少 job 文件", 2));
-            let threads = arg_value(&args, "--threads")
+            let explicit_threads = arg_value(&args, "--threads")
                 .and_then(|v| v.parse::<usize>().ok())
-                .filter(|n| *n > 0)
+                .filter(|n| *n > 0);
+            let mut threads = explicit_threads
                 .unwrap_or_else(|| std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1))
                 .min(16);
             let raw = fs::read(jobfile).unwrap_or_else(|e| fail(&format!("读 job 文件失败 {}: {}", jobfile, e), 2));
@@ -253,6 +254,26 @@ fn main() {
             }
 
             let n = jobs.len();
+            // 显式 --threads 交给调用方负责；默认按内存预算收窄，避免一串 4096 纹理同时解码把手机 OOM。
+            // 单张解码后 RGBA 约为压缩包体的 4 倍，另留一份缩放/LZ4 缓冲的余量。
+            if explicit_threads.is_none() && n > 0 {
+                let est_max: usize = jobs.iter()
+                    .map(|j| fs::metadata(&j.2).map(|m| m.len() as usize).unwrap_or(0))
+                    .max().unwrap_or(0)
+                    .saturating_mul(4)
+                    .saturating_add(8 << 20);
+                let budget_mb: usize = arg_value(&args, "--mem-budget-mb")
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .or_else(|| std::env::var("WE_TEX_MEM_BUDGET_MB").ok().and_then(|v| v.parse::<usize>().ok()).filter(|n| *n > 0))
+                    .unwrap_or(256);
+                let budget: usize = budget_mb << 20;
+                if est_max > 0 {
+                    threads = threads.min((budget / est_max).max(1));
+                }
+            }
+            // 让调用方/日志能看到这次实际开了几个线程（默认会被内存预算收窄）
+            eprintln!("{{\"event\":\"tex-batch\",\"jobs\":{},\"threads\":{}}}", n, threads.min(n.max(1)));
             let lines: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(vec![String::new(); n]);
             let counter = std::sync::atomic::AtomicUsize::new(0);
             let counter_ref = &counter;

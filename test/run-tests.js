@@ -3053,6 +3053,31 @@ test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜
   assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
 });
 
+test('tex-batch 默认线程数按内存预算收窄（大图单线程）', () => {
+  const rt = require('../src/rusttex');
+  if (!rt.available()) return;
+  const bin = rt.info().path;
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-batchmem-'));
+  try {
+    const huge = path.join(dir, 'huge.tex');
+    fs.writeFileSync(huge, Buffer.alloc(0));
+    fs.truncateSync(huge, 64 * 1024 * 1024); // 稀疏文件，只为让体积估算超过预算
+    const jobFile = path.join(dir, 'jobs');
+    const rec = (i) => [String(1), '0', huge, path.join(dir, `out${i}.tex`), ''].join('\0');
+    fs.writeFileSync(jobFile, rec(0) + rec(1)); // 两条任务，才能看出并行度
+    const r = require('child_process').spawnSync(bin, ['tex-batch', jobFile], { encoding: 'utf8', timeout: 600000 });
+    const evt = String(r.stderr || '').split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((x) => x && x.event === 'tex-batch');
+    assert.ok(evt, '要汇报实际线程数: ' + String(r.stderr || '').slice(0, 200));
+    assert.strictEqual(evt.threads, 1, '64MB 输入 + 4x 估算已超 256MB 预算，应退化成单线程');
+    // 显式 --threads 不受预算限制
+    const r2 = require('child_process').spawnSync(bin, ['tex-batch', jobFile, '--threads', '2'], { encoding: 'utf8', timeout: 600000 });
+    const evt2 = String(r2.stderr || '').split('\n').map((l) => { try { return JSON.parse(l); } catch { return null; } }).find((x) => x && x.event === 'tex-batch');
+    assert.strictEqual(evt2.threads, 2, '显式 --threads 应被尊重');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('tex-batch 并行与单线程产物一致', () => {
   const rt = require('../src/rusttex');
   if (!rt.available()) return;
