@@ -341,6 +341,8 @@ pub struct Converted {
     pub height: usize,
     pub downsampled: bool,
     pub frames_tail_len: usize,
+    /// 已经在本进程内做过移动端可读性自校验（JS 侧不必再回读产物重解析）
+    pub verified: bool,
 }
 
 pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
@@ -454,9 +456,23 @@ pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
         if mips.len() != 1 {
             return Err("输出 mip 数不为 1".into());
         }
+        let mip = &mips[0];
+        let need = mip.width * mip.height * 4;
+        if mip.lz4 == 1 && mip.decompressed != need {
+            return Err(format!("输出解压长度不符: {} != {}", mip.decompressed, need));
+        }
+        if mip.lz4 == 0 && mip.len != need {
+            return Err(format!("输出未压缩长度不符: {} != {}", mip.len, need));
+        }
     }
     if animated && frames_tail.is_empty() && frames_start < buf.len() {
         return Err("动图帧表缺失".into());
+    }
+    if !frames_tail.is_empty() {
+        let produced_tail = &out[check.frames_start..];
+        if produced_tail != frames_tail.as_slice() {
+            return Err("输出尾帧表与输入不一致".into());
+        }
     }
 
     Ok(Converted {
@@ -465,5 +481,6 @@ pub fn convert(buf: &[u8], opts: &ConvertOpts) -> Result<Converted, String> {
         downsampled,
         bytes: out,
         frames_tail_len: frames_tail.len(),
+        verified: true,
     })
 }

@@ -3067,6 +3067,17 @@ test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜
   assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
 });
 
+test('Rust LZ4 压缩走 stdin/stdout，结果与本地实现逐字节一致', () => {
+  const rt = require('../src/rusttex');
+  if (!rt.available()) return;
+  const lz4lib = require('../src/lz4');
+  const raw = require('crypto').randomBytes(1 << 20);
+  const fast = rt.lz4Compress(raw);
+  assert.ok(Buffer.isBuffer(fast) && fast.length > 0, '流式压缩要有输出');
+  assert.ok(fast.equals(lz4lib.compress(raw)), '流式压缩与本地 LZ4 实现不一致');
+  assert.ok(rt.lz4Decompress(fast, raw.length).equals(raw), '压缩结果要能原样还原');
+});
+
 test('tex-batch 默认线程数按内存预算收窄（大图单线程）', () => {
   const rt = require('../src/rusttex');
   if (!rt.available()) return;
@@ -3111,6 +3122,8 @@ test('tex-batch 并行与单线程产物一致', () => {
     const one = run('one', 1);
     const many = run('many', 3);
     assert.ok(many.res.every((r) => r.ok), '并行批量应全部成功');
+    assert.ok(many.res.every((r) => r.verified === true), 'Rust 侧要标记已自校验（JS 不再回读重解析）');
+    assert.ok(many.res.every((r) => typeof r.outBytes === 'number' && r.outBytes > 0), '要回传产物字节数供统计');
     names.forEach((n, i) => {
       assert.ok(one.res[i].ok && many.res[i].ok, `${n}: 结果应成功`);
       const a = fs.readFileSync(path.join(dir, 'one', n));

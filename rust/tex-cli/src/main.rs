@@ -116,15 +116,34 @@ fn main() {
             let input = args.get(2).unwrap_or_else(|| fail("缺少输入文件", 2));
             let output = args.get(3).unwrap_or_else(|| fail("缺少输出文件", 2));
             let started = Instant::now();
-            let data = fs::read(input).unwrap_or_else(|e| fail(&format!("读文件失败 {}: {}", input, e), 2));
+            // "-" 表示走 stdin/stdout：JS 侧直接传内存缓冲，省掉来回临时文件
+            let data = if input == "-" {
+                let mut buf = Vec::new();
+                use std::io::Read;
+                std::io::stdin().read_to_end(&mut buf).unwrap_or_else(|e| fail(&format!("读 stdin 失败: {}", e), 2));
+                buf
+            } else {
+                fs::read(input).unwrap_or_else(|e| fail(&format!("读文件失败 {}: {}", input, e), 2))
+            };
             let packed = lz4::compress(&data);
-            write_out(output, &packed);
-            emit(&format!(
+            let meta = format!(
                 "{{\"ok\":true,\"cmd\":\"lz4-compress\",\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
                 data.len(),
                 packed.len(),
                 started.elapsed().as_micros()
-            ));
+            );
+            if output == "-" {
+                // stdout 是纯压缩数据，元信息走 stderr
+                let mut stdout = std::io::stdout();
+                if let Err(e) = stdout.write_all(&packed) {
+                    fail(&format!("写 stdout 失败: {}", e), 2);
+                }
+                let _ = stdout.flush();
+                eprintln!("{}", meta);
+            } else {
+                write_out(output, &packed);
+                emit(&meta);
+            }
         }
         "lz4-decompress" => {
             let input = args.get(2).unwrap_or_else(|| fail("缺少输入文件", 2));
@@ -302,7 +321,8 @@ fn main() {
                                         continue;
                                     }
                                     lines_ref.lock().unwrap()[i] = format!(
-                                        "{{\"ok\":true,\"width\":{},\"height\":{},\"downsampled\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                                        "{{\"ok\":true,\"verified\":{},\"width\":{},\"height\":{},\"downsampled\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                                        if res.verified { "true" } else { "false" },
                                         res.width, res.height,
                                         if res.downsampled { "true" } else { "false" },
                                         data.len(), res.bytes.len(), started.elapsed().as_micros()
@@ -340,7 +360,8 @@ fn main() {
                     let out_bytes = res.bytes.len();
                     write_out(output, &res.bytes);
                     emit(&format!(
-                        "{{\"ok\":true,\"cmd\":\"tex-convert\",\"width\":{},\"height\":{},\"downsampled\":{},\"framesTailLen\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                        "{{\"ok\":true,\"cmd\":\"tex-convert\",\"verified\":{},\"width\":{},\"height\":{},\"downsampled\":{},\"framesTailLen\":{},\"inBytes\":{},\"outBytes\":{},\"elapsedUs\":{}}}",
+                        if res.verified { "true" } else { "false" },
                         res.width, res.height,
                         if res.downsampled { "true" } else { "false" },
                         res.frames_tail_len,

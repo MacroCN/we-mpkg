@@ -237,19 +237,24 @@ function dxtDecode(buf, fmtName, width, height) {
 
 function lz4Compress(buf) {
   const bin = requireEngine();
-  const inFile = scratch('lz4-in.bin');
-  const outFile = scratch('lz4-out.lz4');
-  if (!inFile || !outFile) return null;
-  try {
-    fs.writeFileSync(inFile, buf);
-    run(bin, ['lz4-compress', inFile, outFile]);
-    stats.lz4++;
-    return fs.readFileSync(outFile);
-  } catch (e) {
-    throw engineError('调用', e);
-  } finally {
-    for (const f of [inFile, outFile]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  // 流式：stdin 传原始数据、stdout 收压缩结果，省掉一次写盘 + 一次读盘
+  const r = require('child_process').spawnSync(bin, ['lz4-compress', '-', '-'], {
+    input: buf,
+    timeout: 120000,
+    maxBuffer: buf.length + (buf.length >> 8) + (1 << 20), // LZ4 最坏膨胀 ~0.4%
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  if (r.error || r.status !== 0) {
+    const detail = r.error ? r.error.message : (r.stderr ? String(r.stderr).trim().slice(0, 200) : `退出码 ${r.status}`);
+    throw engineError('lz4-compress', detail);
   }
+  let meta = null;
+  try { meta = JSON.parse(String(r.stderr || '').trim().split('\n').pop()); } catch { meta = null; }
+  if (!meta || meta.ok !== true || meta.outBytes !== r.stdout.length) {
+    throw engineError('lz4-compress', '输出长度与元信息不符');
+  }
+  stats.lz4++;
+  return r.stdout;
 }
 
 function lz4Decompress(buf, expectedSize) {
@@ -403,7 +408,7 @@ function texConvertBatch(jobs, opts = {}) {
       let rec = null;
       try { rec = JSON.parse(lines[i]); } catch { rec = null; }
       if (!rec || rec.ok !== true) out.push({ ok: false, error: (rec && rec.error) || '无输出' });
-      else out.push({ ok: true, width: rec.width, height: rec.height, downsampled: rec.downsampled === true });
+      else out.push({ ok: true, verified: rec.verified === true, width: rec.width, height: rec.height, downsampled: rec.downsampled === true, outBytes: rec.outBytes });
     }
     return out;
   } catch (e) {

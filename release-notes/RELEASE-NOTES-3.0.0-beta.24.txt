@@ -1,0 +1,15 @@
+we-mpkg 3.0.0-beta.24
+
+两处纹理 IO / 调用开销收窄：
+
+1) Rust 自校验产物，JS 批量收尾不再回读重解析
+- tex.rs 写出前做完整自校验（容器/格式/mip 数/载荷长度/帧表一致），结果标记 verified；
+- tex-batch / tex-convert 的 JSON 增加 verified 与 outBytes；
+- convertTexDir 收到 verified 就直接 rename，不再 readFileSync + verifyMobileTex（只有需要断点写产物 sha 时才读一次）；
+- 实测 3 张 4096 多 mip DXT：转换 1.03s，旧的回读+校验额外耗时 76ms（≈25ms/张，可线性累积）。
+
+2) JS 侧仍在跑的 LZ4 压缩改走 Rust 流式接口
+- rust-tex lz4-compress 支持 `- -`：stdin 传原始、stdout 出压缩、元信息走 stderr；
+- rusttex.lz4Compress 改为 spawnSync input/stdout，不再写临时文件；writeMobileTex 使用它（WE_TEX_RUST=off 的参照测试仍用本地实现）。
+
+版本 3.0.0-beta.24 / versionCode 83，不发布 Release，APK 见 Actions artifact。

@@ -600,7 +600,8 @@ function writeMobileTex({ flags, unk, images, framesTail }) {
   for (const im of images) {
     const raw = im.pixels;
     if (raw.length !== checkedSize(im.width, im.height, 4)) throw new Error('像素长度与尺寸不符');
-    const compressed = lz4.compress(raw);
+    // 压缩也走 Rust（流式，不必写临时文件）；WE_TEX_RUST=off 的纯 JS 参照测试才用本地实现
+    const compressed = rusttex.enabled() ? rusttex.lz4Compress(raw) : lz4.compress(raw);
     const useLz4 = compressed.length < raw.length - 16; // 压不动就别压，省解码开销
     const payload = useLz4 ? compressed : raw;
     parts.push(i32(1));
@@ -1037,11 +1038,17 @@ function convertTexDir(dir, opts = {}) {
         onLog(`  [纹理] ${p.rel}: 转换失败 -> 保留原文件（${res.error}）`);
         return;
       }
-      let bytes;
+      // Rust 端已自校验（verified），这里不再回读产物重解析；只有断点需要用产物 sha 时才读一次
+      let bytes = null;
       try {
-        bytes = fs.readFileSync(tmpPaths[i]);
-        verifyMobileTex(bytes, { width: res.width, height: res.height, framesTail: p.job.framesTail ? p.job.tail : null });
-        fs.renameSync(tmpPaths[i], p.abs);
+        if (res.verified) {
+          if (checkpoint && p.shaIn) bytes = fs.readFileSync(tmpPaths[i]);
+          fs.renameSync(tmpPaths[i], p.abs);
+        } else {
+          bytes = fs.readFileSync(tmpPaths[i]);
+          verifyMobileTex(bytes, { width: res.width, height: res.height, framesTail: p.job.framesTail ? p.job.tail : null });
+          fs.renameSync(tmpPaths[i], p.abs);
+        }
       } catch (e) {
         try { fs.unlinkSync(tmpPaths[i]); } catch { /* ignore */ }
         stats.failed++;
@@ -1053,15 +1060,16 @@ function convertTexDir(dir, opts = {}) {
       stats.converted++;
       if (res.downsampled) stats.downsampled++;
       stats.bytesIn += p.size;
-      stats.bytesOut += bytes.length;
-      if (checkpoint && p.shaIn) checkpoint.record(p.rel, p.shaIn, sha256Buffer(bytes), 'convert-image');
+      const outBytes = bytes ? bytes.length : (res.outBytes || p.size);
+      stats.bytesOut += outBytes;
+      if (checkpoint && p.shaIn && bytes) checkpoint.record(p.rel, p.shaIn, sha256Buffer(bytes), 'convert-image');
       const reason = p.job.reason + (res.downsampled ? '（已降采样）' : '');
-      const ratio = p.size ? ((1 - bytes.length / p.size) * 100).toFixed(0) : '0';
-      onLog(`  [纹理] ${p.rel}: ${reason} ${res.width}x${res.height} (${(p.size / 1048576).toFixed(2)} -> ${(bytes.length / 1048576).toFixed(2)} MB, ${ratio}%)`);
+      const ratio = p.size ? ((1 - outBytes / p.size) * 100).toFixed(0) : '0';
+      onLog(`  [纹理] ${p.rel}: ${reason} ${res.width}x${res.height} (${(p.size / 1048576).toFixed(2)} -> ${(outBytes / 1048576).toFixed(2)} MB, ${ratio}%)`);
       const outcome = {
         path: p.rel, route: 'convert-image', reason, changed: true,
         width: res.width, height: res.height, downsampled: !!res.downsampled,
-        bytesIn: p.size, bytesOut: bytes.length,
+        bytesIn: p.size, bytesOut: outBytes,
       };
       outcomes.push(outcome);
       if (opts.onResource) opts.onResource(outcome);
