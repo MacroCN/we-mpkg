@@ -626,12 +626,9 @@ function flattenSceneVisibility(projectDir, opts = {}) {
     }
   };
   visit(scene);
-  if (changed) {
-    fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
-    let msg = `  已固化 ${changed} 个图层可见性（其中隐藏 ${hidden} 个）`;
-    if (kept) msg += `；保留 ${kept} 个属性控制的图层，交 WE 运行时切换`;
-    onLog(msg);
-  }
+  if (changed) fs.writeFileSync(scenePath, JSON.stringify(scene, null, '\t'), 'utf8');
+  // 无条件打印：即使一个可见性都没改，也要让用户看到属性控制图层是怎么处理的
+  onLog(`  图层可见性：固化 ${changed} 个（其中隐藏 ${hidden} 个）；保留 ${kept} 个属性控制的图层，交 WE 运行时切换` + (changed ? '' : '（本次无需改写 scene.json）'));
   return changed;
 }
 
@@ -824,7 +821,8 @@ async function packFromItemDir(itemDir, opts = {}) {
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));
 
   onProgress({ phase: 'prepare', detail: '解包与检查' });
-  onLog(`\n=== 打包 ${title} (${id}) ===`);
+  const appVersion = (() => { try { return require('../package.json').version; } catch { return '?'; } })();
+  onLog(`\n=== 打包 ${title} (${id}) · we-mpkg ${appVersion} ===`);
   // 续转需要一个稳定的工作目录：临时目录一删，断点就没了
   const workDir = opts.workDir || (opts.resume ? stableWorkDir(id) : tempDir('pack'));
   const isTempWork = !opts.workDir && !opts.resume;

@@ -1403,6 +1403,9 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(res.plan && res.plan.resourceCount > 0, '应返回转换计划摘要');
     assert.strictEqual(res.plan.preset.id, 'smooth');
     assert.strictEqual(res.planFile, null, '不续转时不保留工作目录，planFile 应为 null');
+    const appVersion = require('../package.json').version;
+    assert.ok(logs.some((l) => l.includes(`we-mpkg ${appVersion}`)), '打包日志首行要带版本号: ' + logs.slice(0, 3).join('|'));
+    assert.ok(logs.some((l) => l.includes('保留 ') && l.includes('属性控制的图层')), '属性控制图层统计要无条件打印: ' + logs.join('|'));
     // 续转时保留工作目录并把计划/断点落盘
     const keep = await packer.packFromItemDir(makeItemDir(), {
       id: '1001', title: 'V2Resume', outDir: tmp('out2r'), resume: true, onLog: () => {},
