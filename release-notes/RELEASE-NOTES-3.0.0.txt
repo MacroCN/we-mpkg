@@ -1,0 +1,19 @@
+we-mpkg-rs 3.0.0（versionCode 89）正式版
+
+这是 we-mpkg 3.0.0 移动端分支独立后的第一个正式版，仓库更名为 we-mpkg-rs，定位「Rust 重构版安卓客户端」。
+
+一、Rust 纹理引擎（正式收录）
+- DXT1/3/5 解码、LZ4 编解码、直通图物化、PNG/JPEG（含渐进式）/GIF 动图解码、多 mip 整包转换全部由 rust/tex-cli 完成，APK 内为 librusttex.so。
+- tex-batch 多线程 + 内存预算（默认 256MB，按核数与单张估算自动收窄）。
+- 转换结果写出前完整自校验（容器/格式/mip/载荷长度/尾帧表），verified 为真时不再回读产物。
+- LZ4 走 stdin/stdout 流式；断点续转用「文件形态」判断，不再全量 SHA-256。
+
+二、移动端专用化
+- 移除桌面绿色版构建、发布流水线与 packaging 目录，Release 只发安卓 APK。
+- 移除 Windows 运行时分支（DPAPI、注册表代理、curl.exe 兜底、explorer/windowsHide 等）、webrender 桌面浏览器烘焙链路、独立下载中心进程。
+- 网页类壁纸统一打包离线网页包（PWA），由 App 内置 WebView 打开。
+- 图标改为自带极简 PNG 编码器，不再依赖 jpeg-js。
+
+三、已知取舍
+- 网页类壁纸只保留离线网页视图，交互与音频反应依赖 WebView 能力。
+- application 类型仍不支持（依赖桌面运行时）。
