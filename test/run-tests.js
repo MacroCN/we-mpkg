@@ -2929,26 +2929,26 @@ test('首启引导：向导 + 主界面提示条（权限/输出目录/登录/�
   }
 });
 
-test('ffmpeg 候选：只用新版，旧版 lite 彻底移除', () => {
+test('ffmpeg 候选：只认自备新版与随 APK 的原生库', () => {
   const video = require('../src/video');
-  const list = video.ffmpegCandidates().filter(Boolean);
+  const list = video.ffmpegCandidates({ ffmpeg: '/tmp/native/libffmpeg.so' }).filter(Boolean);
+  assert.ok(list.includes('/tmp/native/libffmpeg.so'), '显式传入的原生库要保留');
   for (const p of list) {
-    assert.ok(!String(p).includes('ffmpeg-lite'), '2018 的 ffmpeg-lite 不能再出现在候选里');
-    assert.ok(!String(p).includes('npm-ff'), 'npm-ff（4.1.0 tarball）不应再被引用');
+    const s = String(p);
+    assert.ok(!s.includes('ffmpeg-lite'), '2018 的 ffmpeg-lite 不能再出现在候选里');
+    assert.ok(!s.includes('npm-ff'), 'npm-ff（4.1.0 tarball）不应再被引用');
+    assert.ok(!s.includes('.cache') && !s.includes('tools'), '桌面路径不该再出现在候选里');
   }
-  // 新版路径仍在列表里（.cache/toolchain/ffmpeg），保证「装了就能用」
-  assert.ok(list.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
 });
 
-test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级', () => {
+test('ffmpeg 缺失时指向内置库与重装，不静默降级', () => {
   const help = require('../src/ffmpeg');
   const text = help.missingHelp();
-  assert.ok(text.includes(help.DOWNLOAD_URL), '要给出下载地址');
-  assert.ok(/https:\/\//.test(help.DOWNLOAD_URL));
-  assert.ok(text.includes(path.join('.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe')), '要给出放置路径');
+  assert.ok(text.includes('libffmpeg.so'), '要说明 ffmpeg 由安装包内置');
+  assert.ok(/重新安装|重装/.test(text), '缺失时提示重装 APK');
   assert.ok(text.includes('WEM_FFMPEG'), '要提环境变量这个备选');
   const short = help.missingHelpShort();
-  assert.ok(short.includes(help.DOWNLOAD_URL) && short.length < 400, '单行版要短，能塞进任务警告');
+  assert.ok(short.includes('libffmpeg.so') && short.length < 400, '单行版要短，能塞进任务警告');
   // 打包流程里的警告必须带上安装指引，而不是只说「没找到」
   const vsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'video.js'), 'utf8');
   assert.ok(vsrc.includes('missingHelpShort()'), '打包警告要给安装指引');

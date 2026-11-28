@@ -1,0 +1,13 @@
+we-mpkg 3.0.0-beta.29（versionCode 88）
+收尾清理：ffmpeg 指引改为移动端口径，去掉独立下载中心入口。
+
+一、ffmpeg
+- 不再给「下载 Windows 构建、放到 .cache\toolchain\ffmpeg\bin」这类桌面指引。
+- 缺失时直接说明：ffmpeg 由 APK 内置的 libffmpeg.so 提供，缺了通常是安装包损坏，重装即可；开发机可用 WEM_FFMPEG 指向自备新版。
+- 候选列表只剩 WEM_FFMPEG/FFMPEG 与安卓原生库目录，删掉 .cache/tools/bin 的桌面路径。
+
+二、下载中心
+- 删 bin/dlhub.js 独立进程入口（进程内模式后已无调用方）；命令行 `dlhub` 仍可用。
+
+三、测试
+- 相关断言同步为新口径；全量 153 通过 / 0 失败 / 1 跳过。
