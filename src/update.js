@@ -7,7 +7,7 @@
 const net = require('./net');
 
 const OWNER = 'MacroCN';
-const REPO = 'we-mpkg';
+const REPO = 'we-mpkg-rs';
 const API = `https://api.github.com/repos/${OWNER}/${REPO}/releases/latest`;
 
 let cached = null; // { at, data }

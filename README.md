@@ -29,7 +29,7 @@
 |---|---|
 | `we-mpkg-android-*.apk` | 安卓安装包（arm64-v8a，约 29 MB）；本分支只发布移动端 |
 
-发布页：<https://github.com/MacroCN/we-mpkg/releases>
+发布页：<https://github.com/MacroCN/we-mpkg-rs/releases>
 
 ---
 
@@ -101,7 +101,7 @@ node bin\wempkg.js serve --port 3090
 
 ## 更新记录
 
-各版本的改动与已知问题见 [GitHub Releases](https://github.com/MacroCN/we-mpkg/releases)，正文只描述当前功能。
+各版本的改动与已知问题见 [GitHub Releases](https://github.com/MacroCN/we-mpkg-rs/releases)，正文只描述当前功能。
 
 ## 命令行
 

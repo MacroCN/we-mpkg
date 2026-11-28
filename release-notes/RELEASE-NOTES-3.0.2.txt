@@ -1,0 +1,12 @@
+we-mpkg-rs 3.0.2（versionCode 91）
+
+变更
+- 应用内「检查更新」改查新仓库 MacroCN/we-mpkg-rs 的最新 Release，不再依赖旧库 we-mpkg。
+- 关于页 GitHub / Issues 链接、README 发布页、package.json 仓库地址同步到新库。
+- CI 的预编译原生库（android-node-prebuilt-v1.tar.gz）改为从新库 Release 取，新库自包含。
+
+安装
+- 与 3.0.0/3.0.1 同签名，可直接覆盖安装，保留数据与缓存的壁纸。
+
+已知问题
+- 3.0.1 已修复画质档位对大图（含非英文文件名直通 PNG）不生效的问题，本版继续沿用。

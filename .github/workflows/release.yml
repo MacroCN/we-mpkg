@@ -89,7 +89,7 @@ jobs:
           mkdir -p .cache/native-prebuilt android/app/src/main/jniLibs
           if [ ! -s .cache/native-prebuilt/native.tar.gz ]; then
             curl -L --retry 3 -o .cache/native-prebuilt/native.tar.gz \
-              https://github.com/MacroCN/we-mpkg/releases/download/android-node-prebuilt-v1/android-node-prebuilt-v1.tar.gz
+              https://github.com/MacroCN/we-mpkg-rs/releases/download/android-node-prebuilt-v1/android-node-prebuilt-v1.tar.gz
           fi
           tar -xzf .cache/native-prebuilt/native.tar.gz -C android/app/src/main/jniLibs
           ls -lh android/app/src/main/jniLibs/arm64-v8a
