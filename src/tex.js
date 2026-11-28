@@ -52,7 +52,6 @@ function writeFileAtomic(file, bytes) {
 }
 const dxt = require('./dxt');
 const rusttex = require('./rusttex');
-const { sha256Buffer } = require('./convertplan');
 
 // ---- 枚举（数值对照 notscuffed/repkg：TexFormat / TexFlags / FreeImageFormat）----
 // header.format（TexFormat）：0=RGBA8888，4=DXT5，6=DXT3，7=DXT1，8=RG88，9=R8
@@ -245,6 +244,16 @@ function isMobileCompatible(tex) {
     if (!intRatio) return false;
   }
   return true;
+}
+
+/** 这份缓冲看起来已经是上次转换出的移动端产物（续转用，不做哈希） */
+function looksLikeMobileOutput(buf) {
+  try {
+    const tex = parseTex(buf);
+    return isMobileCompatible(tex);
+  } catch {
+    return false;
+  }
 }
 
 /** 视频纹理的基本校验：声明为 MP4 且确实有 mip */
@@ -957,9 +966,10 @@ function convertTexDir(dir, opts = {}) {
       }
       const buf = fs.readFileSync(abs);
 
-      // 断点续转：磁盘上这份文件已经等于上次的输出，就直接跳过
-      const shaIn = checkpoint ? sha256Buffer(buf) : null;
-      if (checkpoint && checkpoint.isResolved(rel, shaIn)) {
+      // 断点续转：有记录 + 磁盘上这份已经是移动端可读产物，就直接跳过。
+      // 不再对整个文件算 sha256 —— 换算子比哈希便宜，省掉每张大图一次全量哈希。
+      const shaIn = null;
+      if (checkpoint && checkpoint.has(rel) && looksLikeMobileOutput(buf)) {
         stats.resumed++;
         onLog(`  [纹理] ${rel}: 已是上次转换的产物，跳过`);
         continue;
@@ -984,7 +994,7 @@ function convertTexDir(dir, opts = {}) {
 
       if (r.changed) {
         writeFileAtomic(abs, r.bytes);
-        if (checkpoint) checkpoint.record(rel, shaIn, sha256Buffer(r.bytes), r.route);
+        if (checkpoint) checkpoint.record(rel, shaIn, null, r.route);
         stats.converted++;
         if (r.downsampled) stats.downsampled++;
         stats.bytesIn += buf.length;
@@ -997,7 +1007,7 @@ function convertTexDir(dir, opts = {}) {
         else if (r.route === 'failed') stats.failed++;
         else stats.kept++;
         // 原样保留的也记一笔，续转时不会反复解析
-        if (checkpoint && r.route !== 'failed') checkpoint.record(rel, shaIn, shaIn, r.route);
+        if (checkpoint && r.route !== 'failed') checkpoint.record(rel, shaIn, null, r.route);
         if (r.route === 'keep-budget' || r.route === 'keep-unsupported' || r.route === 'keep-video-unverified'
           || r.route === 'keep-video-noffmpeg' || r.route === 'keep-video-transcode-failed' || r.route === 'failed') {
           warnings.push(`${rel}: ${r.reason}`);
@@ -1038,11 +1048,10 @@ function convertTexDir(dir, opts = {}) {
         onLog(`  [纹理] ${p.rel}: 转换失败 -> 保留原文件（${res.error}）`);
         return;
       }
-      // Rust 端已自校验（verified），这里不再回读产物重解析；只有断点需要用产物 sha 时才读一次
+      // Rust 端已自校验（verified），这里不再回读产物重解析；断点也不再需要产物哈希
       let bytes = null;
       try {
         if (res.verified) {
-          if (checkpoint && p.shaIn) bytes = fs.readFileSync(tmpPaths[i]);
           fs.renameSync(tmpPaths[i], p.abs);
         } else {
           bytes = fs.readFileSync(tmpPaths[i]);
@@ -1062,7 +1071,7 @@ function convertTexDir(dir, opts = {}) {
       stats.bytesIn += p.size;
       const outBytes = bytes ? bytes.length : (res.outBytes || p.size);
       stats.bytesOut += outBytes;
-      if (checkpoint && p.shaIn && bytes) checkpoint.record(p.rel, p.shaIn, sha256Buffer(bytes), 'convert-image');
+      if (checkpoint) checkpoint.record(p.rel, null, null, 'convert-image');
       const reason = p.job.reason + (res.downsampled ? '（已降采样）' : '');
       const ratio = p.size ? ((1 - outBytes / p.size) * 100).toFixed(0) : '0';
       onLog(`  [纹理] ${p.rel}: ${reason} ${res.width}x${res.height} (${(p.size / 1048576).toFixed(2)} -> ${(outBytes / 1048576).toFixed(2)} MB, ${ratio}%)`);

@@ -120,6 +120,7 @@ function writePlan(file, plan) {
 /**
  * 断点记录。
  *  entries[rel] = { inSha, outSha, route, at }
+ *  纹理改用 has()+文件形态判断续转，inSha/outSha 可为 null；shader 仍用 outSha 比哈希
  */
 class Checkpoint {
   constructor(file) {
@@ -133,6 +134,11 @@ class Checkpoint {
       this.loadedFromDisk = true;
     }
     this.dirty = false;
+  }
+
+  /** 是否有这条文件的断点记录（纹理只靠记录 + 文件形态判断，不再比哈希） */
+  has(rel) {
+    return Object.prototype.hasOwnProperty.call(this.state.entries, rel);
   }
 
   /** 只接受同一策略的断点：预设或策略变了，旧记录作废 */

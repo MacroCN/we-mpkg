@@ -3067,6 +3067,35 @@ test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜
   assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
 });
 
+test('纹理断点续转：二次运行只按文件形态判断，零转换', () => {
+  const texlib = require('../src/tex');
+  const cp = require('../src/convertplan');
+  const src = fs.readFileSync(path.join(__dirname, 'golden', 'format', 'tex-convert-dxt1-4x4', 'in.bin'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-resume-'));
+  const cpFile = path.join(dir, 'checkpoint.json');
+  const names = ['a.tex', 'b.tex'];
+  for (const n of names) fs.writeFileSync(path.join(dir, n), src);
+  try {
+    const c1 = new cp.Checkpoint(cpFile);
+    const r1 = texlib.convertTexDir(dir, { preset: 'default', checkpoint: c1, onLog: () => {} });
+    assert.strictEqual(r1.stats.converted, 2, '首轮应转换两张');
+    c1.flush();
+
+    // 重新加载断点，模拟第二遍打包
+    const c2 = new cp.Checkpoint(cpFile);
+    const r2 = texlib.convertTexDir(dir, { preset: 'default', checkpoint: c2, onLog: () => {} });
+    assert.strictEqual(r2.stats.resumed, 2, '第二轮应全部按断点跳过');
+    assert.strictEqual(r2.stats.converted, 0, '第二轮不应再转换');
+    assert.strictEqual(r2.stats.failed, 0);
+    names.forEach((n) => {
+      const bytes = fs.readFileSync(path.join(dir, n));
+      assert.ok(texlib.verifyMobileTex(bytes, {}) !== false, `${n}: 跳过后的文件仍应是移动端产物`);
+    });
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('Rust LZ4 压缩走 stdin/stdout，结果与本地实现逐字节一致', () => {
   const rt = require('../src/rusttex');
   if (!rt.available()) return;

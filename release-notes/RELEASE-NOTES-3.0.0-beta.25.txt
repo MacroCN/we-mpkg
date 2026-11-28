@@ -1,0 +1,10 @@
+we-mpkg 3.0.0-beta.25
+
+纹理断点续转不再对整个文件算 SHA-256：改用「有记录 + 磁盘文件已是移动端产物」判断。
+
+- Checkpoint 增加 has(rel)；纹理续转先 parse 头部确认是 RGBA8888/TEXB0004/单 mip/长度自洽，再跳过；
+- 首轮不再为每张纹理算输入 SHA（大纹理 64MB≈40ms/张），转换后也不再回读产物算输出 SHA；
+- 解析只读头部偏移，比全量哈希便宜两个数量级；shader 断点仍保留哈希判断（文本很小）；
+- 新增回归：首轮转换 2 张、重载断点后第二轮 resumed=2 / converted=0，跳过后的文件仍是移动端产物。
+
+版本 3.0.0-beta.25 / versionCode 84，不发布 Release，APK 见 Actions artifact。
