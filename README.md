@@ -1,8 +1,8 @@
-# we-mpkg
+# we-mpkg-rs
 
-把 **Wallpaper Engine（AppID 431960）创意工坊**里的壁纸，打包成 **手机版 `.mpkg`**，可直接在 Wallpaper Engine 安卓客户端里导入使用。
+**Rust 重构版安卓客户端**：从 `we-mpkg` 3.0.0 移动端分支独立出来的仓库，只做安卓。把 **Wallpaper Engine（AppID 431960）创意工坊**里的壁纸打包成手机版 `.mpkg`，直接在 Wallpaper Engine 安卓客户端导入使用。
 
-交付形态：安卓 App（本分支唯一发布形态）。内置纯 JS 下载/打包引擎，不依赖 SteamCMD；Node 运行时随 APK 附带。源码另可 `node bin/wempkg.js` 运行命令行/网页界面用于开发调试。
+纹理/图像编解码与容器处理全部走 Rust 引擎（`rust/tex-cli`，APK 内为 `librusttex.so`）：DXT1/3/5 解码、LZ4 编解码、直通图物化、PNG/JPEG/GIF 解码、多 mip 整包转换。JS 侧只保留路由、断点续转与兼容层；Node 运行时与 ffmpeg 均随 APK 附带，不依赖 SteamCMD。源码可 `node bin/wempkg.js` 运行命令行/网页界面做开发调试。
 
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Android 17（arm64-v8a）
@@ -17,7 +17,7 @@
 | 内容范围 | 有 Steam 登录凭据时自动带上账号登录态，抓到的条目范围与桌面客户端一致（含成人分级内容）；未登录则退回匿名范围，界面会标注 |
 | 下载 | 纯 JS 引擎 `steamjs`：内置 Steam 登录 / manifest / depot 密钥 / CDN 分块下载；支持分块级断点续传、暂停继续、坏 CDN 节点自动剔除 |
 | 打包 | 生成手机容器 `.mpkg`：容器魔数替换、纹理按 DXT1/3/5/R8/RG88/直通图解码为 RGBA8 并 LZ4 压缩、着色器 GLSL ES 兼容改写（含结构性补丁）、`project.json`/`preview.gif` 补齐；支持画质档位、断点续转、默认剥离音频（检测到音频交互/频谱时自动保留，`--keep-audio` 强制保留、`--drop-audio` 强制剥离） |
-| 网页类壁纸 | 安卓客户端没有 Web 引擎，本工具把网页渲染成视频并按 `video` 类型封装；同时注入音频响应 API，音频可视化壁纸的频谱不再为 0 |
+| 网页类壁纸 | 安卓客户端没有 Web 引擎，本工具补成离线网页包（PWA：viewport、触屏适配、manifest、离线缓存），由 App 内置 WebView 打开 |
 | 下载中心 | 下载/打包在独立进程里跑，网页关掉也不中断；最多 3 条同时下载，带字节级进度条、速度与 ETA；队列落盘，重启后自动续跑 |
 | 安卓端 | 下载缓存放 `Android/data/com.wempkg.rs.app/files/downloads`，打包成功自动清理、失败保留续传；成品用 `content://` 直接拉起「导入壁纸引擎」 |
 
