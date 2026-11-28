@@ -47,12 +47,12 @@ git commit -m "chore(assets): 重打 nodejs-project.zip (<版本>)"
 git tag v<版本> && git push origin v<版本>
 ```
 
-`Release` 工作流会产出四件资产：APK、Windows 绿色版、源码包、发版说明。
-tag 里带 `beta` 只出 APK，绿色版与源码包会跳过。
+`Release` 工作流只产出移动端资产：安卓 APK + 发版说明。
+tag 里带 `beta` 时不建 Release，APK 留在本次 run 的 `android` artifact 里。
 
 ## 6. 发完自查
 
-- 三个 job 是否全绿；只剩 `Gradle ... is out of date` 这条 notice 属正常（AGP 8.13 还不兼容 Gradle 9）。
+- 两个 job（Android APK / Publish release）是否全绿；只剩 `Gradle ... is out of date` 这条 notice 属正常（AGP 8.13 还不兼容 Gradle 9）。
 - 下载 `we-mpkg-android-<版本>.apk`，拆 `assets/nodejs-project.zip` 看关键改动是否在里面
   （`python -c "import zipfile..."`，或直接看 zip 里对应文件的修改）。
 - 本机仓库 `git status -sb` 应为 `main...origin/main`，不带 ahead/behind。
@@ -61,4 +61,4 @@ tag 里带 `beta` 只出 APK，绿色版与源码包会跳过。
 
 - **同步本机时别先 `git reset --hard`**：本机连不上 GitHub，靠快照/bundle 同步，
   `reset --hard` 会把刚覆盖的文件还原回旧版；先 `git add -A` 提交，再核对。
-- PowerShell 脚本必须带 UTF-8 BOM（`build-portable.ps1` 尤其），JS 文件必须不带 BOM，测试有守卫。
+- PowerShell 脚本必须带 UTF-8 BOM，JS 文件必须不带 BOM，测试有守卫。

@@ -1882,10 +1882,11 @@ await testAsync('ensureHub：已有 hub 时直接复用（不重复拉起进程�
     assert.ok(js.includes("d.release.assets.apk"), '安卓应使用 APK 资产直链');
     assert.ok(js.includes('openExternal(link.href)'), 'APK 直链应交给系统浏览器打开');
   });
-  test('GitHub Actions 打 tag 自动构建 portable/APK 并发布', () => {
+  test('GitHub Actions 打 tag 自动构建 APK 并发布', () => {
     const wf = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
     assert.match(wf, /tags:\s*\n\s*- 'v\*'/);
-    assert.ok(wf.includes('build-portable.ps1'));
+    assert.ok(!wf.includes('build-portable.ps1'), '移动端分支不再构建 Windows 绿色版');
+    assert.ok(!wf.includes('we-mpkg-portable'), '发布附件里不该再出现绿色版');
     assert.ok(wf.includes('assembleRelease'));
     assert.ok(wf.includes('softprops/action-gh-release'));
     assert.ok(!wf.includes('pwpwsh'), 'shell 拼写错误会让任务直接失败');
@@ -2937,10 +2938,9 @@ test('ffmpeg 候选：只用新版，旧版 lite 彻底移除', () => {
     assert.ok(!String(p).includes('ffmpeg-lite'), '2018 的 ffmpeg-lite 不能再出现在候选里');
     assert.ok(!String(p).includes('npm-ff'), 'npm-ff（4.1.0 tarball）不应再被引用');
   }
-  // 新版路径仍在列表里（.cache/toolchain/ffmpeg + 绿色版 tools/ffmpeg），保证「装了就能用」
+  // 新版路径仍在列表里（.cache/toolchain/ffmpeg），保证「装了就能用」
   assert.ok(list.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
   assert.ok(wList.some((p) => p.includes(path.join('.cache', 'toolchain', 'ffmpeg'))));
-  assert.ok(list.some((p) => p.includes(path.join('tools', 'ffmpeg'))));
 });
 
 test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级', () => {
@@ -2949,7 +2949,6 @@ test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级'
   assert.ok(text.includes(help.DOWNLOAD_URL), '要给出下载地址');
   assert.ok(/https:\/\//.test(help.DOWNLOAD_URL));
   assert.ok(text.includes(path.join('.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe')), '要给出放置路径');
-  assert.ok(text.includes('tools\\ffmpeg\\ffmpeg.exe'), '绿色版的放置路径也要写');
   assert.ok(text.includes('WEM_FFMPEG'), '要提环境变量这个备选');
   const short = help.missingHelpShort();
   assert.ok(short.includes(help.DOWNLOAD_URL) && short.length < 400, '单行版要短，能塞进任务警告');
@@ -2958,15 +2957,9 @@ test('ffmpeg 缺失时给下载地址 + 安装位置 + 步骤，不静默降级'
   assert.ok(vsrc.includes('missingHelpShort()'), '打包警告要给安装指引');
   const wsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'webrender.js'), 'utf8');
   assert.ok(wsrc.includes('missingHelp()'), '编码 mp4 失败要给完整步骤');
-  // 绿色版脚本 / CI 都不能再引用 lite
-  const portable = fs.readFileSync(path.join(__dirname, '..', 'build-portable.ps1'), 'utf8');
-  assert.ok(!portable.includes("'.cache\\toolchain\\ffmpeg-lite"), 'build-portable.ps1 不能再取 lite');
+  // CI 仍不能回到 lite 目录
   const ci = fs.readFileSync(path.join(__dirname, '..', '.github', 'workflows', 'release.yml'), 'utf8');
   assert.ok(!/path: \.cache\/toolchain\/ffmpeg-lite/.test(ci), 'CI 缓存目录要改成新版路径');
-  // 说明文档要给安装方法
-  const green = fs.readFileSync(path.join(__dirname, '..', 'packaging', 'README-GREEN.txt'), 'utf8');
-  assert.ok(green.includes('ffmpeg-release-essentials.zip'), '绿色版说明里要有下载地址');
-  assert.ok(green.includes('tools\\ffmpeg\\ffmpeg.exe'));
 });
 
 test('发版说明集中在 release-notes/，根目录不再散落', () => {
@@ -3018,10 +3011,6 @@ test('脚本里不留开发机绝对路径：node / 工具链 / 调试脚本都�
   const tw = read(path.join('tools', 'test-webrender.js'));
   assert.ok(tw.includes('__dirname'), 'test-webrender.js 要用相对路径');
   assert.ok(!/D:[\/]SteamCMD/.test(tw), 'test-webrender.js 不能写死开发机路径');
-  // 桌面打包脚本：node 从参数或 PATH 探测
-  const portable = read('build-portable.ps1');
-  assert.ok(!/\$NodeExe\s*=\s*'[A-Za-z]:/.test(portable), 'build-portable.ps1 的 NodeExe 不能再有绝对路径默认值');
-  assert.ok(portable.includes('Get-Command node'), 'node 要能从 PATH 探测');
   // 安卓打包脚本：工具链 / node 都有明确来源与报错
   const apk = read(path.join('android', 'build-apk.ps1'));
   assert.ok(!/\$Toolchain\s*=\s*'[A-Za-z]:/.test(apk), 'build-apk.ps1 的 Toolchain 不能再默认绝对路径');
@@ -3036,8 +3025,6 @@ test('脚本里不留开发机绝对路径：node / 工具链 / 调试脚本都�
   const icons = read(path.join('android', 'make-icons.ps1'));
   assert.ok(!/D:\\SteamCMD/.test(icons), 'make-icons.ps1 不能写死开发机路径');
   assert.ok(icons.includes('$PSScriptRoot'), '路径要相对脚本自身');
-  // 绿色版脚本内置的 ffmpeg 只能是新版（不能回到 lite）
-  assert.ok(!portable.includes('ffmpeg-lite'), 'build-portable.ps1 不能再用 lite');
 });
 
 test('PowerShell 脚本必须带 UTF-8 BOM（否则 Windows PowerShell 5.1 会把中文注释解成乱码并报语法错）', () => {
@@ -3048,23 +3035,11 @@ test('PowerShell 脚本必须带 UTF-8 BOM（否则 Windows PowerShell 5.1 会�
       if (f.endsWith('.ps1')) files.push(path.join(dir, f));
     }
   }
-  assert.ok(files.length >= 3, '应该能找到几个 ps1 脚本');
+  assert.ok(files.length >= 2, '应该能找到几个 ps1 脚本');
   for (const f of files) {
     const head = fs.readFileSync(path.join(root, f)).subarray(0, 3);
     assert.ok(head[0] === 0xEF && head[1] === 0xBB && head[2] === 0xBF, `${f} 缺少 UTF-8 BOM`);
   }
-});
-
-test('绿色版分发要随附 Node 的 MIT 许可（缺官方 LICENSE 时有兜底）', () => {
-  const root = path.join(__dirname, '..');
-  const lic = path.join(root, 'licenses', 'NodeJS-MIT.txt');
-  assert.ok(fs.existsSync(lic), 'licenses/NodeJS-MIT.txt 应该存在');
-  const body = fs.readFileSync(lic, 'utf8');
-  assert.ok(/Permission is hereby granted, free of charge/.test(body), '要是 MIT 正文');
-  assert.ok(/Copyright Node\.js contributors/.test(body));
-  const ps = fs.readFileSync(path.join(root, 'build-portable.ps1'), 'utf8');
-  assert.ok(ps.includes("licenses\\NodeJS-MIT.txt"), '脚本要引用这份兜底');
-  assert.ok(!ps.includes('请手工补'), '不能只提示“请手工补”，得有实际兜底');
 });
 
 test('纹理断点续转：二次运行只按文件形态判断，零转换', () => {

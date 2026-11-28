@@ -17,13 +17,10 @@ function projectRoot() {
   return path.resolve(__dirname, '..');
 }
 
-/** 推荐放置位置：源码树 / 绿色版各自一个，候选列表里都会找 */
+/** 推荐放置位置：源码树 .cache 里一份，候选列表里会找 */
 function installPath(root = projectRoot()) {
   return path.join(root, '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe');
 }
-
-/** 绿色版（解压出来的 portable 目录）里的位置 */
-const PORTABLE_PATH = 'tools\\ffmpeg\\ffmpeg.exe';
 
 /** 多行完整说明：写进日志、错误信息、打包警告 */
 function missingHelp(root = projectRoot()) {
@@ -33,7 +30,6 @@ function missingHelp(root = projectRoot()) {
     `     其它平台从这里找：${HOMEPAGE}`,
     '  2. 解压下载的 zip，取出里面的 bin\\ffmpeg.exe（同目录的 ffprobe.exe 可一起放）',
     `  3. 放到这个位置：${installPath(root)}`,
-    `     绿色版则放到：${PORTABLE_PATH}`,
     '     或者设环境变量 WEM_FFMPEG=<ffmpeg.exe 的完整绝对路径>（优先级最高）',
     '  4. 重启 we-mpkg 即可；设置页可以点「测试连通性」旁边重新打开一次确认',
   ].join('\n');
@@ -41,7 +37,7 @@ function missingHelp(root = projectRoot()) {
 
 /** 单行版：塞进任务警告、HTTP 错误这种一行显示的地方 */
 function missingHelpShort(root = projectRoot()) {
-  return `缺少 ffmpeg：去 ${DOWNLOAD_URL} 下载，解压后把 bin\\ffmpeg.exe 放到 ${installPath(root)}（绿色版放 ${PORTABLE_PATH}），或设 WEM_FFMPEG=<路径>，然后重启`;
+  return `缺少 ffmpeg：去 ${DOWNLOAD_URL} 下载，解压后把 bin\\ffmpeg.exe 放到 ${installPath(root)}，或设 WEM_FFMPEG=<路径>，然后重启`;
 }
 
-module.exports = { DOWNLOAD_URL, HOMEPAGE, PORTABLE_PATH, installPath, missingHelp, missingHelpShort, projectRoot };
+module.exports = { DOWNLOAD_URL, HOMEPAGE, installPath, missingHelp, missingHelpShort, projectRoot };

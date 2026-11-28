@@ -1,6 +1,7 @@
 name: Release
 
-# 打一个 v 开头的 tag（例如 v2.2.0）就自动构建并发布三件套。
+# 打一个 v 开头的 tag（例如 v3.0.0）就自动构建安卓 APK 并按需要发布。
+# 本分支只做移动端：不再产出 Windows 绿色版与源码包。
 # 也可以手动触发，填写一个已存在的 tag。
 on:
   push:
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（必须已存在，如 v2.2.0）'
+        description: '要发布的 tag（必须已存在，如 v3.0.0）'
         required: true
       publish_beta:
         description: 'beta tag 是否也发布到 Releases（默认否：beta 只留 Actions 产物，测得更快）'
@@ -29,101 +30,6 @@ env:
   ANDROID_BUILD_TOOLS: '35.0.0'
 
 jobs:
-  portable:
-    name: Portable (Windows)
-    runs-on: windows-latest
-    # beta 版本（tag 里带 beta）只出安卓 APK，跳过 Windows 绿色版和源码包
-    if: ${{ !contains(github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name, 'beta') }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - uses: actions/setup-node@v7
-        with:
-          node-version: '24'
-          cache: npm
-
-      - name: Resolve version
-        shell: pwsh
-        run: |
-          $tag = if ("${{ github.event_name }}" -eq 'workflow_dispatch') { "${{ inputs.tag }}" } else { "${{ github.ref_name }}" }
-          $ver = $tag -replace '^v', ''
-          "VERSION=$ver" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-          "TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Install dependencies
-        run: npm ci
-
-      # ffmpeg 二进制每次都要从 gyan.dev 拉，缓存一下（key 变了会重新下）
-      # 目录只用 .cache/toolchain/ffmpeg/bin（新版）；2018 的 ffmpeg-lite 已废弃
-      - name: Cache ffmpeg binary
-        uses: actions/cache@v5
-        with:
-          path: .cache/toolchain/ffmpeg/bin
-          key: ffmpeg-win-${{ runner.os }}-v2
-
-      - name: Fetch ffmpeg (essentials build)
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $dst = '.cache\toolchain\ffmpeg\bin\ffmpeg.exe'
-          if (Test-Path $dst) {
-            Write-Host 'ffmpeg: 命中缓存，跳过下载'
-          } else {
-            New-Item -ItemType Directory -Force -Path .cache\toolchain\ffmpeg\bin | Out-Null
-            curl.exe -L --retry 3 -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
-            Expand-Archive ffmpeg.zip -DestinationPath ffmpeg -Force
-            $exe = Get-ChildItem ffmpeg -Recurse -Filter ffmpeg.exe | Select-Object -First 1
-            Copy-Item $exe.FullName $dst -Force
-            Remove-Item ffmpeg.zip -Force
-            Remove-Item ffmpeg -Recurse -Force
-          }
-          & $dst -version | Select-Object -First 1
-
-      - name: Build rust-tex (windows)
-        run: |
-          rustup target add x86_64-pc-windows-msvc
-          cargo build --release --target x86_64-pc-windows-msvc --manifest-path rust/tex-cli/Cargo.toml
-          copy rust\tex-cli\target\x86_64-pc-windows-msvc\release\rust-tex.exe bin\rust-tex.exe
-          Get-Item bin\rust-tex.exe | Select-Object Name, Length
-
-      - name: Build portable zip
-        shell: pwsh
-        run: |
-          $node = (Get-Command node).Source
-          ./build-portable.ps1 -Version $env:VERSION -NodeExe $node
-
-      - name: Build source zip
-        shell: pwsh
-        run: |
-          git archive --format=zip -o "dist/we-mpkg-src-$env:VERSION.zip" --prefix=we-mpkg/ HEAD
-
-      - name: Release notes
-        shell: pwsh
-        run: |
-          $lines = @(
-            "we-mpkg $env:VERSION",
-            "============",
-            "由 GitHub Actions 自动构建（tag $env:TAG）。",
-            "",
-            "- 绿色版：解压 we-mpkg-portable-$env:VERSION.zip，双击 start.bat",
-            "- 安卓：安装 we-mpkg-android-$env:VERSION.apk（arm64-v8a，覆盖安装保留登录凭据）",
-            "- 源码：we-mpkg-src-$env:VERSION.zip",
-            "",
-            "构建提交：${{ github.sha }}"
-          )
-          $lines -join "`r`n" | Set-Content -Path "dist/发布说明-$env:VERSION.txt" -Encoding utf8
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: portable
-          if-no-files-found: error
-          path: |
-            dist/we-mpkg-portable-*.zip
-            dist/we-mpkg-src-*.zip
-            dist/发布说明-*.txt
-
   android:
     name: Android APK
     runs-on: ubuntu-latest
@@ -295,10 +201,8 @@ jobs:
   release:
     name: Publish release
     runs-on: ubuntu-latest
-    needs: [portable, android]
-    # beta 时 portable 会被跳过，只要没失败就继续发布
-    # 注意：依赖 job 被 skip 时，默认会把依赖它的 job 一起 skip，所以必须带 always()
-    if: ${{ always() && needs.android.result == 'success' && needs.portable.result != 'failure' && needs.portable.result != 'cancelled' }}
+    needs: [android]
+    if: ${{ always() && needs.android.result == 'success' }}
     steps:
       # 需要仓库里的 release-notes/RELEASE-NOTES-<版本>.txt 作正文，所以要先 checkout
       - uses: actions/checkout@v5
@@ -337,7 +241,7 @@ jobs:
           if [ -f "release-notes/RELEASE-NOTES-${VERSION}.txt" ]; then
             cp "release-notes/RELEASE-NOTES-${VERSION}.txt" "dist/RELEASE-NOTES-${VERSION}.txt"
           else
-            for f in dist/发布说明-*.txt; do [ -e "$f" ] && cp "$f" "dist/RELEASE-NOTES-${VERSION}.txt" || true; done
+            :
           fi
           rm -f dist/发布说明-*.txt
           if [ -s "dist/RELEASE-NOTES-${VERSION}.txt" ]; then
@@ -347,13 +251,10 @@ jobs:
           fi
           {
             printf '\n## 下载\n\n'
-            # beta 版本只构建安卓 APK，不列绿色版/源码包的下载项
             if [ "$IS_BETA" = "1" ]; then
               printf -- '- 安卓（测试版）：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n\n' "$VERSION"
             else
-              printf -- '- 绿色版：解压 `we-mpkg-portable-%s.zip`，双击 `start.bat`\n' "$VERSION"
-              printf -- '- 安卓：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n' "$VERSION"
-              printf -- '- 源码：`we-mpkg-src-%s.zip`\n\n' "$VERSION"
+              printf -- '- 安卓：安装 `we-mpkg-android-%s.apk`（arm64-v8a，覆盖安装保留登录凭据）\n\n' "$VERSION"
             fi
             printf '构建提交：%s\n' "$GITHUB_SHA"
           } >> dist/release-body.md
@@ -370,13 +271,11 @@ jobs:
           # 正文由上一步从 RELEASE-NOTES-<版本>.txt 拼出来，再附上下载说明
           body_path: dist/release-body.md
           files: |
-            dist/we-mpkg-portable-*.zip
             dist/we-mpkg-android-*.apk
-            dist/we-mpkg-src-*.zip
             dist/RELEASE-NOTES-*.txt
           fail_on_unmatched_files: true
 
-      # beta 版本只构建安卓 APK：单独一步，避免 fail_on_unmatched_files 因为缺少绿色版/源码包报错
+      # beta 版本只构建安卓 APK：单独一步，避免 fail_on_unmatched_files 因附件不匹配报错
       # 默认不发布（PUBLISH_BETA=false），APK 留在本次 run 的 android artifact 里；需要发 Release 时手动触发并勾选 publish_beta
       - uses: softprops/action-gh-release@v3
         if: ${{ env.IS_BETA == '1' && env.PUBLISH_BETA == 'true' }}
