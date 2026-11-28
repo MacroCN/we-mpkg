@@ -2612,10 +2612,7 @@ test('纹理转换：像素行序保持原样，移动端形态不被二次编�
   assert.strictEqual(px[lastRow], 255, '最后一行应为红');
 
   // 已是移动端形态（单 mip RGBA8）不能被重新编码/翻转
-  const mobile = t.writeMobileTex({
-    flags: 0, unk: 0,
-    images: [{ pixels: rgba, width: W, height: H }],
-  });
+  const mobile = out.bytes; // 转换产物本身就是单 mip RGBA8 的移动端形态
   const kept = t.convertTexBuffer(mobile, { preset: 'original' });
   assert.strictEqual(kept.route, 'keep-mobile');
   assert.ok(!kept.changed, '移动端形态应原样保留');
@@ -2664,7 +2661,7 @@ test('筛选中英对照：官方中文页按 tag id 对齐生成译名，请求
 });
 
 /** 黄金样本集：按 manifest 重算一遍，逐字节对照冻结的输出 */
-function replayGolden(forceRustPng) {
+function replayGolden() {
   const rt = require('../src/rusttex');
   const dxtlib = require('../src/dxt');
   const lz4lib = require('../src/lz4');
@@ -2683,11 +2680,9 @@ function replayGolden(forceRustPng) {
     } else if (c.kind === 'lz4-decompress') {
       bytes = lz4lib.decompress(input, c.expectedSize);
     } else if (c.kind === 'png-decode') {
-      const fast = forceRustPng ? rt.pngDecode(input, c.width, c.height) : null;
-      bytes = fast || texlib.decodePng(input).data;
+      bytes = rt.pngDecode(input, c.width, c.height);
     } else if (c.kind === 'jpeg-decode') {
-      const fast = forceRustPng ? rt.jpegDecode(input).data : null;
-      bytes = fast || texlib.decodeJpeg(input).data;
+      bytes = rt.jpegDecode(input).data;
     } else if (c.kind === 'tex-convert') {
       const r = texlib.convertTexBuffer(input, {
         relPath: 'materials/黄金样本.tex',
@@ -2703,58 +2698,24 @@ function replayGolden(forceRustPng) {
   return { manifest, out };
 }
 
-test('黄金样本集（阶段 0）：格式输出逐字节锁定，JS 与 Rust 两条路径都要对齐', () => {
+test('黄金样本集（阶段 0）：格式输出逐字节锁定（全部经 Rust 引擎）', () => {
   const rt = require('../src/rusttex');
   const crypto = require('crypto');
-  const dir = path.join(__dirname, 'golden', 'format');
-
-  // 第一条：默认路径（装了 rust-tex 就走 Rust，否则 JS）
-  if (rt.available()) {
-    const { manifest, out } = replayGolden(true);
-    for (const { name, bytes } of out) {
-      const c = manifest.cases.find((x) => x.name === name);
-      const sha = crypto.createHash('sha256').update(bytes).digest('hex');
-      assert.strictEqual(bytes.length, c.outputBytes, `${name}: Rust 路径输出长度不符`);
-      assert.strictEqual(sha, c.outputSha256, `${name}: Rust 路径输出与黄金样本不一致`);
-    }
+  assert.ok(rt.available(), 'Rust 引擎是必需组件：先 cargo build，或设置 WE_RUST_TEX');
+  const { manifest, out } = replayGolden();
+  for (const { name, bytes } of out) {
+    const c = manifest.cases.find((x) => x.name === name);
+    const sha = crypto.createHash('sha256').update(bytes).digest('hex');
+    assert.strictEqual(bytes.length, c.outputBytes, `${name}: 输出长度不符`);
+    assert.strictEqual(sha, c.outputSha256, `${name}: 输出与黄金样本不一致`);
   }
-
-  // 第二条：纯 JS 参照实现（DXT / LZ4 / DXT 整包）必须与同一份基准逐字节一致。
-  // PNG/JPEG 解码已整体搬到 Rust，运行时不再保留 JS 实现，这两类只走第一条（Rust + 冻结的黄金输出）。
-  const dxtlib = require('../src/dxt');
-  const lz4lib = require('../src/lz4');
-  const texlib = require('../src/tex');
-  const manifest2 = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'));
-  const jsCases = manifest2.cases.filter((c) => c.kind === 'dxt-decode' || c.kind === 'lz4-compress'
-    || c.kind === 'lz4-decompress' || (c.kind === 'tex-convert' && !/png|jpeg|gif/i.test(c.name)));
-  assert.ok(jsCases.length >= 8, `JS 参照用例太少: ${jsCases.length}`);
-  for (const c of jsCases) {
-    const input = fs.readFileSync(path.join(dir, c.input));
-    let bytes;
-    if (c.kind === 'dxt-decode') {
-      const fmtId = { dxt1: dxtlib.TEX_FORMAT.DXT1, dxt3: dxtlib.TEX_FORMAT.DXT3, dxt5: dxtlib.TEX_FORMAT.DXT5 }[c.format];
-      bytes = dxtlib.decode(input, fmtId, c.width, c.height);
-    } else if (c.kind === 'lz4-compress') {
-      bytes = lz4lib.compress(input);
-    } else if (c.kind === 'lz4-decompress') {
-      bytes = lz4lib.decompress(input, c.expectedSize);
-    } else {
-      const r = texlib.convertTexBuffer(input, {
-        relPath: 'materials/黄金样本.tex',
-        preset: c.preset === 'balanced' ? 'balanced' : 'default',
-        ...(typeof c.scale === 'number' ? { scale: c.scale } : {}),
-      });
-      bytes = r.bytes || input;
-    }
-    assert.ok(bytes.equals(fs.readFileSync(path.join(dir, c.output))), `${c.name}: JS 参照输出与黄金样本不一致`);
-  }
-  assert.ok(manifest2.cases.length >= 19, '黄金样本集至少要覆盖 19 个格式用例');
+  assert.ok(manifest.cases.length >= 20, '黄金样本集至少要覆盖 20 个格式用例');
 });
 
-test('纹理加速引擎状态：info() 给出 Rust/JS、路径与计数', () => {
+test('纹理加速引擎状态：info() 给出引擎路径与计数（只有 Rust 一条路）', () => {
   const info = require('../src/rusttex').info();
-  assert.ok(info.engine === 'Rust' || info.engine === 'JS');
-  assert.strictEqual(typeof info.enabled, 'boolean');
+  assert.strictEqual(info.engine, 'Rust', '引擎是必需组件，info() 只应报告 Rust');
+  assert.strictEqual(info.enabled, true);
   assert.ok(info.stats && typeof info.stats.tex === 'number');
   assert.strictEqual(typeof info.stats.png, 'number', '统计里要有 png 解码计数');
   const texSrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'tex.js'), 'utf8');
@@ -2767,22 +2728,18 @@ test('纹理加速引擎状态：info() 给出 Rust/JS、路径与计数', () =>
   assert.ok(probeSrc.includes('/proc/self/maps'), '预编译 JNI 没设环境变量时要能从 maps 反查原生库目录');
 });
 
-test('Rust 纹理 CLI（阶段 0）：探测候选含 .cache/toolchain，可一键关闭回落', () => {
+test('Rust 纹理 CLI：探测候选含 .cache/toolchain，缺引擎时直接报错（没有 JS 回落）', () => {
   const rt = require('../src/rusttex');
   const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'rusttex.js'), 'utf8');
   assert.ok(/['"]\.cache['"],\s*['"]toolchain['"],\s*['"]bin['"]/.test(src), '探测要覆盖 .cache/toolchain/bin');
   assert.ok(src.includes('WE_RUST_TEX'), '要支持环境变量显式指定');
-  assert.ok(src.includes('WE_TEX_RUST'), '要保留回归测试用的 JS 对照开关');
-
-  const old = process.env.WE_TEX_RUST;
-  process.env.WE_TEX_RUST = 'off';
-  rt._reset();
-  try {
-    assert.strictEqual(rt.available(), false, 'WE_TEX_RUST=off 时不应启用 Rust');
-    assert.throws(() => rt.dxtDecode(Buffer.alloc(8), 'dxt1', 4, 4), /rust-tex/, '没有引擎要直接报错，不能返回 null 让调用方悄悄回落');
-  } finally {
-    if (old === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = old;
-    rt._reset();
+  assert.ok(!src.includes('WE_TEX_RUST'), 'JS 对照开关已随参照实现一起删除');
+  assert.ok(/未找到可用的 rust-tex/.test(src), '缺引擎时必须给明确错误');
+  assert.ok(rt.available(), '当前环境应能探测到 rust-tex（先 cargo build 或设置 WE_RUST_TEX）');
+  // 语法层面确认三个模块都没有 JS 实现残留
+  for (const f of ['dxt.js', 'lz4.js']) {
+    const body = fs.readFileSync(path.join(__dirname, '..', 'src', f), 'utf8');
+    assert.ok(body.length < 3000, `${f} 应只剩薄封装（当前 ${body.length} 字节）`);
   }
 });
 
@@ -3134,14 +3091,12 @@ test('纹理断点续转：二次运行只按文件形态判断，零转换', ()
   }
 });
 
-test('Rust LZ4 压缩走 stdin/stdout，结果与本地实现逐字节一致', () => {
+test('Rust LZ4 压缩走 stdin/stdout，结果可原样还原', () => {
   const rt = require('../src/rusttex');
-  if (!rt.available()) return;
-  const lz4lib = require('../src/lz4');
+  assert.ok(rt.available(), 'Rust 引擎是必需组件');
   const raw = require('crypto').randomBytes(1 << 20);
   const fast = rt.lz4Compress(raw);
   assert.ok(Buffer.isBuffer(fast) && fast.length > 0, '流式压缩要有输出');
-  assert.ok(fast.equals(lz4lib.compress(raw)), '流式压缩与本地 LZ4 实现不一致');
   assert.ok(rt.lz4Decompress(fast, raw.length).equals(raw), '压缩结果要能原样还原');
 });
 
@@ -3203,34 +3158,20 @@ test('tex-batch 并行与单线程产物一致', () => {
   }
 });
 
-test('目录批量转换（Rust 一个进程跑完整包）产物与 JS 实现一致', () => {
+test('目录批量转换（Rust 一个进程跑完整包）', () => {
   const rt = require('../src/rusttex');
   const texlib = require('../src/tex');
-  if (!rt.available()) return; // 没装引擎的平台由黄金样本测试给出提示
+  assert.ok(rt.available(), 'Rust 引擎是必需组件');
   const src = fs.readFileSync(path.join(__dirname, 'golden', 'format', 'tex-convert-dxt1-4x4', 'in.bin'));
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'we-batch-'));
-  const names = ['a.tex', 'b.tex'];
-  for (const n of names) fs.writeFileSync(path.join(dir, n), src);
-
-  const fast = texlib.convertTexDir(dir, { preset: 'default', onLog: () => {} });
-  assert.strictEqual(fast.stats.converted, 2, '两张纹理都应被转换');
-  assert.strictEqual(fast.stats.routes['convert-image'], 2, '应走整包 Rust 路线');
-  const fastBytes = names.map((n) => fs.readFileSync(path.join(dir, n)));
-
-  for (const n of names) fs.writeFileSync(path.join(dir, n), src);
-  const oldEnv = process.env.WE_TEX_RUST;
-  process.env.WE_TEX_RUST = 'off';
-  rt._reset();
   try {
-    const js = texlib.convertTexDir(dir, { preset: 'default', onLog: () => {} });
-    assert.strictEqual(js.stats.converted, 2, 'JS 实现也应转换两张');
-    names.forEach((n, i) => {
-      const bytes = fs.readFileSync(path.join(dir, n));
-      assert.ok(bytes.equals(fastBytes[i]), `${n}: 批量产物与 JS 产物不一致`);
-    });
+    const names = ['a.tex', 'b.tex'];
+    for (const n of names) fs.writeFileSync(path.join(dir, n), src);
+    const fast = texlib.convertTexDir(dir, { preset: 'default', onLog: () => {} });
+    assert.strictEqual(fast.stats.converted, 2, '两张纹理都应被转换');
+    assert.strictEqual(fast.stats.routes['convert-image'], 2, '应走整包 Rust 路线');
+    for (const n of names) assert.ok(texlib.verifyMobileTex(fs.readFileSync(path.join(dir, n)), {}));
   } finally {
-    if (oldEnv === undefined) delete process.env.WE_TEX_RUST; else process.env.WE_TEX_RUST = oldEnv;
-    rt._reset();
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

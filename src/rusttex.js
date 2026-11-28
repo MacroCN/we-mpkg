@@ -7,8 +7,8 @@
  * rust-tex CLI 桥（阶段 1：DXT 解码 + LZ4 块编解码）。
  *
  * 调用方式完全对齐 ffmpeg：execFileSync + 参数数组，输入输出走临时文件，
- * 结果从 stdout 的 JSON 读。找不到可执行文件、版本不对、或执行失败时，
- * 调用方一律回落到纯 JS 实现，属于零风险灰度。
+ * 结果从 stdout 的 JSON 读。Rust 是必需组件：找不到可执行文件直接报错，
+ * 3.0.4 起所有 JS 参照实现（DXT / LZ4 / 逐帧转换管线）已删除，不再有回落。
  *
  * 探测顺序（第一个能跑通的胜出）：
  *   1. 环境变量 WE_RUST_TEX（显式指定）
@@ -89,7 +89,7 @@ function usable(file) {
   attempts.push(rec);
   try {
     if (!fs.statSync(file).isFile()) return false;
-    // 安卓解包出来的文件没有执行位，补一下（失败就算了，exec 会报错回落 JS）
+    // 安卓解包出来的文件没有执行位，补一下（失败就算了，exec 时会报错）
     try { fs.chmodSync(file, 0o755); } catch { /* ignore */ }
     const out = execFileSync(file, ['version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
     const info = JSON.parse(out.trim().split('\n').pop());
@@ -109,7 +109,6 @@ function locate() {
   if (probe !== undefined) return probe;
   probe = null;
   attempts = [];
-  if (process.env.WE_TEX_RUST === 'off') return probe;
   for (const file of candidates()) {
     if (usable(file)) { probe = file; break; }
   }
@@ -117,11 +116,6 @@ function locate() {
 }
 
 function available() {
-  return locate() !== null;
-}
-
-/** 显式开关：WE_TEX_RUST=off 只给回归测试对照 JS 实现用，生产路径不该走它 */
-function enabled() {
   return locate() !== null;
 }
 
@@ -162,7 +156,7 @@ function tmpDir() {
   if (tmpRoot) return tmpRoot;
   // 安卓规范：临时文件放应用私有 cacheDir（context.getCacheDir()）。
   // 环境变量可能因为旧 JNI 没设上，这里按「JNI 约定变量 → 从项目路径反推应用 cacheDir
-  // → 项目 .cache → 系统临时目录」的顺序找，都失败就放弃（回落 JS），绝不往 /tmp 写。
+  // → 项目 .cache → 系统临时目录」的顺序找，都失败就放弃（调用方会报错），绝不往 /tmp 写。
   const projectRoot = path.resolve(__dirname, '..');            // <files>/nodejs-project
   const filesDir = path.resolve(projectRoot, '..');             // <files>
   const appRoot = path.resolve(filesDir, '..');                 // /data/data/<pkg>
@@ -217,7 +211,7 @@ function scratch(name) {
   return path.join(root, `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}-${name}`);
 }
 
-/** DXT 块解码 -> RGBA8；失败返回 null（调用方回落 JS） */
+/** DXT 块解码 -> RGBA8；失败返回 null（调用方转成明确错误） */
 function dxtDecode(buf, fmtName, width, height) {
   const bin = requireEngine();
   const inFile = scratch('dxt.bin');
@@ -428,7 +422,6 @@ process.on('exit', cleanup);
 
 module.exports = {
   available,
-  enabled,
   requireEngine,
   info,
   stats,
@@ -440,6 +433,4 @@ module.exports = {
   texConvertBatch,
   pngDecode,
   jpegDecode,
-  // 测试用：重置探测缓存
-  _reset() { probe = undefined; },
 };

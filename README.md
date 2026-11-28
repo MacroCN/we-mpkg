@@ -2,7 +2,7 @@
 
 **Rust 重构版安卓客户端**：从 `we-mpkg` 3.0.0 移动端分支独立出来的仓库，只做安卓。把 **Wallpaper Engine（AppID 431960）创意工坊**里的壁纸打包成手机版 `.mpkg`，直接在 Wallpaper Engine 安卓客户端导入使用。
 
-纹理/图像编解码与容器处理全部走 Rust 引擎（`rust/tex-cli`，APK 内为 `librusttex.so`）：DXT1/3/5 解码、LZ4 编解码、直通图物化、PNG/JPEG/GIF 解码、多 mip 整包转换。JS 侧只保留路由、断点续转与兼容层；Node 运行时与 ffmpeg 均随 APK 附带，不依赖 SteamCMD。源码可 `node bin/wempkg.js` 运行命令行/网页界面做开发调试。
+纹理/图像编解码与容器处理全部走 Rust 引擎（`rust/tex-cli`，APK 内为 `librusttex.so`）：DXT1/2/3/4/5 解码、LZ4 编解码、直通图物化、PNG/JPEG/GIF 解码、多 mip 整包转换。JS 侧只保留路由、断点续转与兼容层，**没有任何格式解码/编码的 JS 回退**（缺引擎直接报错）；Node 运行时与 ffmpeg 均随 APK 附带，不依赖 SteamCMD。源码可 `node bin/wempkg.js` 运行命令行/网页界面做开发调试。
 
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
 - 已验证平台：Android 17（arm64-v8a）

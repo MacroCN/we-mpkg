@@ -18,7 +18,7 @@
  * 2.0 的处理原则（对齐官方「桌面版导出手机版」的思路）：
  *   1) 先判断文件是不是已经「移动端能读」，能读就原样保留，不为转换而转换
  *   2) 不能读的按类型分流：直通图解码、DXT 解码、原始像素重封装，统一输出
- *      RGBA8888 + 单 mip + LZ4（压不动就退回未压缩，见 writeMobileTex）
+ *      RGBA8888 + 单 mip + LZ4（压不动就退回未压缩，由 Rust tex-convert 决定）
  *   3) 解码前先算像素预算，超预算就保留原文件并明确告警，绝不把内存打爆
  *   4) 降采样按「整包统一倍率」：同一张壁纸里所有可缩放的静态纹理用同一个比例，
  *      不能各自按自己的尺寸算，否则 8K 背景压到 2K、512 贴图仍原尺寸，图层缩放就对不上；
@@ -36,7 +36,6 @@
  */
 const fs = require('fs');
 const path = require('path');
-const lz4 = require('./lz4');
 const videoUtil = require('./video');
 
 /** 同目录临时文件 + rename，避免中断时留下半截 .tex；失败时清掉临时文件 */
@@ -50,7 +49,6 @@ function writeFileAtomic(file, bytes) {
     throw e;
   }
 }
-const dxt = require('./dxt');
 const rusttex = require('./rusttex');
 
 // ---- 枚举（数值对照 notscuffed/repkg：TexFormat / TexFlags / FreeImageFormat）----
@@ -353,118 +351,6 @@ function decodeJpeg(buf) {
 }
 
 
-/** 按载荷首字节猜图种，兜住 imageFormat 写错的包 */
-function decodeImage(buf, opts = {}) {
-  if (buf.length > 8 && buf.readUInt32BE(0) === 0x89504e47) {
-    const png = decodePng(buf);
-    if (!png) lastDecodeError = lastDecodeError || 'PNG 解码失败';
-    return png;
-  }
-  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8) return decodeJpeg(buf, opts);
-  lastDecodeError = '既不是 PNG 也不是 JPEG';
-  return null;
-}
-
-// ---- 像素处理 ----
-/** 裁到左上角 w×h（头部声明的逻辑尺寸可能比 mip 小） */
-function cropRgba(pixels, srcW, srcH, dstW, dstH) {
-  if (srcW === dstW && srcH === dstH) return pixels;
-  if (srcW < dstW || srcH < dstH) throw new Error(`裁剪尺寸大于原图: ${srcW}x${srcH} -> ${dstW}x${dstH}`);
-  const out = Buffer.alloc(checkedSize(dstW, dstH, 4));
-  const rowBytes = dstW * 4;
-  for (let y = 0; y < dstH; y++) {
-    pixels.copy(out, y * rowBytes, y * srcW * 4, (y * srcW + dstW) * 4);
-  }
-  return out;
-}
-
-/** 面积平均降采样（比最近邻稳，观感与官方降采样接近） */
-function resizeAreaAverage(pixels, srcW, srcH, dstW, dstH) {
-  if (srcW === dstW && srcH === dstH) return pixels;
-  if (dstW <= 0 || dstH <= 0 || dstW > srcW || dstH > srcH) throw new Error('降采样尺寸非法');
-  const out = Buffer.alloc(checkedSize(dstW, dstH, 4));
-  const xMap = new Int32Array(dstW + 1);
-  for (let x = 0; x <= dstW; x++) xMap[x] = Math.floor((x * srcW) / dstW);
-  for (let y = 0; y < dstH; y++) {
-    const top = Math.floor((y * srcH) / dstH);
-    const bottom = Math.max(top + 1, Math.floor(((y + 1) * srcH) / dstH));
-    for (let x = 0; x < dstW; x++) {
-      const left = xMap[x];
-      const right = Math.max(left + 1, xMap[x + 1]);
-      const count = (right - left) * (bottom - top);
-      const di = (y * dstW + x) * 4;
-      let r = 0, g = 0, b = 0, a = 0;
-      for (let sy = top; sy < bottom; sy++) {
-        let si = (sy * srcW + left) * 4;
-        for (let sx = left; sx < right; sx++) {
-          r += pixels[si]; g += pixels[si + 1]; b += pixels[si + 2]; a += pixels[si + 3];
-          si += 4;
-        }
-      }
-      out[di] = Math.floor((r + count / 2) / count);
-      out[di + 1] = Math.floor((g + count / 2) / count);
-      out[di + 2] = Math.floor((b + count / 2) / count);
-      out[di + 3] = Math.floor((a + count / 2) / count);
-    }
-  }
-  return out;
-}
-
-/** R8 灰度 -> RGBA */
-function expandR8(pixels, width, height) {
-  const n = width * height;
-  const out = Buffer.alloc(n * 4);
-  for (let i = 0; i < n; i++) {
-    const v = pixels[i];
-    out[i * 4] = v; out[i * 4 + 1] = v; out[i * 4 + 2] = v; out[i * 4 + 3] = 255;
-  }
-  return out;
-}
-
-/** RG88 -> RGBA（R=粗、G=细，B 置 0，与 repkg-Re 的物化规则一致） */
-function expandRg88(pixels, width, height) {
-  const n = width * height;
-  const out = Buffer.alloc(n * 4);
-  for (let i = 0; i < n; i++) {
-    out[i * 4] = pixels[i * 2];
-    out[i * 4 + 1] = pixels[i * 2 + 1];
-    out[i * 4 + 2] = 0;
-    out[i * 4 + 3] = 255;
-  }
-  return out;
-}
-
-/** 把某个 mip 的载荷解成逻辑尺寸的 RGBA8（按头部 format） */
-function decodeMip(mip, format, logicalW, logicalH) {
-  let payload = mip.bytes;
-  if (mip.lz4 === 1) {
-    const expected = mip.decompressedBytes || 0;
-    if (expected <= 0) throw new Error('LZ4 载荷缺少解压长度');
-    payload = lz4.decompress(payload, expected);
-  }
-  let pixels;
-  if (DXT_FORMATS.has(format)) {
-    const need = dxt.payloadSize(format, mip.width, mip.height);
-    if (payload.length !== need) throw new Error(`DXT 载荷长度不符: ${payload.length} != ${need}`);
-    pixels = dxt.decode(payload, format, mip.width, mip.height);
-  } else if (format === TEX_FORMAT.RGBA8888) {
-    const need = checkedSize(mip.width, mip.height, 4);
-    if (payload.length < need) throw new Error(`RGBA 载荷不足: ${payload.length} < ${need}`);
-    pixels = payload.subarray(0, need);
-  } else if (format === TEX_FORMAT.R8) {
-    const need = checkedSize(mip.width, mip.height, 1);
-    if (payload.length < need) throw new Error(`R8 载荷不足: ${payload.length} < ${need}`);
-    pixels = expandR8(payload, mip.width, mip.height);
-  } else if (format === TEX_FORMAT.RG88) {
-    const need = checkedSize(mip.width, mip.height, 2);
-    if (payload.length < need) throw new Error(`RG88 载荷不足: ${payload.length} < ${need}`);
-    pixels = expandRg88(payload, mip.width, mip.height);
-  } else {
-    throw new Error(`不支持的源格式: ${format}`);
-  }
-  return cropRgba(pixels, mip.width, mip.height, logicalW, logicalH);
-}
-
 // ---- 语义判定：数据图不许有损 ----
 const DATA_TOKENS = new Set([
   'normal', 'normals', 'nrm', 'bump', 'mask', 'masks', 'alpha', 'opacity', 'spec', 'specular',
@@ -566,66 +452,6 @@ function uniformScale(maxSourceDim, preset) {
   return scale > 1 ? 1 : scale;
 }
 
-/** 目标尺寸：source 尺寸 × 统一倍率（只缩不放） */
-function targetSize(width, height, scale) {
-  const s = scale > 0 && scale < 1 ? scale : 1;
-  return {
-    width: Math.max(1, Math.floor(width * s)),
-    height: Math.max(1, Math.floor(height * s)),
-  };
-}
-
-/**
- * 写移动端 TEX（TEXB0004 + imageFormat=-1 + 单 mip + LZ4）。
- * 压缩后反而更大时退回未压缩（lz4=0），移动端两种都能读。
- */
-function writeMobileTex({ flags, unk, images, framesTail }) {
-  if (!images.length) throw new Error('没有可写入的图像');
-  const first = images[0];
-  // imageWidth/Height 必须和真实 mip 尺寸一致：手机端按这两个字段决定纹理上传大小，
-  // 写成和载荷不同的值会按错误 stride 采样。需要保持图层大小的纹理由场景 scale 补偿。
-  const texW = first.width;
-  const texH = first.height;
-  const imgW = texW;
-  const imgH = texH;
-  const parts = [
-    writeNString('TEXV0005'),
-    writeNString('TEXI0001'),
-    Buffer.concat([
-      i32(TEX_FORMAT.RGBA8888),
-      i32(flags),
-      i32(texW),
-      i32(texH),
-      i32(imgW),
-      i32(imgH),
-      i32(unk),
-    ]),
-    writeNString('TEXB0004'),
-    i32(images.length),
-    i32(FREE_IMAGE.UNKNOWN),
-    i32(0),
-  ];
-
-  for (const im of images) {
-    const raw = im.pixels;
-    if (raw.length !== checkedSize(im.width, im.height, 4)) throw new Error('像素长度与尺寸不符');
-    // 压缩也走 Rust（流式，不必写临时文件）；WE_TEX_RUST=off 的纯 JS 参照测试才用本地实现
-    const compressed = rusttex.enabled() ? rusttex.lz4Compress(raw) : lz4.compress(raw);
-    const useLz4 = compressed.length < raw.length - 16; // 压不动就别压，省解码开销
-    const payload = useLz4 ? compressed : raw;
-    parts.push(i32(1));
-    parts.push(Buffer.concat([
-      i32(im.width), i32(im.height),
-      i32(useLz4 ? 1 : 0),
-      i32(raw.length),
-      i32(payload.length),
-    ]));
-    parts.push(payload);
-  }
-  if (framesTail && framesTail.length) parts.push(framesTail);
-  return Buffer.concat(parts);
-}
-
 /** 自校验：重新解析输出，确认移动端真的能读。不通过就抛错（调用方回退原文件）。 */
 function verifyMobileTex(buf, expect = {}) {
   const tex = parseTex(buf);
@@ -722,7 +548,7 @@ function rustPacketJob(buf, opts, info) {
     || tex.container.imageFormat === FREE_IMAGE.PNG
     || tex.container.imageFormat === FREE_IMAGE.JPEG
     || (animated && tex.container.imageFormat === FREE_IMAGE.GIF);
-  if (!rustPacket || !rusttex.enabled()) return null;
+  if (!rustPacket) return null;
   return {
     scale,
     framesTail: animated,
@@ -775,11 +601,7 @@ function convertTexBuffer(buf, opts = {}) {
   // 非直通图（DXT / RGBA8 / R8 / RG88）以及直通 PNG，整包交给 Rust：
   // 容器读写、解码、裁剪、缩放、LZ4 都在一个进程里做完，不再每张图拆成多次调用。
   // 动图（GIF）连帧表和尾巴一起进 Rust：帧载荷都是 PNG/JPEG，尺寸不变、不缩放。
-  const rustPacket = tex.container.imageFormat < 0
-    || tex.container.imageFormat === FREE_IMAGE.PNG
-    || tex.container.imageFormat === FREE_IMAGE.JPEG
-    || (animated && tex.container.imageFormat === FREE_IMAGE.GIF);
-  if (rustPacket && rusttex.enabled()) {
+  {
     const fast = rusttex.texConvert(buf, scale, animated);
     verifyMobileTex(fast.bytes, {
       width: fast.width,
@@ -799,77 +621,7 @@ function convertTexBuffer(buf, opts = {}) {
     };
   }
 
-  const images = [];
-  let downsampled = false;
-  let outW = 0;
-  let outH = 0;
-  for (let i = 0; i < tex.images.length; i++) {
-    const img = tex.images[i];
-    if (!img.mips.length) throw new Error(`第 ${i} 帧没有 mip`);
-    const mip = img.mips[0];
-
-    let pixels;
-    let effW;
-    let effH;
-    if (tex.container.imageFormat >= 0) {
-      let payload = mip.bytes;
-      if (mip.lz4 === 1) {
-        if (mip.decompressedBytes <= 0) throw new Error('直通图载荷被 LZ4 压缩但缺少解压长度');
-        payload = lz4.decompress(payload, mip.decompressedBytes);
-      }
-      const decoded = decodeImage(payload);
-      if (!decoded) throw new Error(`直通图无法解码（${lastDecodeError || '未知原因'}）`);
-      pixels = decoded.data;
-      effW = decoded.width;
-      effH = decoded.height;
-    } else {
-      pixels = decodeMip(mip, tex.header.format, mip.width, mip.height);
-      if (pixels.length !== checkedSize(mip.width, mip.height, 4)) throw new Error('解码后像素长度异常');
-      effW = mip.width;
-      effH = mip.height;
-    }
-
-    // 逻辑尺寸比实际小时裁左上角；逻辑尺寸比实际大（直通图常见）时保留实际载荷，不放大像素。
-    if (logicalW <= effW && logicalH <= effH && (logicalW !== effW || logicalH !== effH)) {
-      pixels = cropRgba(pixels, effW, effH, logicalW, logicalH);
-      effW = logicalW;
-      effH = logicalH;
-    }
-    if (pixels.length !== checkedSize(effW, effH, 4)) throw new Error('解码后像素长度异常');
-
-    const want = targetSize(effW, effH, scale);
-    if (want.width !== effW || want.height !== effH) {
-      pixels = resizeAreaAverage(pixels, effW, effH, want.width, want.height);
-      downsampled = true;
-    }
-    if (!outW) { outW = want.width; outH = want.height; }
-    images.push({ width: want.width, height: want.height, pixels });
-  }
-  // 只有像素尺寸真正变了才算降采样
-
-  // 非视频纹理的输出必须清掉 IsVideoTexture 位：否则手机端会去找视频流，找不到就整块黑
-  const out = writeMobileTex({
-    flags: tex.header.flags & ~TEX_FLAGS.IsVideoTexture,
-    unk: tex.header.unk,
-    images,
-    framesTail,
-  });
-  verifyMobileTex(out, {
-    width: images[0].width,
-    height: images[0].height,
-    framesTail: animated ? framesTail : null,
-  });
-  return {
-    changed: true,
-    bytes: out,
-    route: info.route,
-    reason: info.reason + (downsampled ? '（已降采样）' : ''),
-    width: images[0].width,
-    height: images[0].height,
-    sourceWidth: tex.header.textureWidth || images[0].width,
-    sourceHeight: tex.header.textureHeight || images[0].height,
-    downsampled,
-  };
+  throw new Error('这个纹理形态没有可用的转换路径（JS 逐帧管线已删除，全部由 Rust 处理）');
 }
 
 /**
@@ -1119,8 +871,8 @@ function materializeTex(buf) {
 
 module.exports = {
   parseTex, classify, isMobileCompatible, inspectTex, convertTexBuffer, convertTexDir, materializeTex,
-  verifyMobileTex, writeMobileTex, buildVideoTex, videoPayload, semanticOf, presetOf, PRESETS,
-  decodePng, decodeJpeg, decodeImage,
+  verifyMobileTex, buildVideoTex, videoPayload, semanticOf, presetOf, PRESETS,
+  decodePng, decodeJpeg,
   FREE_IMAGE, TEX_FORMAT, TEX_FLAGS, DEFAULT_MAX_RGBA_BYTES,
 };
 

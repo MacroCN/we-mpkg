@@ -5,15 +5,14 @@
  *
  * 每个用例 = 固定输入 + 期望输出字节，用来锁住当前的格式行为：
  *   - 任何语言重写（Rust / WASM / 其他）都必须逐字节对齐这些输出；
- *   - 现有 JS 实现改动后也要重新对照，避免悄悄改坏兼容性。
+ *   - 解码/编码实现改动后也要重新对照，避免悄悄改坏兼容性。
  *
  * 产物：test/golden/format/<case>/{in.bin,out.bin} + manifest.json
- * DXT / LZ4 用例强制走纯 JS 实现（WE_TEX_RUST=off）当基准；
- * PNG / JPEG 的解码器 3.0 起已整体搬到 Rust（JS 侧不再有实现），这两类用例必须临时打开引擎生成。
+ * DXT / LZ4 / PNG / JPEG 的实现都已整体搬到 Rust（3.0.4 起 JS 侧不再保留实现与兜底），
+ * 全部用例都由引擎生成基准；引擎是必需组件，生成前需 cargo build 或设置 WE_RUST_TEX。
  *
  * 用法：node tools/make-golden-format.js
  */
-process.env.WE_TEX_RUST = 'off';
 
 const fs = require('fs');
 const path = require('path');
@@ -191,17 +190,13 @@ function adam7Rows(rows, width, height, channels, bitDepth) {
 const cases = [];
 
 /**
- * PNG 直通路径的解码器已在 3.0 里整体搬到 Rust（JS 侧没有 pngjs 了），
- * 所以 PNG / JPEG 相关用例生成时必须临时打开引擎，DXT / LZ4 仍用纯 JS 当基准。
+ * 3.0.4 起 DXT / LZ4 / PNG / JPEG 全部只由 Rust 实现，生成器也只剩引擎一条路。
+ * 保留 withEngine 只是为了让“必须先有引擎”这件事在调用点显式可见。
  */
 function withEngine(fn) {
-  const prev = process.env.WE_TEX_RUST;
-  process.env.WE_TEX_RUST = 'on';
-  require('../src/rusttex')._reset(); // 探测结果带缓存，切换开关后必须重置
-  try { return fn(); } finally {
-    process.env.WE_TEX_RUST = prev;
-    require('../src/rusttex')._reset();
-  }
+  const rt = require('../src/rusttex');
+  if (!rt.available()) throw new Error('生成黄金样本需要 rust-tex：先 cargo build --release，或设置 WE_RUST_TEX');
+  return fn();
 }
 
 function addCase(name, kind, input, build, meta = {}) {
@@ -419,7 +414,7 @@ for (const c of cases) {
 fs.writeFileSync(path.join(outRoot, 'manifest.json'), JSON.stringify({
   generatedAt: new Date().toISOString(),
   generator: 'tools/make-golden-format.js',
-  note: 'DXT/LZ4 基准由纯 JS 实现生成（WE_TEX_RUST=off）；PNG/JPEG 解码器已在 Rust，基准由引擎生成；任何改动都必须逐字节对齐',
+  note: '所有格式实现均在 Rust（3.0.4 起无 JS 实现）；基准由 rust-tex 生成，任何改动都必须逐字节对齐',
   cases: manifest,
 }, null, 2) + '\n');
 

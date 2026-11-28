@@ -638,22 +638,16 @@ function adaptForMobile(projectDir, opts = {}) {
   const warnings = [];
   const textureTotal = Math.max(0, Number(opts.textureTotal) || 0);
   let textureDone = 0;
-  // 纹理加速引擎：让用户一眼看出这次是 Rust 还是纯 JS 在跑（两条路结果一致，只影响速度）
+  // 纹理引擎：Rust 是必需组件，缺引擎直接失败（不再有纯 JS 路径）
   const rusttex = require('./rusttex');
   const engine0 = rusttex.info();
-  // Rust 引擎是必需组件：没有就直接失败，不要让每张纹理各报一次警告
   if (!engine0.enabled) {
     throw new Error('Rust 纹理引擎不可用，无法打包：'
       + '请先 cargo build --release --manifest-path rust/tex-cli/Cargo.toml，'
       + '或用 WE_RUST_TEX 指定 rust-tex 路径'
       + (engine0.error ? `（${engine0.error.split('\n')[0]}）` : ''));
   }
-  onLog(engine0.enabled
-    ? `  纹理加速引擎: Rust（${engine0.path}${engine0.version ? ' v' + engine0.version : ''}）`
-    : `  纹理加速引擎: JS（未找到可用的 rust-tex${engine0.error ? '：' + engine0.error : ''}，已回落纯 JS）` +
-      (engine0.attempts && engine0.attempts.length
-        ? `\n    探测: ${engine0.attempts.map((a) => `${a.ok ? '✔' : '✘'} ${a.path}${a.error ? '（' + a.error.split('\n')[0].slice(0, 80) + '）' : ''}`).join(' | ')}`
-        : ''));
+  onLog(`  纹理加速引擎: Rust（${engine0.path}${engine0.version ? ' v' + engine0.version : ''}）`);
   const stats0 = { ...engine0.stats };
 
   const preset = typeof opts.preset === 'string' ? tex.presetOf(opts.preset) : (opts.preset || tex.presetOf('high'));

@@ -1,0 +1,18 @@
+we-mpkg-rs 3.0.4（versionCode 93）
+
+本次只做减法：删掉已经搬到 Rust 的 JS 实现与全部回退路径
+- src/dxt.js：删除整段 JS S3TC 解码器（颜色调色板、DXT5 alpha 表、逐块循环），只剩格式常量、载荷尺寸和 rust-tex 薄封装。
+- src/lz4.js：删除整段 JS LZ4 压缩/解压，只剩参数校验 + 转调。
+- src/tex.js：删除逐帧 JS 转换管线（decodeMip / decodeImage / cropRgba / resizeAreaAverage / expandR8 / expandRg88 / writeMobileTex），
+  以及 convertTexBuffer 里“Rust 不可用时自己解码、缩放、重打包”的整段兜底；整包一律交 rust-tex tex-convert。
+- rusttex.js：去掉 WE_TEX_RUST=off 的 JS 对照开关与 enabled()/_reset()；缺引擎从“回落 JS”改成直接报错。
+- pack.js：引擎状态日志只保留 Rust 一行，删掉“已回落纯 JS”分支。
+
+结果：DXT / LZ4 / PNG / JPEG / 整包 TEX 转换只有 Rust 一条路径；JS 侧行为变少、分支变少，出错时是明确报错而不是悄悄降级。
+
+测试
+- 黄金样本改为全部由引擎生成并逐字节校验（20 个用例）；删掉“JS 参照实现对齐”“JS 批量产物对比”等已无意义的用例。
+- 全量 156 通过 / 0 失败 / 1 跳过。
+
+注意
+- 开发机必须先 `cargo build --release --manifest-path rust/tex-cli/Cargo.toml`，或用 WE_RUST_TEX 指定可执行文件，否则打包直接失败（这是刻意的）。

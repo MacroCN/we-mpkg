@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-11-28T14:21:51.334Z",
+  "generatedAt": "2026-11-28T14:33:42.088Z",
   "generator": "tools/make-golden-format.js",
-  "note": "DXT/LZ4 基准由纯 JS 实现生成（WE_TEX_RUST=off）；PNG/JPEG 解码器已在 Rust，基准由引擎生成；任何改动都必须逐字节对齐",
+  "note": "所有格式实现均在 Rust（3.0.4 起无 JS 实现）；基准由 rust-tex 生成，任何改动都必须逐字节对齐",
   "cases": [
     {
       "name": "dxt1-decode-8x8",
