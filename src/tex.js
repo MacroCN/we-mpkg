@@ -711,9 +711,9 @@ function rustPacketJob(buf, opts, info) {
   try { tex = parseTex(buf); } catch { return null; }
   const preset = typeof opts.preset === 'string' ? presetOf(opts.preset) : (opts.preset || presetOf('high'));
   let semantic = opts.semantic || semanticOf(opts.relPath);
-  if (semantic === 'unknown' && tex.container.imageFormat >= 0) {
-    semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
-  }
+  // 文件名没有线索时按彩色图对待：真正需要保真的 mask/normal/roughness 等会命中词表，
+  // 命中不了的（俄文/中文文件名、截图、无名贴图）不该被当成数据图锁死原尺寸。
+  if (semantic === 'unknown') semantic = 'color';
   const animated = (tex.header.flags & TEX_FLAGS.IsGif) !== 0;
   const scale = (!animated && semantic !== 'data')
     ? (typeof opts.scale === 'number' ? opts.scale : uniformScale(Math.max(tex.header.imageWidth, tex.header.imageHeight), preset))
@@ -758,13 +758,10 @@ function convertTexBuffer(buf, opts = {}) {
   }
   const preset = typeof opts.preset === 'string' ? presetOf(opts.preset) : (opts.preset || presetOf('high'));
   let semantic = opts.semantic || semanticOf(opts.relPath);
-  // 文件名没有语义线索（materials/1.tex 这种）但载荷是直通图时按格式兜底：
-  // JPEG 没有 alpha，基本都是照片/背景 → 当彩色图，可以降采样（否则 6000×4500 原尺寸写进 mpkg，
-  // 体积和显存都顶不住）；PNG/GIF 常被用来做**叠加层的蒙版或带透明边的贴图**，一旦降采样，
-  // 叠加层的边缘/透明度就会糊掉、整块发白 → 当数据图处理，只做无损重编码。
-  if (semantic === 'unknown' && tex.container.imageFormat >= 0) {
-    semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
-  }
+  // 文件名没有语义线索时按彩色图对待，允许按画质档位降采样：
+  // 真正需要保真的蒙版/法线/粗糙度通常带 mask/normal/roughness 等词，会命中词表。
+  // 判不出来的大图（4K 截图、俄文/中文文件名）一直锁原尺寸会把画质档位架空。
+  if (semantic === 'unknown') semantic = 'color';
   const animated = (tex.header.flags & TEX_FLAGS.IsGif) !== 0;
   const framesTail = tex.framesStart < buf.length ? buf.subarray(tex.framesStart) : null;
 
@@ -908,12 +905,14 @@ function measureUniformScale(dir, preset, semanticFn, skip, maxFileBytes) {
         const kind = classify(tex);
         if (kind === 'mobile' || kind === 'noimages') continue;
         let semantic = semanticFn(rel);
-        // 和 convertTexBuffer 的兜底保持一致：无名 PNG 当数据图、无名 JPEG 当彩图
-        if (semantic === 'unknown' && tex.container.imageFormat >= 0) {
-          semantic = tex.container.imageFormat === FREE_IMAGE.JPEG ? 'color' : 'data';
-        }
+        // 和 convertTexBuffer 的兜底保持一致：判不出语义就当彩色图
+        if (semantic === 'unknown') semantic = 'color';
         if (semantic === 'data') continue;
-        maxDim = Math.max(maxDim, tex.header.imageWidth, tex.header.imageHeight);
+        // 以「实际 mip 尺寸」为准：部分包 header.imageWidth 比真实载荷小
+        // （4K 截图可能只写 2048），按 header 量会漏掉最大的一张，整包倍率退回 1。
+        const mipW = tex.images[0] && tex.images[0].mips[0] ? tex.images[0].mips[0].width : 0;
+        const mipH = tex.images[0] && tex.images[0].mips[0] ? tex.images[0].mips[0].height : 0;
+        maxDim = Math.max(maxDim, tex.header.imageWidth, tex.header.imageHeight, mipW, mipH);
       } catch { /* 坏文件留给正式转换阶段报错 */ }
     }
   };

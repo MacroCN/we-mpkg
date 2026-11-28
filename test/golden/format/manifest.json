@@ -95,8 +95,8 @@
       "input": "tex-convert-png-passthrough-40x40/in.bin",
       "output": "tex-convert-png-passthrough-40x40/out.bin",
       "inputBytes": 4999,
-      "outputBytes": 6491,
-      "outputSha256": "bba9b85713f5c532c7f05b1f3c1e70bede4adfe674790fc3d26c73b6e3684401",
+      "outputBytes": 1691,
+      "outputSha256": "6ff2215837420a349a1fbac56e357f776fcec01830b14f60d26178fdbafbca8f",
       "preset": "balanced"
     },
     {

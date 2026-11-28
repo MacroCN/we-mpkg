@@ -611,6 +611,32 @@ test('同一目录里的纹理按整包统一倍率缩放（不会各缩各的�
   assert.strictEqual(parsed('background.tex').header.textureWidth, 8, '头里的实际纹理尺寸必须和载荷一致');
 });
 
+test('无名/非英文文件名的大图也按画质档位降采样（unknown 不再锁死原尺寸）', () => {
+  const { PNG } = require('pngjs');
+  const dir = tmp('texscale-unknown');
+  fs.mkdirSync(path.join(dir, 'materials'), { recursive: true });
+  const png = new PNG({ width: 2048, height: 2048 });
+  for (let i = 0; i < png.data.length; i += 4) {
+    png.data[i] = 90; png.data[i + 1] = 40; png.data[i + 2] = 160; png.data[i + 3] = 255;
+  }
+  const payload = PNG.sync.write(png);
+  const big = buildTex({
+    format: texlib.TEX_FORMAT.RGBA8888,
+    texW: 2048, texH: 2048, imageFormat: 13,
+    images: [{ mips: [{ w: 2048, h: 2048, bytes: payload }] }],
+  });
+  fs.writeFileSync(path.join(dir, 'materials', 'Снимок экрана 2026-11-18 160124.tex'), big);
+  const mask = buildTex({
+    format: texlib.TEX_FORMAT.RGBA8888,
+    texW: 1920, texH: 1080, imageFormat: 13,
+    images: [{ mips: [{ w: 1920, h: 1080, bytes: Buffer.concat([Buffer.from('fake'), Buffer.alloc(8)]) }] }],
+  });
+  fs.writeFileSync(path.join(dir, 'materials', 'shake_mask_a.tex'), mask);
+  texlib.convertTexDir(dir, { preset: 'balanced' });
+  const bigOut = texlib.parseTex(fs.readFileSync(path.join(dir, 'materials', 'Снимок экрана 2026-11-18 160124.tex')));
+  assert.strictEqual(bigOut.header.imageWidth, 1024, '2048 的 unknown 彩图按 0.5 缩到 1024');
+});
+
 test('semanticOf 识别数据图 / 彩色图 / 未知', () => {
   assert.strictEqual(texlib.semanticOf('materials/normal_map.tex'), 'data');
   assert.strictEqual(texlib.semanticOf('materials/roughness.tex'), 'data');

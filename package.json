@@ -1,6 +1,6 @@
 {
   "name": "we-mpkg-rs",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "private": true,
   "description": "Rust 重构版安卓客户端：浏览 Wallpaper Engine 创意工坊 → 下载 → 打包手机版 .mpkg（纹理/编解码走 Rust 引擎）",
   "bin": {
