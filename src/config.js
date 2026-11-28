@@ -25,30 +25,7 @@ function env(...names) {
   return '';
 }
 
-/** 读取 Windows 系统代理（注册表 ProxyEnable=1 时生效），其它平台返回 null */
-function readWindowsSystemProxy() {
-  if (process.platform !== 'win32') return null;
-  try {
-    const key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
-    const q = (name) => execFileSync('reg.exe', ['query', key, '/v', name], { encoding: 'utf8', windowsHide: true });
-    const enableOut = q('ProxyEnable');
-    if (!/\b0x1\b/i.test(enableOut)) return null;
-    const serverOut = q('ProxyServer');
-    const m = serverOut.match(/ProxyServer\s+REG_\w+\s+([^\r\n]+)/i);
-    if (!m) return null;
-    // 形如 "127.0.0.1:7890" 或 "http=127.0.0.1:7890;https=..."
-    const raw = m[1].trim();
-    const seg = raw.split(';').map((s) => s.trim()).filter(Boolean);
-    const pick = seg.find((s) => /^https=/i.test(s)) || seg.find((s) => /^http=/i.test(s)) || raw;
-    const value = pick.replace(/^(https?)=/i, '');
-    return /^\w+:\/\//.test(value) ? value : `http://${value}`;
-  } catch {
-    return null;
-  }
-}
-
 const DEFAULT_PROXY = env('WE_MPKG_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy', 'ALL_PROXY', 'all_proxy')
-  || readWindowsSystemProxy()
   || '';
 
 // ---------------- 安卓：跟随系统代理 / VPN ----------------
@@ -160,30 +137,7 @@ const config = {
   LISTEN_HOST: env('WE_MPKG_HOST') || '127.0.0.1',
   /** 远程访问令牌：非回环地址的请求必须携带，防止局域网裸奔 */
   REMOTE_TOKEN: env('WE_MPKG_TOKEN'),
-  /** 国内网络下有时原生 TLS 会握手失败，自动改用 curl.exe 兜底 */
-  USE_CURL_FALLBACK: env('WE_MPKG_NO_CURL') !== '1' && process.platform === 'win32' && !!findCurl(),
-  /** curl 可执行文件绝对路径（PATH 不可靠时也能用） */
-  CURL_BIN: findCurl(),
 };
-
-/** 找出可用的 curl 可执行文件（PATH 里没有时退到 System32） */
-function findCurl() {
-  const sys = process.env.SystemRoot || process.env.windir || 'C:\\Windows';
-  const candidates = [
-    'curl.exe',
-    path.join(sys, 'System32', 'curl.exe'),
-    path.join(sys, 'Sysnative', 'curl.exe'),
-  ];
-  for (const c of candidates) {
-    try {
-      execFileSync(c, ['--version'], { stdio: 'ignore', windowsHide: true });
-      return c;
-    } catch { /* 试下一个 */ }
-  }
-  return null;
-}
-
-const CURL_BIN = findCurl();
 
 // ---------------- 用户设置（下载/输出目录） ----------------
 const SETTINGS_FILE = path.join(config.CACHE_DIR, 'settings.json');

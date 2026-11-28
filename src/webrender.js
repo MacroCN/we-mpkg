@@ -25,10 +25,6 @@ const DEFAULT_FPS = 24;
 
 const BROWSER_CANDIDATES = [
   process.env.WEM_WEB_BROWSER,
-  'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
-  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
   '/usr/bin/google-chrome',
   '/usr/bin/chromium',
   '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
@@ -39,9 +35,7 @@ const BROWSER_CANDIDATES = [
 const FFMPEG_CANDIDATES = [
   process.env.WEM_FFMPEG,
   process.env.FFMPEG,
-  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
-  path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
-  path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
+  path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg'),
 ];
 
 function firstExisting(list, extra = []) {
@@ -50,8 +44,8 @@ function firstExisting(list, extra = []) {
     try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* ignore */ }
   }
   // 退化到 PATH
-  const exe = process.platform === 'win32' ? 'where.exe' : 'which';
-  const names = process.platform === 'win32' ? ['ffmpeg.exe'] : ['ffmpeg'];
+  const exe = 'which';
+  const names = ['ffmpeg'];
   try {
     const out = execFileSync(exe, names, { encoding: 'utf8' }).split(/\r?\n/)[0].trim();
     if (out && fs.existsSync(out)) return out;
@@ -372,7 +366,7 @@ async function captureFrames(htmlPath, outDir, opts = {}) {
       if (f) {
         const wav = path.join(userData, 'mic.wav');
         try {
-          execFileSync(f, ['-y', '-loglevel', 'error', '-i', audio.path, '-vn', '-ac', '2', '-ar', '48000', '-t', '30', wav], { stdio: 'ignore', windowsHide: true });
+          execFileSync(f, ['-y', '-loglevel', 'error', '-i', audio.path, '-vn', '-ac', '2', '-ar', '48000', '-t', '30', wav], { stdio: 'ignore' });
           if (fs.existsSync(wav) && fs.statSync(wav).size > 0) micWav = wav;
         } catch { /* 转 wav 失败就只保留 WebAudio 频谱 */ }
       }
@@ -405,7 +399,7 @@ async function captureFrames(htmlPath, outDir, opts = {}) {
     `--window-size=${width},${height}`,
     'about:blank',
   ];
-  const proc = spawn(browser, args, { stdio: 'ignore', windowsHide: true });
+  const proc = spawn(browser, args, { stdio: 'ignore' });
   let cdp = null;
   try {
     const version = await waitFor(() => httpJson(`http://127.0.0.1:${port}/json/version`).catch(() => null), 15000);
@@ -536,7 +530,7 @@ function encodeMp4(frameDir, outMp4, opts = {}) {
       '-movflags', '+faststart',
       outMp4,
     ];
-  execFileSync(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true });
+  execFileSync(ffmpeg, args, { stdio: ['ignore', 'ignore', 'pipe'] });
   if (!fs.existsSync(outMp4)) throw new Error('ffmpeg 未产出 mp4');
   return { outMp4, size: fs.statSync(outMp4).size, ffmpeg, layout };
 }

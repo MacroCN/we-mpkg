@@ -568,7 +568,7 @@ const server = http.createServer(async (req, res) => {
       if (!packjob.activeEngine()) {
         return json(res, 400, {
           error: '还没有登录 Steam',
-          hint: '点右上角 ⚙ 填账号密码登录，或把电脑上 get-token.bat 得到的那段凭据粘进去导入，即可下载；也可用「远程模式」连电脑。',
+          hint: '点右上角 ⚙ 填账号密码登录，或把电脑上 node bin/wempkg.js steamjs token 得到的那段凭据粘进去导入，即可下载；也可用「远程模式」连电脑。',
         });
       }
       const body = await readJsonBody(req);
@@ -668,11 +668,7 @@ const server = http.createServer(async (req, res) => {
       if (!fs.existsSync(target)) return json(res, 404, { error: '文件不存在（可能已被移动或清理）' });
       const isDir = fs.statSync(target).isDirectory();
       try {
-        if (process.platform === 'win32') {
-          // explorer 的 /select 参数必须是一个整体字符串，指向文件时会在资源管理器里选中它
-          const args = isDir ? [target] : [`/select,${target}`];
-          spawn('explorer.exe', args, { detached: true, stdio: 'ignore' }).unref();
-        } else if (process.platform === 'darwin') {
+        if (process.platform === 'darwin') {
           spawn('open', isDir ? [target] : ['-R', target], { detached: true, stdio: 'ignore' }).unref();
         } else {
           spawn('xdg-open', [isDir ? target : path.dirname(target)], { detached: true, stdio: 'ignore' }).unref();

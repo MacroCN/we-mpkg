@@ -902,7 +902,6 @@ async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () =>
   const child = spawn(process.execPath, [entry, '--port', String(p)], {
     detached: true,
     stdio: 'ignore',
-    windowsHide: true,
     env: Object.assign({}, process.env, { WE_MPKG_DLHUB_EMBEDDED: '0' }),
   });
   child.unref();
@@ -913,7 +912,7 @@ async function ensureHub({ port = DEFAULT_PORT, embedded = false, logger = () =>
     const info = await pingHub(p, 1000);
     if (info) return { port: p, url: hubUrl(p), embedded: !!info.embedded };
   }
-  throw new Error('下载中心启动超时（可查看 .cache/dlhub.log，或用 run.bat dlhub 手动启动）');
+  throw new Error('下载中心启动超时（可查看 .cache/dlhub.log，或用 node bin/wempkg.js dlhub 手动启动）');
   })();
   hubEnsure = { key, promise };
   try {

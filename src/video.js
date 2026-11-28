@@ -102,9 +102,6 @@ function ffmpegCandidates(opts = {}) {
     // 工坊里的媒体文件不可信：旧版 ffmpeg 会把多年积累的已知容器/解码器漏洞
     // 暴露给用户，所以这里不留任何旧版兜底——
     // 找不到就报错并给出下载地址（见 src/ffmpeg.js）。
-    path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg.exe'),
-    path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg.exe'),
-    path.join(__dirname, '..', 'bin', 'ffmpeg.exe'),
     path.join(__dirname, '..', '.cache', 'toolchain', 'ffmpeg', 'bin', 'ffmpeg'),
     path.join(__dirname, '..', 'tools', 'ffmpeg', 'ffmpeg'),
   ];
@@ -115,16 +112,11 @@ function findFfmpeg(opts = {}) {
     if (!p) continue;
     try { if (fs.existsSync(p) && fs.statSync(p).isFile()) return p; } catch { /* ignore */ }
   }
-  const whereNames = process.platform === 'win32'
-    ? ['where.exe', path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'where.exe')]
-    : ['which'];
-  for (const exe of whereNames) {
-    try {
-      const out = execFileSync(exe, [process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg'], { encoding: 'utf8' });
-      const first = out.split(/\r?\n/)[0].trim();
-      if (first && fs.existsSync(first)) return first;
-    } catch { /* 试下一个 */ }
-  }
+  try {
+    const out = execFileSync('which', ['ffmpeg'], { encoding: 'utf8' });
+    const first = out.split(/\r?\n/)[0].trim();
+    if (first && fs.existsSync(first)) return first;
+  } catch { /* PATH 里没有 */ }
   return null;
 }
 
@@ -138,7 +130,7 @@ function parseVideoDims(text) {
 function probeVideoDims(ffmpeg, file, opts = {}) {
   try {
     const out = execFileSync(ffmpeg, ['-hide_banner', '-i', file], {
-      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30000, windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 30000,
     });
     return parseVideoDims(out);
   } catch (e) {
@@ -177,7 +169,7 @@ function runTranscode(ffmpeg, src, dst, width, height, target, opts = {}) {
     ...encoderArgs(ffmpeg),
     '-movflags', '+faststart',
     dst,
-  ], { stdio: ['ignore', 'ignore', 'pipe'], windowsHide: true, timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
+  ], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 10 * 60 * 1000, maxBuffer: 8 * 1024 * 1024 });
   if (!fs.existsSync(dst) || fs.statSync(dst).size < 24) throw new Error('转码产物为空');
   const head = fs.readFileSync(dst).subarray(4, 8).toString('latin1');
   if (head !== 'ftyp') throw new Error('转码产物不是有效的 MP4');

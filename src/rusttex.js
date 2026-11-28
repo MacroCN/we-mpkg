@@ -12,9 +12,9 @@
  *
  * 探测顺序（第一个能跑通的胜出）：
  *   1. 环境变量 WE_RUST_TEX（显式指定）
- *   2. 仓库 bin/rust-tex[.exe]（打包时随应用附带）
- *   3. rust/target/release/rust-tex[.exe]（本地 cargo build 产物）
- *   4. .cache/toolchain/bin/rust-tex[.exe]
+ *   2. 仓库 bin/rust-tex（打包时随应用附带）
+ *   3. rust/target/release/rust-tex（本地 cargo build 产物）
+ *   4. .cache/toolchain/bin/rust-tex
  *   5. PATH 里的 rust-tex
  */
 
@@ -23,7 +23,7 @@ const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const EXE = process.platform === 'win32' ? 'rust-tex.exe' : 'rust-tex';
+const EXE = 'rust-tex';
 const MIN_VERSION = 3;
 
 let probe; // undefined = 未探测；null = 没有；string = 路径
@@ -67,7 +67,7 @@ function candidates() {
   out.push(path.join(__dirname, '..', 'rust', 'tex-cli', 'target', 'release', EXE));
   out.push(path.join(__dirname, '..', '.cache', 'toolchain', 'bin', EXE));
   if (process.env.PATH) {
-    const sep = process.platform === 'win32' ? ';' : ':';
+    const sep = ':';
     for (const dir of process.env.PATH.split(sep)) {
       if (dir) out.push(path.join(dir, EXE));
     }
@@ -90,7 +90,7 @@ function usable(file) {
   try {
     if (!fs.statSync(file).isFile()) return false;
     // 安卓解包出来的文件没有执行位，补一下（失败就算了，exec 会报错回落 JS）
-    if (process.platform !== 'win32') { try { fs.chmodSync(file, 0o755); } catch { /* ignore */ } }
+    try { fs.chmodSync(file, 0o755); } catch { /* ignore */ }
     const out = execFileSync(file, ['version'], { encoding: 'utf8', timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] });
     const info = JSON.parse(out.trim().split('\n').pop());
     const ok = info && info.ok === true && Number(info.version.split('.')[0]) >= MIN_VERSION;

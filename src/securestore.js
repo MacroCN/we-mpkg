@@ -1,8 +1,8 @@
 /**
  * 凭据落盘加密。
  *
- * - Windows：优先走 DPAPI（CurrentUser 范围）→ 换账号/换机器都解不开，也不怕备份被拷走。
- * - 其它平台（含安卓）：AES-256-GCM + 本机随机密钥（密钥文件 0600，存在 App 私有目录里）。
+ * 本分支只做移动端：统一用 AES-256-GCM + 本机随机密钥
+ * （密钥文件 0600，存在 App 私有目录里，换机器/备份拷走都解不开）。
  * - 兼容旧版明文 JSON：读到没有加密头的老文件时照常解析，下次保存自动转成加密格式。
  *
  * 只用来存 refresh token / 登录 cookie 这类小对象，不是通用数据库。
@@ -16,28 +16,6 @@ const { config } = require('./config');
 
 const MARK = '__we_mpkg_enc';
 const KEY_FILE = path.join(config.CACHE_DIR, '.secret-key');
-const PS = 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe';
-
-function canUseDpapi() {
-  return process.platform === 'win32' && fs.existsSync(PS);
-}
-
-function dpapi(protect, buf) {
-  const body = protect
-    ? "$p=[System.Security.Cryptography.ProtectedData]::Protect($b,$null,'CurrentUser')"
-    : "$p=[System.Security.Cryptography.ProtectedData]::Unprotect($b,$null,'CurrentUser')";
-  const script = `$ErrorActionPreference='Stop';Add-Type -AssemblyName System.Security;$b=[Convert]::FromBase64String($env:WEMPKDATA);${body};[Convert]::ToBase64String($p)`;
-  const out = execFileSync(PS, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    env: Object.assign({}, process.env, { WEMPKDATA: buf.toString('base64') }),
-    windowsHide: true,
-    timeout: 15000,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  const txt = String(out).trim();
-  if (!txt) throw new Error('DPAPI 没有返回数据');
-  return Buffer.from(txt, 'base64');
-}
-
 function localKey() {
   let raw = null;
   try {
@@ -52,7 +30,7 @@ function localKey() {
   fs.mkdirSync(path.dirname(KEY_FILE), { recursive: true });
   const key = crypto.randomBytes(32);
   fs.writeFileSync(KEY_FILE, key, { mode: 0o600 });
-  try { fs.chmodSync(KEY_FILE, 0o600); } catch { /* Windows 上尽力而为 */ }
+  try { fs.chmodSync(KEY_FILE, 0o600); } catch { /* 尽力而为 */ }
   return key;
 }
 
@@ -72,13 +50,7 @@ function aesOpen(env) {
 /** 把对象加密写成文件 */
 function writeJson(file, obj) {
   const plain = Buffer.from(JSON.stringify(obj), 'utf8');
-  let env;
-  if (canUseDpapi()) {
-    try {
-      env = { [MARK]: true, v: 1, kind: 'dpapi', data: dpapi(true, plain).toString('base64') };
-    } catch { env = null; }
-  }
-  if (!env) env = Object.assign({ [MARK]: true }, aesSeal(plain));
+  const env = Object.assign({ [MARK]: true }, aesSeal(plain));
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(env));
   return true;
@@ -92,7 +64,7 @@ function readJson(file) {
   try { parsed = JSON.parse(text); } catch { return null; }
   if (!parsed || !parsed[MARK]) return parsed || null; // 旧版明文
   try {
-    const buf = parsed.kind === 'dpapi' ? dpapi(false, Buffer.from(parsed.data, 'base64')) : aesOpen(parsed);
+    const buf = aesOpen(parsed);
     const obj = JSON.parse(buf.toString('utf8'));
     return obj || null;
   } catch {
@@ -100,4 +72,4 @@ function readJson(file) {
   }
 }
 
-module.exports = { writeJson, readJson, canUseDpapi, KEY_FILE };
+module.exports = { writeJson, readJson, KEY_FILE };

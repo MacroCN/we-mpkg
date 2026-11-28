@@ -1,0 +1,17 @@
+we-mpkg 3.0.0-beta.27（versionCode 86）
+继续清理 Windows 端代码，本分支只剩移动端。
+
+一、运行时不再有 Windows 专用分支
+- 凭据加密删掉 DPAPI/PowerShell 路径，统一 AES-256-GCM + 本机密钥（安卓私有目录）。
+- 网络层删掉 Windows 注册表系统代理读取与 curl.exe 兜底（System32 探测、windowsHide 全部清掉），代理只走环境变量与安卓 SystemProxy。
+- rusttex：去掉 rust-tex.exe、Windows PATH 分号、win32 chmod 例外。
+- ffmpeg 探测去掉 .exe / where.exe / SystemRoot；webrender 去掉 Edge/Chrome 的 Program Files 路径。
+- 「打开所在文件夹」去掉 explorer.exe 分支。
+
+二、脚本与文档
+- 删除根目录 run.bat / start.bat / stop.bat / get-token.bat（改用 node bin/wempkg.js）。
+- 文案里所有 run.bat / get-token.bat 提示同步替换；README 交付形态改为安卓 App。
+- 安卓构建脚本 android/*.ps1、*.bat 保留（打包用）。
+
+三、测试
+- 全量 153 通过 / 0 失败 / 1 跳过；assets 已重打。

@@ -178,7 +178,7 @@ async function passwordLogin({ user, pass, getCode, onLog = () => {}, onPrompt =
 
 /** 用 refresh token 连上 Steam */
 async function connect(refreshToken, { onLog = () => {} } = {}) {
-  if (!refreshToken) throw new Error('还没有登录凭据，先执行: run.bat steamjs login');
+  if (!refreshToken) throw new Error('还没有登录凭据，先执行: node bin/wempkg.js steamjs login');
   const SteamUser = require('steam-user');
   const client = new SteamUser(Object.assign({ autoRelogin: false, renewRefreshTokens: true }, proxyOptions()));
   const loggedOn = once(client, 'loggedOn', { timeoutMs: 30000, label: '连接 Steam' });

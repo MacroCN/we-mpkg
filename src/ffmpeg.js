@@ -8,7 +8,7 @@
  */
 const path = require('path');
 
-/** Windows 官方构建（essentials，含 ffmpeg/ffprobe），持续更新 */
+/** 官方构建下载页（仅开发机调试视频链路时需要；安卓端用随 APK 的 libffmpeg.so） */
 const DOWNLOAD_URL = 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip';
 /** 各平台下载汇总（macOS / Linux 从这里找包管理器或静态构建） */
 const HOMEPAGE = 'https://ffmpeg.org/download.html';
@@ -26,9 +26,9 @@ function installPath(root = projectRoot()) {
 function missingHelp(root = projectRoot()) {
   return [
     '没有找到 ffmpeg（视频纹理转码 / 网页壁纸音频解码需要它，不会内置旧版给你兜底）。',
-    `  1. 下载 Windows 构建：${DOWNLOAD_URL}`,
+    `  1. 下载官方构建：${DOWNLOAD_URL}`,
     `     其它平台从这里找：${HOMEPAGE}`,
-    '  2. 解压下载的 zip，取出里面的 bin\\ffmpeg.exe（同目录的 ffprobe.exe 可一起放）',
+    '  2. 解压下载的包，取出里面的 ffmpeg 可执行文件（ffprobe 可一起放）',
     `  3. 放到这个位置：${installPath(root)}`,
     '     或者设环境变量 WEM_FFMPEG=<ffmpeg.exe 的完整绝对路径>（优先级最高）',
     '  4. 重启 we-mpkg 即可；设置页可以点「测试连通性」旁边重新打开一次确认',

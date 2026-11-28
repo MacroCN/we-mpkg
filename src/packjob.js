@@ -24,7 +24,7 @@ function activeEngine() {
 }
 
 function noLoginMessage() {
-  return '还没有登录 Steam：请点右上角 ⚙ 填账号密码登录，或导入 Steam 凭据（get-token.bat 得到的那段 Base64）';
+  return '还没有登录 Steam：请点右上角 ⚙ 填账号密码登录，或导入 Steam 凭据（node bin/wempkg.js steamjs token 得到的那段 Base64）';
 }
 
 /**

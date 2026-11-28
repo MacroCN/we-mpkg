@@ -2,10 +2,10 @@
 
 把 **Wallpaper Engine（AppID 431960）创意工坊**里的壁纸，打包成 **手机版 `.mpkg`**，可直接在 Wallpaper Engine 安卓客户端里导入使用。
 
-三种交付形态：Windows 命令行、网页界面（默认 `http://localhost:3090`）、安卓 App。内置纯 JS 下载/打包引擎，不依赖 SteamCMD，也不需要单独安装 Node。
+交付形态：安卓 App（本分支唯一发布形态）。内置纯 JS 下载/打包引擎，不依赖 SteamCMD；Node 运行时随 APK 附带。源码另可 `node bin/wempkg.js` 运行命令行/网页界面用于开发调试。
 
 - 开源协议：**MIT**（见 [LICENSE](LICENSE)）
-- 已验证平台：Windows x64、Android 17（arm64-v8a）
+- 已验证平台：Android 17（arm64-v8a）
 
 ---
 
@@ -57,9 +57,9 @@ node bin\wempkg.js serve --port 3090
 
 打包下载**需要拥有 Wallpaper Engine 的账号**（该 App 是付费 App，匿名账号拿不到 depot 解密密钥，实测确认）。三种登录方式：
 
-1. **扫码**（电脑上最省事）：`run.bat steamjs login`，用手机 Steam App 扫码确认。
-2. **账号密码 + Steam Guard**：网页右上角 ⚙，或 `run.bat steamjs login --user 你的账号`。
-3. **导入电脑上的凭据**：电脑执行 `get-token.bat` 得到一段 Base64，粘进手机 App。
+1. **扫码**（电脑上最省事）：`node bin/wempkg.js steamjs login`，用手机 Steam App 扫码确认。
+2. **账号密码 + Steam Guard**：网页右上角 ⚙，或 `node bin/wempkg.js steamjs login --user 你的账号`。
+3. **导入电脑上的凭据**：电脑执行 `node bin/wempkg.js steamjs token` 得到一段 Base64，粘进手机 App。
 
 凭据只保存在本机 `.cache/steam-token.json`，不会上传到任何服务器。
 
@@ -106,20 +106,20 @@ node bin\wempkg.js serve --port 3090
 ## 命令行
 
 ```
-run.bat serve                    启动网页界面（默认 3090）
-run.bat dlhub                    只启动下载中心（默认 127.0.0.1:3091，独立进程）
-run.bat browse --search 夜城      搜索创意工坊
-run.bat browse --group "Genre:Anime,Fantasy" --group "Type:Video"
+node bin/wempkg.js serve                    启动网页界面（默认 3090）
+node bin/wempkg.js dlhub                    只启动下载中心（默认 127.0.0.1:3091，独立进程）
+node bin/wempkg.js browse --search 夜城      搜索创意工坊
+node bin/wempkg.js browse --group "Genre:Anime,Fantasy" --group "Type:Video"
                                  按官方语义筛选：同组内「或」，组间「与」
-run.bat browse --tag Scene,Video  多个标签同时命中（强制「与」）
-run.bat info <id>                查看条目详情
-run.bat get <id>                 下载 + 打包成 .mpkg（一步到位）
-run.bat fetch <id>               只下载原始文件
-run.bat pack <目录|.pkg>          把本地内容打成 .mpkg（支持 --quality / --keep-audio / --drop-audio / --resume / --video-magic）
-run.bat inspect <目录|容器>       查看内部结构
-run.bat cdn                      查看上次的 CDN 节点测速结果
-run.bat cdn --test               立即重测节点延迟并按顺序打印
-run.bat steamjs login|status|logout|token|webcookie
+node bin/wempkg.js browse --tag Scene,Video  多个标签同时命中（强制「与」）
+node bin/wempkg.js info <id>                查看条目详情
+node bin/wempkg.js get <id>                 下载 + 打包成 .mpkg（一步到位）
+node bin/wempkg.js fetch <id>               只下载原始文件
+node bin/wempkg.js pack <目录|.pkg>          把本地内容打成 .mpkg（支持 --quality / --keep-audio / --drop-audio / --resume / --video-magic）
+node bin/wempkg.js inspect <目录|容器>       查看内部结构
+node bin/wempkg.js cdn                      查看上次的 CDN 节点测速结果
+node bin/wempkg.js cdn --test               立即重测节点延迟并按顺序打印
+node bin/wempkg.js steamjs login|status|logout|token|webcookie
 ```
 
 `steamjs webcookie --refresh` 用于刷新创意工坊的账号登录态（默认缓存 12 小时，过期自动续）。

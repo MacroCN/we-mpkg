@@ -84,7 +84,7 @@ async function ensureLogin(args) {
   }
   const saved = steamjs.readToken();
   if (saved && saved.refreshToken) return saved;
-  throw new Error('还没有登录 Steam：先运行 run.bat steamjs login，或给命令加 --user 账号 --pass 密码 / --interactive 扫码');
+  throw new Error('还没有登录 Steam：先运行 node bin/wempkg.js steamjs login，或给命令加 --user 账号 --pass 密码 / --interactive 扫码');
 }
 
 /** 用纯 JS 引擎把一个条目下载到指定目录 */
@@ -254,7 +254,7 @@ async function cmdSteamjs(args) {
   if (sub === 'status' || sub === 'whoami') {
     const t = steamjs.readToken();
     if (!t) {
-      console.log('\n未登录。执行: run.bat steamjs login\n');
+      console.log('\n未登录。执行: node bin/wempkg.js steamjs login\n');
       return;
     }
     console.log(`\n已保存凭据: ${t.accountName || '(未知账号)'}  保存于 ${t.savedAt || '?'}`);
@@ -270,7 +270,7 @@ async function cmdSteamjs(args) {
 
   if (sub === 'token') {
     const t = steamjs.readToken();
-    if (!t) throw new Error('还没登录，先执行: run.bat steamjs login');
+    if (!t) throw new Error('还没登录，先执行: node bin/wempkg.js steamjs login');
     const blob = Buffer.from(JSON.stringify({ refreshToken: t.refreshToken, accountName: t.accountName }), 'utf8').toString('base64');
     console.log('\n把下面整段粘贴到手机 App 的“登录凭据”输入框（这是一段 Base64，不是密码）：\n');
     console.log(blob);
@@ -292,7 +292,7 @@ async function cmdSteamjs(args) {
     const s = webcookie.cachedStatus();
     if (!s.loggedIn) {
       console.log('\n社区站登录态: 未启用（创意工坊按匿名范围抓，条目比客户端少）');
-      console.log('启用: run.bat steamjs webcookie --refresh\n');
+      console.log('启用: node bin/wempkg.js steamjs webcookie --refresh\n');
       return;
     }
     console.log(`\n社区站登录态: 已启用${s.fresh ? '' : '（已过期，下次访问会自动续）'}`);
@@ -333,7 +333,7 @@ async function cmdSteamjs(args) {
     if (!args._[0]) throw new Error('用法: steamjs get <创意工坊id> [--title 名称] [--ref 参考.mpkg]');
     const id = guard.assertItemId(args._[0]);
     const token = steamjs.readToken();
-    if (!token) throw new Error('还没有登录凭据，先执行: run.bat steamjs login');
+    if (!token) throw new Error('还没有登录凭据，先执行: node bin/wempkg.js steamjs login');
 
     const detail = await workshop.getItemDetail(id).catch(() => ({ title: `wallpaper_${id}` }));
     console.log(`\n条目: ${detail.title || id}`);
@@ -436,7 +436,7 @@ async function cmdCdn(args) {
     return;
   }
   const token = steamjs.readToken();
-  if (!token || !token.refreshToken) throw new Error('还没有登录 Steam，先执行: run.bat steamjs login');
+  if (!token || !token.refreshToken) throw new Error('还没有登录 Steam，先执行: node bin/wempkg.js steamjs login');
   const client = await steamjs.connect(token.refreshToken, { onLog: (m) => console.log(`  ${m}`) });
   try {
     const data = await cdn.testRanking(client, { onLog: (m) => console.log(`  ${m}`) });
